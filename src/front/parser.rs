@@ -2,8 +2,7 @@ use std::mem::swap;
 
 use TokenType as TT;
 
-use crate::mid::ir;
-use crate::mid::ir::Function;
+use crate::front::ast;
 
 type Result<T> = std::result::Result<T, ()>;
 
@@ -190,32 +189,32 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn function(&mut self) -> Result<ir::Function> {
+    fn function(&mut self) -> Result<ast::Function> {
         self.expect(TT::Fun)?;
         let name = self.expect(TT::Id)?.string;
         self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow, TT::I32])?;
         let body = self.block()?;
 
-        Ok(Function {
+        Ok(ast::Function {
             name,
             body,
         })
     }
 
-    fn block(&mut self) -> Result<ir::Block> {
+    fn block(&mut self) -> Result<ast::Block> {
         self.expect(TT::OpenC)?;
         let mut statements = Vec::new();
         while self.accept(TT::CloseC)?.is_none() {
             statements.push(self.statement()?);
         }
-        Ok(ir::Block { statements })
+        Ok(ast::Block { statements })
     }
 
-    fn statement(&mut self) -> Result<ir::Statement> {
+    fn statement(&mut self) -> Result<ast::Statement> {
         if self.accept(TT::Return)?.is_some() {
             if let Token { ty: TT::IntLit, string } = self.pop()? {
                 self.expect(TT::Semi)?;
-                Ok(ir::Statement::Return {
+                Ok(ast::Statement::Return {
                     //TODO handle this error
                     //TODO think about whether - should be part of literals, makes const easier
                     value: string.parse().unwrap(),
@@ -229,7 +228,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(input: &str) -> Result<ir::Function> {
+pub fn parse(input: &str) -> Result<ast::Function> {
     let mut parser = Parser { tokenizer: Tokenizer::new(input) };
     parser.function()
 }

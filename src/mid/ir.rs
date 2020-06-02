@@ -1,15 +1,14 @@
 #[derive(Debug)]
 pub struct Function {
-    pub name: String,
-    pub body: Block,
+    pub entry: BasicBlock,
 }
 
 #[derive(Debug)]
-pub struct Block {
-    pub statements: Vec<Statement>,
+pub struct BasicBlock {
+    pub terminator: Terminator,
 }
 
 #[derive(Debug)]
-pub enum Statement {
+pub enum Terminator {
     Return { value: i32 }
 }
