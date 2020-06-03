@@ -15,13 +15,18 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     (")", TT::CloseB),
     ("{", TT::OpenC),
     ("}", TT::CloseC),
-    ("i32", TT::I32),
+    ("true", TT::True),
+    ("false", TT::False),
 ];
 
+#[allow(unused)]
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 enum TokenType {
     Id,
     IntLit,
+
+    True,
+    False,
 
     Fun,
     Arrow,
@@ -32,8 +37,6 @@ enum TokenType {
     CloseB,
     OpenC,
     CloseC,
-
-    I32,
 
     Eof,
 }
@@ -151,6 +154,7 @@ struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
 }
 
+#[allow(unused)]
 impl<'a> Parser<'a> {
     fn pop(&mut self) -> Result<Token> {
         self.tokenizer.advance()
@@ -186,17 +190,27 @@ impl<'a> Parser<'a> {
         }
         Ok(())
     }
+
+    fn expect_any(&mut self, tys: &[TT]) -> Result<Token> {
+        if tys.contains(&self.curr().ty) {
+            Ok(self.pop()?)
+        } else {
+            Err(())
+        }
+    }
 }
 
 impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
         self.expect(TT::Fun)?;
         let name = self.expect(TT::Id)?.string;
-        self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow, TT::I32])?;
+        self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow])?;
+        let ret_type = ast::TypeDecl { string: self.expect(TT::Id)?.string };
         let body = self.block()?;
 
         Ok(ast::Function {
             name,
+            ret_type,
             body,
         })
     }
@@ -212,16 +226,19 @@ impl<'a> Parser<'a> {
 
     fn statement(&mut self) -> Result<ast::Statement> {
         if self.accept(TT::Return)?.is_some() {
-            if let Token { ty: TT::IntLit, string } = self.pop()? {
-                self.expect(TT::Semi)?;
-                Ok(ast::Statement::Return {
-                    //TODO handle this error
-                    //TODO think about whether - should be part of literals, makes const easier
-                    value: string.parse().unwrap(),
-                })
-            } else {
-                Err(())
-            }
+            let Token { ty, string } = self.pop()?;
+            let result = match ty {
+                TT::IntLit => Ok(ast::Statement::Return {
+                    value: string,
+                }),
+                TT::True | TT::False => Ok(ast::Statement::Return {
+                    value: string,
+                }),
+                _ => Err(())
+            }?;
+
+            self.expect(TT::Semi)?;
+            Ok(result)
         } else {
             Err(())
         }

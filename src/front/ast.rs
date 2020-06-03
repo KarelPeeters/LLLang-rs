@@ -1,6 +1,12 @@
 #[derive(Debug)]
+pub struct TypeDecl {
+    pub string: String,
+}
+
+#[derive(Debug)]
 pub struct Function {
     pub name: String,
+    pub ret_type: TypeDecl,
     pub body: Block,
 }
 
@@ -11,5 +17,5 @@ pub struct Block {
 
 #[derive(Debug)]
 pub enum Statement {
-    Return { value: i32 }
+    Return { value: String }
 }
