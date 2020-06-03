@@ -18,10 +18,8 @@ pub fn resolve(root: &ast::Function) -> Result<ir::Function> {
         _ => return Err("invalid return type"),
     };
 
-    //TODO parse literals here
-    // technically we can only fully parse them after type inference but that doesn't exist yet
-    let value = match &root.body.statements[0] {
-        ast::Statement::Return { value } => value
+    let value = match &root.body.statements[0].kind {
+        ast::StatementKind::Return { value } => &value.value
     };
 
     let value = match ret_type {

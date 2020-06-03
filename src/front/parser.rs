@@ -2,7 +2,8 @@ use std::mem::swap;
 
 use TokenType as TT;
 
-use crate::front::ast;
+use crate::front::{ast, Pos, Span};
+use crate::front::ast::{Block, StatementKind};
 
 type Result<T> = std::result::Result<T, ()>;
 
@@ -21,7 +22,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
 
 #[allow(unused)]
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
-enum TokenType {
+pub enum TokenType {
     Id,
     IntLit,
 
@@ -41,23 +42,26 @@ enum TokenType {
     Eof,
 }
 
-#[derive(Eq, PartialEq, Clone, Debug)]
-struct Token {
+#[derive(Debug)]
+pub struct Token {
     ty: TT,
     string: String,
+    span: Span,
 }
 
 impl Token {
-    fn eof_token() -> Token {
+    fn eof_token(pos: Pos) -> Token {
         Token {
             ty: TT::Eof,
             string: "".to_string(),
+            span: Span::empty(pos),
         }
     }
 }
 
 struct Tokenizer<'a> {
     left: &'a str,
+    pos: Pos,
 
     curr: Token,
     next: Token,
@@ -65,15 +69,32 @@ struct Tokenizer<'a> {
 
 impl<'a> Tokenizer<'a> {
     fn new(left: &'a str) -> Self {
+        let pos = Pos { line: 1, col: 1 };
         let mut result = Self {
             left,
-            curr: Token::eof_token(),
-            next: Token::eof_token(),
+            pos,
+            curr: Token::eof_token(pos),
+            next: Token::eof_token(pos),
         };
         //TODO make this not crash here, but later when actually starting to parse
         result.advance().unwrap();
         result.advance().unwrap();
         result
+    }
+
+    /// self.left should only be advanced trough this function to ensure self.pos is updated
+    fn skip_fixed(&mut self, count: usize) {
+        //update position
+        let skipped = &self.left[0..count];
+        if let Some(last_newline) = skipped.rfind('\n') {
+            self.pos.col = count - last_newline;
+            self.pos.line += skipped.matches('\n').count();
+        } else {
+            self.pos.col += count;
+        }
+
+        //actually skip
+        self.left = &self.left[count..];
     }
 
     fn skip_past(&mut self, pattern: &str, allow_eof: bool) -> Result<()> {
@@ -88,14 +109,10 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn skip_fixed(&mut self, count: usize) {
-        self.left = &self.left[count..];
-    }
-
     fn skip_whitespace_and_comments(&mut self) -> Result<()> {
         loop {
             let prev_left = self.left;
-            self.left = self.left.trim_start();
+            self.skip_fixed(self.left.len() - self.left.trim_start().len());
 
             if self.left.starts_with("//") {
                 self.skip_past("\n", true)?;
@@ -110,12 +127,18 @@ impl<'a> Tokenizer<'a> {
 
     fn parse_next(&mut self) -> Result<Token> {
         self.skip_whitespace_and_comments()?;
-        if self.left.is_empty() { return Ok(Token::eof_token()); }
+        let start_pos = self.pos;
+        if self.left.is_empty() { return Ok(Token::eof_token(start_pos)); }
 
         for (pattern, ty) in TRIVIAL_TOKEN_LIST {
             if self.left.starts_with(pattern) {
                 self.skip_fixed(pattern.len());
-                return Ok(Token { ty: *ty, string: pattern.to_string() });
+                let end_pos = self.pos;
+                return Ok(Token {
+                    ty: *ty,
+                    string: pattern.to_string(),
+                    span: Span::new(start_pos, end_pos),
+                });
             }
         }
 
@@ -125,14 +148,24 @@ impl<'a> Tokenizer<'a> {
         if chars.peek().unwrap().is_ascii_digit() {
             let string: String = chars.take_while(|&c| c.is_ascii_digit()).collect();
             self.skip_fixed(string.len());
-            return Ok(Token { ty: TT::IntLit, string });
+            let end_pos = self.pos;
+            return Ok(Token {
+                ty: TT::IntLit,
+                string,
+                span: Span::new(start_pos, end_pos),
+            });
         }
 
         //identifier
         if chars.peek().unwrap().is_ascii_alphabetic() {
             let string: String = chars.take_while(|&c| c.is_ascii_alphanumeric() || c == '_').collect();
             self.skip_fixed(string.len());
-            return Ok(Token { ty: TT::Id, string });
+            let end_pos = self.pos;
+            return Ok(Token {
+                ty: TT::Id,
+                string,
+                span: Span::new(start_pos, end_pos),
+            });
         }
 
         Err(())
@@ -140,7 +173,9 @@ impl<'a> Tokenizer<'a> {
 
     pub fn advance(&mut self) -> Result<Token> {
         let next = self.parse_next()?;
-        let mut result = Token::eof_token();
+        println!("{:?}", next);
+
+        let mut result = Token::eof_token(self.pos);
 
         swap(&mut result, &mut self.curr);
         swap(&mut self.curr, &mut self.next);
@@ -202,13 +237,17 @@ impl<'a> Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
-        self.expect(TT::Fun)?;
+        let start_pos = self.expect(TT::Fun)?.span.start;
         let name = self.expect(TT::Id)?.string;
         self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow])?;
-        let ret_type = ast::TypeDecl { string: self.expect(TT::Id)?.string };
+
+        let ret_type = self.expect(TT::Id)?;
+        let ret_type = ast::TypeDecl { span: ret_type.span, string: ret_type.string };
+
         let body = self.block()?;
 
         Ok(ast::Function {
+            span: Span::new(start_pos, body.span.end),
             name,
             ret_type,
             body,
@@ -216,29 +255,28 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<ast::Block> {
-        self.expect(TT::OpenC)?;
+        let start_pos = self.expect(TT::OpenC)?.span.start;
         let mut statements = Vec::new();
-        while self.accept(TT::CloseC)?.is_none() {
+
+        loop {
+            if let Some(end) = self.accept(TT::CloseC)? {
+                return Ok(Block { span: Span::new(start_pos, end.span.end), statements });
+            }
+
             statements.push(self.statement()?);
         }
-        Ok(ast::Block { statements })
     }
 
     fn statement(&mut self) -> Result<ast::Statement> {
-        if self.accept(TT::Return)?.is_some() {
-            let Token { ty, string } = self.pop()?;
-            let result = match ty {
-                TT::IntLit => Ok(ast::Statement::Return {
-                    value: string,
-                }),
-                TT::True | TT::False => Ok(ast::Statement::Return {
-                    value: string,
-                }),
-                _ => Err(())
-            }?;
+        if let Some(ret) = self.accept(TT::Return)? {
+            let value = self.expect_any(&[TT::IntLit, TT::True, TT::False])?;
+            let value = ast::Value { span: value.span, value: value.string };
+            let semi = self.expect(TT::Semi)?;
 
-            self.expect(TT::Semi)?;
-            Ok(result)
+            Ok(ast::Statement {
+                span: Span::new(ret.span.start, semi.span.end),
+                kind: StatementKind::Return { value },
+            })
         } else {
             Err(())
         }

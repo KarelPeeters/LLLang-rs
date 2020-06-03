@@ -10,11 +10,11 @@ fn compile() {
 
     let ast_func = front::parser::parse(&source)
         .expect("failed to parse");
-    println!("{:?}", ast_func);
+    println!("=========AST========= \n{:#?}\n\n", ast_func);
 
     let ir_func = front::resolve::resolve(&ast_func)
         .expect("Failed to resolve");
-    println!("{:?}", ir_func);
+    println!("=========IR========== \n{:#?}\n\n", ir_func);
 
     let result = back::emulator::run(&ir_func);
     println!("Result: {:?}", result);
