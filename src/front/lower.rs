@@ -38,7 +38,7 @@ pub fn lower(root: &ast::Function) -> Result<ir::Program> {
     let mut ir_program = ir::Program::new();
 
     let ret_type = parse_type(&root.ret_type)?;
-    ir_program.func_mut(ir_program.entry).ret_type = ret_type;
+    ir_program.get_func_mut(ir_program.entry).ret_type = ret_type;
 
     // (x, true) -> the function should return x
     // (x, false) -> the result of this expression is x
@@ -115,8 +115,8 @@ pub fn lower(root: &ast::Function) -> Result<ir::Program> {
         None => return Err("missing return statement"),
         Some(value) => {
             let value = ir::Value::Const(value);
-            let ret = ir_program.define_terminator(ir::TerminatorInfo::Return { value });
-            ir_program.block_mut(ir_program.func(ir_program.entry).entry).terminator = ret;
+            let ret = ir_program.define_term(ir::TerminatorInfo::Return { value });
+            ir_program.get_block_mut(ir_program.get_func(ir_program.entry).entry).terminator = ret;
         }
     }
 

@@ -5,7 +5,6 @@ use std::ops::{Index, IndexMut};
 
 //TODO make some macro for newtypes once that comes up
 //  also change the debug print to include that newtype name
-#[derive(Eq, PartialEq, Hash)]
 pub struct Idx<T> {
     i: usize,
     ph: PhantomData<T>,
@@ -45,6 +44,11 @@ impl<T> Arena<T> {
     pub fn pop(&mut self, index: Idx<T>) -> T {
         self.map.remove(&index.i)
             .unwrap_or_else(|| panic!("Value at {:?} not found", index.i))
+    }
+
+    // return a fake Idx value that will never actually be in this arena
+    pub fn sentinel() -> Idx<T> {
+        Idx { i: usize::MAX, ph: PhantomData, }
     }
 }
 
