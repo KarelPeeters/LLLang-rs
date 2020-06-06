@@ -5,7 +5,21 @@ use TokenType as TT;
 use crate::front::{ast, Pos, Span};
 use crate::front::ast::Statement;
 
-type Result<T> = std::result::Result<T, ()>;
+type Result<T> = std::result::Result<T, ParseError>;
+
+#[derive(Debug)]
+pub enum ParseError {
+    Char {
+        pos: Pos,
+        char: char,
+    },
+    Token {
+        ty: TT,
+        description: &'static str,
+        allowed: Vec<TokenType>,
+    },
+    Eof,
+}
 
 const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("fun", TT::Fun),
@@ -102,7 +116,7 @@ impl<'a> Tokenizer<'a> {
         let index = match self.left.find(pattern) {
             Some(i) => i,
             None => {
-                return if allow_eof { Ok(()) } else { Err(()) };
+                return if allow_eof { Ok(()) } else { Err(ParseError::Eof) };
             }
         };
 
@@ -169,7 +183,10 @@ impl<'a> Tokenizer<'a> {
             });
         }
 
-        Err(())
+        Err(ParseError::Char {
+            pos: self.pos,
+            char: self.left.chars().next().unwrap(), //eof was handled earlier
+        })
     }
 
     pub fn advance(&mut self) -> Result<Token> {
@@ -195,16 +212,16 @@ impl<'a> Parser<'a> {
         self.tokenizer.advance()
     }
 
-    fn peek(&self) -> &Token {
+    fn curr(&self) -> &Token {
         &self.tokenizer.curr
     }
 
-    fn next(&self) -> &Token {
+    fn lookahead(&self) -> &Token {
         &self.tokenizer.next
     }
 
     fn at(&mut self, ty: TT) -> bool {
-        self.peek().ty == ty
+        self.curr().ty == ty
     }
 
     fn accept(&mut self, ty: TT) -> Result<Option<Token>> {
@@ -215,39 +232,44 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect(&mut self, ty: TT) -> Result<Token> {
+    fn expect(&mut self, ty: TT, description: &'static str) -> Result<Token> {
         if self.at(ty) {
             self.pop()
         } else {
-            Err(())
+            Err(ParseError::Token {
+                ty: self.curr().ty,
+                allowed: std::iter::once(ty).collect(),
+                description,
+            })
         }
     }
 
-    fn expect_all(&mut self, tys: &[TT]) -> Result<()> {
+    fn expect_all(&mut self, tys: &[TT], description: &'static str) -> Result<()> {
         for &ty in tys {
-            self.expect(ty)?;
+            self.expect(ty, description)?;
         }
         Ok(())
     }
 
-    fn expect_any(&mut self, tys: &[TT]) -> Result<Token> {
-        if tys.contains(&self.peek().ty) {
+    fn expect_any(&mut self, tys: &'static [TT], description: &'static str) -> Result<Token> {
+        if tys.contains(&self.curr().ty) {
             Ok(self.pop()?)
         } else {
-            Err(())
+            Err(self.unexpected_token(tys, description))
         }
+    }
+
+    fn unexpected_token(&self, allowed: &'static [TT], description: &'static str) -> ParseError {
+        ParseError::Token { ty: self.curr().ty, allowed: allowed.iter().copied().collect(), description }
     }
 }
 
 impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
-        let start_pos = self.expect(TT::Fun)?.span.start;
-        let name = self.expect(TT::Id)?.string;
-        self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow])?;
-
-        let ret_type = self.expect(TT::Id)?;
-        let ret_type = ast::TypeDecl { span: ret_type.span, string: ret_type.string };
-
+        let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
+        let name = self.expect(TT::Id, "function name")?.string;
+        self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow], "function header")?;
+        let ret_type = self.type_decl()?;
         let body = self.block()?;
 
         Ok(ast::Function {
@@ -259,7 +281,7 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<ast::Block> {
-        let start_pos = self.expect(TT::OpenC)?.span.start;
+        let start_pos = self.expect(TT::OpenC, "start of block")?.span.start;
         let mut statements = Vec::new();
 
         loop {
@@ -267,15 +289,18 @@ impl<'a> Parser<'a> {
                 return Ok(ast::Block { span: Span::new(start_pos, end.span.end), statements });
             }
 
-            let (kind, span) = if self.at(TT::Let) {
+            let (kind, start_pos) = if self.at(TT::Let) {
                 let decl = self.declaration()?;
-                let span = decl.span;
-                (ast::StatementKind::Declaration(decl), span)
+                let start = decl.span.start;
+                (ast::StatementKind::Declaration(decl), start)
             } else {
                 let expr = self.expression()?;
-                let span = expr.span;
-                (ast::StatementKind::Expression(Box::new(expr)), span)
+                let start = expr.span.start;
+                (ast::StatementKind::Expression(Box::new(expr)), start)
             };
+
+            let end = self.expect(TT::Semi, "end of statement")?.span.end;
+            let span = Span::new(start_pos, end);
 
             statements.push(Statement { span, kind })
         }
@@ -291,21 +316,27 @@ impl<'a> Parser<'a> {
         let (kind, end_pos) = match token.ty {
             TT::Return => {
                 let value = self.expression()?;
-                let semi = self.expect(TT::Semi)?;
-
-                (ast::ExpressionKind::Return { value: Box::new(value) }, semi.span.end)
+                let end_pos = value.span.end;
+                (ast::ExpressionKind::Return { value: Box::new(value) }, end_pos)
             }
             TT::IntLit | TT::True | TT::False => {
                 (ast::ExpressionKind::Literal { value: token.string }, token.span.end)
             }
-
-            _ => return Err(())
+            _ => return Err(self.unexpected_token(
+                &[TT::Return, TT::IntLit, TT::True, TT::False],
+                "expression",
+            ))
         };
 
         Ok(ast::Expression {
             span: Span::new(token.span.start, end_pos),
             kind,
         })
+    }
+
+    fn type_decl(&mut self) -> Result<ast::TypeDecl> {
+        let token = self.expect(TT::Id, "type declaration")?;
+        Ok(ast::TypeDecl { span: token.span, string: token.string })
     }
 }
 
