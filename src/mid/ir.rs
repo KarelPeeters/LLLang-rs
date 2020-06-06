@@ -8,7 +8,7 @@ pub type Instruction = Idx<InstructionInfo>;
 pub type Terminator = Idx<TerminatorInfo>;
 pub type Variable = Idx<VariableInfo>;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Type {
     Bool,
     Int,
@@ -36,7 +36,9 @@ impl Program {
             ret_type: Type::Int,
             entry: blocks.push(BlockInfo {
                 instructions: vec![],
-                terminator: terminators.push(TerminatorInfo::Return { value: 0 }),
+                terminator: terminators.push(TerminatorInfo::Return {
+                    value: Value::Const(Const { ty: Type::Int, value: 0 }),
+                }),
             }),
         });
 
@@ -115,11 +117,17 @@ pub enum InstructionInfo {}
 
 #[derive(Debug)]
 pub enum TerminatorInfo {
-    Return { value: i32 },
+    Return { value: Value },
     Unreachable,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum Value {
-    Basic { ty: Type, value: i32 }
+    Const(Const)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Const {
+    pub ty: Type,
+    pub value: i32,
 }

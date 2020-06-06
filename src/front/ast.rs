@@ -7,9 +7,15 @@ pub struct Type {
 }
 
 #[derive(Debug)]
+pub struct Identifier {
+    pub span: Span,
+    pub string: String,
+}
+
+#[derive(Debug)]
 pub struct Function {
     pub span: Span,
-    pub name: String,
+    pub id: Identifier,
     pub ret_type: Type,
     pub body: Block,
 }
@@ -36,7 +42,7 @@ pub enum StatementKind {
 pub struct Declaration {
     pub span: Span,
     pub mutable: bool,
-    pub name: String,
+    pub id: Identifier,
     pub ty: Option<Type>,
     pub init: Option<Box<Expression>>
 }
@@ -50,5 +56,6 @@ pub struct Expression {
 #[derive(Debug)]
 pub enum ExpressionKind {
     Literal { value: String },
+    Identifier { id: Identifier },
     Return { value: Box<Expression> },
 }

@@ -3,7 +3,6 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::{ast, Pos, Span};
-use crate::front::ast::Statement;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -274,14 +273,14 @@ impl<'a> Parser<'a> {
 impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
         let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
-        let name = self.identifier()?.string;
+        let id = self.identifier()?;
         self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow], "function header")?;
         let ret_ty = self.type_name()?;
         let body = self.block()?;
 
         Ok(ast::Function {
             span: Span::new(start_pos, body.span.end),
-            name,
+            id,
             ret_type: ret_ty,
             body,
         })
@@ -309,16 +308,15 @@ impl<'a> Parser<'a> {
             let end = self.expect(TT::Semi, "end of statement")?.span.end;
             let span = Span::new(start_pos, end);
 
-            statements.push(Statement { span, kind })
+            statements.push(ast::Statement { span, kind })
         }
     }
 
     fn variable_declaration(&mut self) -> Result<ast::Declaration> {
         let start_pos = self.expect(TT::Let, "variable declaration")?.span.start;
         let mutable = self.accept(TT::Mut)?.is_some();
-        let name = self.identifier()?;
-        let mut end_pos = name.span.end;
-        let name = name.string;
+        let id = self.identifier()?;
+        let mut end_pos = id.span.end;
 
         let ty = if self.accept(TT::Colon)?.is_some() {
             let ty = self.type_name()?;
@@ -335,36 +333,42 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(ast::Declaration { span: Span::new(start_pos, end_pos), mutable, ty, name, init })
+        Ok(ast::Declaration { span: Span::new(start_pos, end_pos), mutable, ty, id, init })
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
+        //TODO maybe change this pop into some accept-like structure?
         let token = self.pop()?;
 
-        let (kind, end_pos) = match token.ty {
+        let (kind, kind_span) = match token.ty {
             TT::Return => {
                 let value = self.expression()?;
-                let end_pos = value.span.end;
-                (ast::ExpressionKind::Return { value: Box::new(value) }, end_pos)
+                let span = value.span;
+                (ast::ExpressionKind::Return { value: Box::new(value) }, span)
             }
             TT::IntLit | TT::True | TT::False => {
-                (ast::ExpressionKind::Literal { value: token.string }, token.span.end)
+                (ast::ExpressionKind::Literal { value: token.string }, token.span)
+            }
+            TT::Id => {
+                (ast::ExpressionKind::Identifier { id: ast::Identifier { span: token.span, string: token.string } }, token.span)
             }
             _ => return Err(self.unexpected_token(
-                &[TT::Return, TT::IntLit, TT::True, TT::False],
+                &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id],
                 "expression",
             ))
         };
 
         Ok(ast::Expression {
-            span: Span::new(token.span.start, end_pos),
+            span: Span::new(token.span.start, kind_span.end),
             kind,
         })
     }
 
-    fn identifier(&mut self) -> Result<Token> {
-        self.expect(TT::Id, "identifier")
+    fn identifier(&mut self) -> Result<ast::Identifier> {
+        let token = self.expect(TT::Id, "identifier")?;
+        Ok(ast::Identifier { span: token.span, string: token.string })
     }
+
 
     fn type_name(&mut self) -> Result<ast::Type> {
         let token = self.expect(TT::Id, "type declaration")?;

@@ -1,5 +1,5 @@
 use crate::mid::ir;
-use crate::mid::ir::TerminatorInfo;
+use crate::mid::ir::{Const, TerminatorInfo, Value};
 
 pub fn run(prog: &ir::Program) -> i32 {
     let func = prog.func(prog.entry);
@@ -11,7 +11,7 @@ pub fn run(prog: &ir::Program) -> i32 {
     }
 
     let value = match &term {
-        TerminatorInfo::Return { value } => *value,
+        TerminatorInfo::Return { value: Value::Const(Const { value, .. }) } => *value,
         TerminatorInfo::Unreachable => panic!("Reached Unreachable"),
     };
 
