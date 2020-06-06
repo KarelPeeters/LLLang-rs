@@ -5,6 +5,17 @@ use crate::util::arena::{Arena, Idx};
 
 macro_rules! gen_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
+        $(
+        pub type $node = Node<$info>;
+        )*
+
+        #[derive(Debug)]
+        enum NodeInfo {
+            $(
+            $node($info),
+            )*
+        }
+
         impl Program {
         $(
             pub fn $def(&mut self, info: $info) -> $node {
@@ -28,21 +39,6 @@ macro_rules! gen_program_accessors {
         )*
         }
     }
-}
-
-pub type Function = Node<FunctionInfo>;
-pub type Block = Node<BlockInfo>;
-pub type Instruction = Node<InstructionInfo>;
-pub type Terminator = Node<TerminatorInfo>;
-pub type Variable = Node<VariableInfo>;
-
-#[derive(Debug)]
-enum NodeInfo {
-    Function(FunctionInfo),
-    Block(BlockInfo),
-    Instruction(InstructionInfo),
-    Terminator(TerminatorInfo),
-    Variable(VariableInfo),
 }
 
 gen_program_accessors![
