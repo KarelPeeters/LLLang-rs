@@ -26,7 +26,10 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("->", TT::Arrow),
     ("return", TT::Return),
     ("let", TT::Let),
+    ("mut", TT::Mut),
     (";", TT::Semi),
+    (":", TT::Colon),
+    ("=", TT::Eq),
     ("(", TT::OpenB),
     (")", TT::CloseB),
     ("{", TT::OpenC),
@@ -47,8 +50,12 @@ pub enum TokenType {
     Arrow,
     Return,
     Let,
+    Mut,
 
     Semi,
+    Colon,
+    Eq,
+
     OpenB,
     CloseB,
     OpenC,
@@ -267,15 +274,15 @@ impl<'a> Parser<'a> {
 impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
         let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
-        let name = self.expect(TT::Id, "function name")?.string;
+        let name = self.identifier()?.string;
         self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow], "function header")?;
-        let ret_type = self.type_decl()?;
+        let ret_ty = self.type_name()?;
         let body = self.block()?;
 
         Ok(ast::Function {
             span: Span::new(start_pos, body.span.end),
             name,
-            ret_type,
+            ret_type: ret_ty,
             body,
         })
     }
@@ -290,7 +297,7 @@ impl<'a> Parser<'a> {
             }
 
             let (kind, start_pos) = if self.at(TT::Let) {
-                let decl = self.declaration()?;
+                let decl = self.variable_declaration()?;
                 let start = decl.span.start;
                 (ast::StatementKind::Declaration(decl), start)
             } else {
@@ -306,8 +313,29 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn declaration(&mut self) -> Result<ast::Declaration> {
-        todo!()
+    fn variable_declaration(&mut self) -> Result<ast::Declaration> {
+        let start_pos = self.expect(TT::Let, "variable declaration")?.span.start;
+        let mutable = self.accept(TT::Mut)?.is_some();
+        let name = self.identifier()?;
+        let mut end_pos = name.span.end;
+        let name = name.string;
+
+        let ty = if self.accept(TT::Colon)?.is_some() {
+            let ty = self.type_name()?;
+            end_pos = ty.span.end;
+            Some(ty)
+        } else {
+            None
+        };
+        let init = if self.accept(TT::Eq)?.is_some() {
+            let expr = self.expression()?;
+            end_pos = expr.span.end;
+            Some(Box::new(expr))
+        } else {
+            None
+        };
+
+        Ok(ast::Declaration { span: Span::new(start_pos, end_pos), mutable, ty, name, init })
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
@@ -334,9 +362,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn type_decl(&mut self) -> Result<ast::TypeDecl> {
+    fn identifier(&mut self) -> Result<Token> {
+        self.expect(TT::Id, "identifier")
+    }
+
+    fn type_name(&mut self) -> Result<ast::Type> {
         let token = self.expect(TT::Id, "type declaration")?;
-        Ok(ast::TypeDecl { span: token.span, string: token.string })
+        Ok(ast::Type { span: token.span, string: token.string })
     }
 }
 

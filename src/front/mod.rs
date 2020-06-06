@@ -1,7 +1,5 @@
 use std::fmt::{Debug, Formatter};
 
-use crate::front::parser::{Token, TokenType};
-
 pub mod ast;
 
 pub mod parser;

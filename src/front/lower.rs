@@ -34,7 +34,7 @@ pub fn lower(root: &ast::Function) -> Result<ir::Program> {
         StatementKind::Expression(expr) => {
             match &expr.kind {
                 ExpressionKind::Literal { .. } => return Err("expected a return statement, got a literal"),
-                ExpressionKind::Return { value } => find_ret_value(expr)?,
+                ExpressionKind::Return { value } => find_ret_value(value)?,
             }
         }
     };

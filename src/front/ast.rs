@@ -1,7 +1,7 @@
 use crate::front::Span;
 
 #[derive(Debug)]
-pub struct TypeDecl {
+pub struct Type {
     pub span: Span,
     pub string: String,
 }
@@ -10,7 +10,7 @@ pub struct TypeDecl {
 pub struct Function {
     pub span: Span,
     pub name: String,
-    pub ret_type: TypeDecl,
+    pub ret_type: Type,
     pub body: Block,
 }
 
@@ -37,7 +37,8 @@ pub struct Declaration {
     pub span: Span,
     pub mutable: bool,
     pub name: String,
-    pub value: Option<Box<Expression>>
+    pub ty: Option<Type>,
+    pub init: Option<Box<Expression>>
 }
 
 #[derive(Debug)]
