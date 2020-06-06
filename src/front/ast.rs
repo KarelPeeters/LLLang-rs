@@ -28,11 +28,26 @@ pub struct Statement {
 
 #[derive(Debug)]
 pub enum StatementKind {
-    Return { value: Value }
+    Declaration(Declaration),
+    Expression(Box<Expression>),
 }
 
 #[derive(Debug)]
-pub struct Value {
+pub struct Declaration {
     pub span: Span,
-    pub value: String,
+    pub mutable: bool,
+    pub name: String,
+    pub value: Option<Box<Expression>>
+}
+
+#[derive(Debug)]
+pub struct Expression {
+    pub span: Span,
+    pub kind: ExpressionKind,
+}
+
+#[derive(Debug)]
+pub enum ExpressionKind {
+    Literal { value: String },
+    Return { value: Box<Expression> },
 }

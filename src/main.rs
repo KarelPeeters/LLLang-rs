@@ -1,8 +1,9 @@
 use std::fs::read_to_string;
 
-pub mod front;
-pub mod back;
-pub mod mid;
+mod front;
+mod back;
+mod mid;
+mod util;
 
 fn compile() {
     let source = read_to_string("ignored/main.ll")
@@ -10,13 +11,14 @@ fn compile() {
 
     let ast_func = front::parser::parse(&source)
         .expect("failed to parse");
-    println!("=========AST========= \n{:#?}\n\n", ast_func);
+    println!("========AST===========\n{:#?}\n\n", ast_func);
 
-    let ir_func = front::resolve::resolve(&ast_func)
+    let ir_program = front::lower::lower(&ast_func)
         .expect("Failed to resolve");
-    println!("=========IR========== \n{:#?}\n\n", ir_func);
+    println!("========IR============\n{:#?}\n\n", ir_program);
 
-    let result = back::emulator::run(&ir_func);
+    println!("========Emulator======");
+    let result = back::emulator::run(&ir_program);
     println!("Result: {:?}", result);
 }
 

@@ -3,7 +3,7 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::{ast, Pos, Span};
-use crate::front::ast::{Block, StatementKind};
+use crate::front::ast::Statement;
 
 type Result<T> = std::result::Result<T, ()>;
 
@@ -11,6 +11,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("fun", TT::Fun),
     ("->", TT::Arrow),
     ("return", TT::Return),
+    ("let", TT::Let),
     (";", TT::Semi),
     ("(", TT::OpenB),
     (")", TT::CloseB),
@@ -20,7 +21,6 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("false", TT::False),
 ];
 
-#[allow(unused)]
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum TokenType {
     Id,
@@ -32,6 +32,7 @@ pub enum TokenType {
     Fun,
     Arrow,
     Return,
+    Let,
 
     Semi,
     OpenB,
@@ -54,7 +55,7 @@ impl Token {
         Token {
             ty: TT::Eof,
             string: "".to_string(),
-            span: Span::empty(pos),
+            span: Span::empty_at(pos),
         }
     }
 }
@@ -173,7 +174,6 @@ impl<'a> Tokenizer<'a> {
 
     pub fn advance(&mut self) -> Result<Token> {
         let next = self.parse_next()?;
-        println!("{:?}", next);
 
         let mut result = Token::eof_token(self.pos);
 
@@ -189,13 +189,13 @@ struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
 }
 
-#[allow(unused)]
+#[allow(dead_code)]
 impl<'a> Parser<'a> {
     fn pop(&mut self) -> Result<Token> {
         self.tokenizer.advance()
     }
 
-    fn curr(&self) -> &Token {
+    fn peek(&self) -> &Token {
         &self.tokenizer.curr
     }
 
@@ -203,8 +203,12 @@ impl<'a> Parser<'a> {
         &self.tokenizer.next
     }
 
-    fn accept(&mut self, token: TT) -> Result<Option<Token>> {
-        if self.curr().ty == token {
+    fn at(&mut self, ty: TT) -> bool {
+        self.peek().ty == ty
+    }
+
+    fn accept(&mut self, ty: TT) -> Result<Option<Token>> {
+        if self.at(ty) {
             self.pop().map(Option::Some)
         } else {
             Ok(None)
@@ -212,7 +216,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect(&mut self, ty: TT) -> Result<Token> {
-        if self.curr().ty == ty {
+        if self.at(ty) {
             self.pop()
         } else {
             Err(())
@@ -227,7 +231,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_any(&mut self, tys: &[TT]) -> Result<Token> {
-        if tys.contains(&self.curr().ty) {
+        if tys.contains(&self.peek().ty) {
             Ok(self.pop()?)
         } else {
             Err(())
@@ -260,26 +264,48 @@ impl<'a> Parser<'a> {
 
         loop {
             if let Some(end) = self.accept(TT::CloseC)? {
-                return Ok(Block { span: Span::new(start_pos, end.span.end), statements });
+                return Ok(ast::Block { span: Span::new(start_pos, end.span.end), statements });
             }
 
-            statements.push(self.statement()?);
+            let (kind, span) = if self.at(TT::Let) {
+                let decl = self.declaration()?;
+                let span = decl.span;
+                (ast::StatementKind::Declaration(decl), span)
+            } else {
+                let expr = self.expression()?;
+                let span = expr.span;
+                (ast::StatementKind::Expression(Box::new(expr)), span)
+            };
+
+            statements.push(Statement { span, kind })
         }
     }
 
-    fn statement(&mut self) -> Result<ast::Statement> {
-        if let Some(ret) = self.accept(TT::Return)? {
-            let value = self.expect_any(&[TT::IntLit, TT::True, TT::False])?;
-            let value = ast::Value { span: value.span, value: value.string };
-            let semi = self.expect(TT::Semi)?;
+    fn declaration(&mut self) -> Result<ast::Declaration> {
+        todo!()
+    }
 
-            Ok(ast::Statement {
-                span: Span::new(ret.span.start, semi.span.end),
-                kind: StatementKind::Return { value },
-            })
-        } else {
-            Err(())
-        }
+    fn expression(&mut self) -> Result<ast::Expression> {
+        let token = self.pop()?;
+
+        let (kind, end_pos) = match token.ty {
+            TT::Return => {
+                let value = self.expression()?;
+                let semi = self.expect(TT::Semi)?;
+
+                (ast::ExpressionKind::Return { value: Box::new(value) }, semi.span.end)
+            }
+            TT::IntLit | TT::True | TT::False => {
+                (ast::ExpressionKind::Literal { value: token.string }, token.span.end)
+            }
+
+            _ => return Err(())
+        };
+
+        Ok(ast::Expression {
+            span: Span::new(token.span.start, end_pos),
+            kind,
+        })
     }
 }
 

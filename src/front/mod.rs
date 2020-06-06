@@ -5,7 +5,7 @@ use crate::front::parser::{Token, TokenType};
 pub mod ast;
 
 pub mod parser;
-pub mod resolve;
+pub mod lower;
 
 #[derive(Copy, Clone)]
 pub struct Pos {
@@ -38,7 +38,7 @@ impl Span {
         Self { start, end }
     }
 
-    fn empty(at: Pos) -> Self {
+    fn empty_at(at: Pos) -> Self {
         Self::new(at, at)
     }
 }

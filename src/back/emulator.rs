@@ -1,8 +1,19 @@
 use crate::mid::ir;
-use crate::mid::ir::Terminator;
+use crate::mid::ir::TerminatorInfo;
 
-pub fn run(func: &ir::Function) -> i32 {
-    match func.entry.terminator {
-        Terminator::Return { value } => value,
+pub fn run(prog: &ir::Program) -> i32 {
+    let func = prog.func(prog.entry);
+    let block = prog.block(func.entry);
+    let term = prog.term(block.terminator);
+
+    for _ in &block.instructions {
+        panic!("Instructions not supported yet")
     }
+
+    let value = match &term {
+        TerminatorInfo::Return { value } => *value,
+        TerminatorInfo::Unreachable => panic!("Reached Unreachable"),
+    };
+
+    value
 }
