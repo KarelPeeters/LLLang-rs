@@ -5,6 +5,14 @@ use crate::mid::ir::{TerminatorInfo, Type};
 
 type Result<T> = std::result::Result<T, &'static str>;
 
+//Find the final return value in a bunch of nested return expressions
+fn find_ret_value(expr: &ast::Expression) -> Result<&String> {
+    match &expr.kind {
+        ExpressionKind::Literal { value } => Ok(value),
+        ExpressionKind::Return { value } => find_ret_value(value),
+    }
+}
+
 pub fn lower(root: &ast::Function) -> Result<ir::Program> {
     //TODO
     // typecheck, figure our symbols, collect declared types, ...
@@ -24,18 +32,9 @@ pub fn lower(root: &ast::Function) -> Result<ir::Program> {
     let ret_value = match &root.body.statements[0].kind {
         StatementKind::Declaration(_) => todo!(),
         StatementKind::Expression(expr) => {
-            match &expr.as_ref().kind {
-                ExpressionKind::Literal { .. } =>
-                    return Err("expected a return statement, got a literal"),
-                ExpressionKind::Return { value } => {
-                    match &value.kind {
-                        ExpressionKind::Literal { value } => {
-                            value
-                        }
-                        ExpressionKind::Return { .. } =>
-                            return Err("expected a literal, got a return statement"),
-                    }
-                }
+            match &expr.kind {
+                ExpressionKind::Literal { .. } => return Err("expected a return statement, got a literal"),
+                ExpressionKind::Return { value } => find_ret_value(expr)?,
             }
         }
     };
