@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use crate::util::arena::{Arena, Idx};
+use crate::util::arena::{Arena, ArenaSet, Idx};
 
-macro_rules! gen_program_accessors {
+macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
         $(
         pub type $node = Node<$info>;
@@ -41,15 +41,20 @@ macro_rules! gen_program_accessors {
     }
 }
 
-gen_program_accessors![
+gen_node_and_program_accessors![
     [Function, FunctionInfo, define_func, get_func, get_func_mut],
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
     [Terminator, TerminatorInfo, define_term, get_term, get_term_mut],
-    [Variable, VariableInfo, define_var, get_var, get_var_mut],
+    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
 ];
 
-#[derive(Debug)]
+//TODO think about debug printing Node, right now it's kind of crappy with PhantomData
+//  also improve NodeType printing
+
+//TODO implement Eq for Node
+
+#[derive(Debug, Hash)]
 pub struct Node<T> {
     i: Idx<NodeInfo>,
     ph: PhantomData<T>,
@@ -61,17 +66,22 @@ impl<T> Clone for Node<T> {
     }
 }
 
-impl <T> Copy for Node<T> {}
+impl<T> Copy for Node<T> {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Type {
-    Bool,
-    Int,
+impl<T> PartialEq for Node<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.i == other.i
+    }
 }
+
+impl<T> Eq for Node<T> {}
+
+pub type Type = Idx<TypeInfo>;
 
 #[derive(Debug)]
 pub struct Program {
     nodes: Arena<NodeInfo>,
+    types: ArenaSet<TypeInfo>,
 
     pub entry: Function,
 }
@@ -81,39 +91,52 @@ impl Program {
     pub fn new() -> Self {
         let mut prog = Self {
             nodes: Default::default(),
-            entry: Node { i: Arena::sentinel(), ph: PhantomData },
+            types: Default::default(),
+            entry: Node { i: Idx::sentinel(), ph: PhantomData },
         };
 
+        let int_ty = prog.define_type(TypeInfo::Integer { bits: 32 });
         let term = prog.define_term(TerminatorInfo::Return {
-            value: Value::Const(Const { ty: Type::Int, value: 0 })
+            value: Value::Const(Const { ty: int_ty, value: 0 })
         });
         let block = prog.define_block(BlockInfo {
             instructions: vec![],
             terminator: term,
         });
         prog.entry = prog.define_func(FunctionInfo {
-            ret_type: Type::Int,
+            ret_type: int_ty,
             entry: block,
+            slots: Default::default(),
         });
 
         prog
     }
+
+    pub fn define_type(&mut self, info: TypeInfo) -> Type {
+        self.types.push(info)
+    }
+
+    pub fn get_type(&mut self, ty: Type) -> &TypeInfo {
+        &self.types[ty]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum TypeInfo {
+    Integer { bits: u32 },
+    Pointer { inner: Type },
 }
 
 #[derive(Debug)]
 pub struct FunctionInfo {
     pub ret_type: Type,
     pub entry: Block,
+    pub slots: Vec<StackSlot>,
 }
 
 #[derive(Debug)]
-pub struct VariableInfo {
+pub struct StackSlotInfo {
     ty: Type,
-}
-
-#[derive(Debug)]
-pub struct VariableId {
-    index: usize,
 }
 
 #[derive(Debug)]
