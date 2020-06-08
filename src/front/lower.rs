@@ -28,7 +28,7 @@ impl Lower {
                 }),
                 ir::TypeInfo::Integer { bits: 32 } => Ok(ir::Const {
                     ty,
-                    value: lit.parse::<bool>().map_err(|_| "failed to parse bool")? as i32,
+                    value: lit.parse::<i32>().map_err(|_| "failed to parse int")?,
                 }),
                 _ => Err("unknown literal type")
             }
@@ -102,6 +102,9 @@ impl Lower {
                     if self.variables.insert(decl.id.string.clone(), value).is_some() {
                         return Err("variable declared twice");
                     }
+                }
+                ast::StatementKind::Assignment(_assign) => {
+                    todo!("assignment")
                 }
                 ast::StatementKind::Expression(expr) => {
                     let (value, should_ret) = self.eval(expr, None, ret_type)?;

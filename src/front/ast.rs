@@ -35,6 +35,7 @@ pub struct Statement {
 #[derive(Debug)]
 pub enum StatementKind {
     Declaration(Declaration),
+    Assignment(Assignment),
     Expression(Box<Expression>),
 }
 
@@ -45,6 +46,13 @@ pub struct Declaration {
     pub id: Identifier,
     pub ty: Option<Type>,
     pub init: Option<Box<Expression>>
+}
+
+#[derive(Debug)]
+pub struct Assignment {
+    pub span: Span,
+    pub left: Box<Expression>,
+    pub right: Box<Expression>,
 }
 
 #[derive(Debug)]

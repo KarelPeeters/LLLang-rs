@@ -13,6 +13,7 @@ pub enum ParseError {
         char: char,
     },
     Token {
+        pos: Pos,
         ty: TT,
         description: &'static str,
         allowed: Vec<TokenType>,
@@ -242,11 +243,10 @@ impl<'a> Parser<'a> {
         if self.at(ty) {
             self.pop()
         } else {
-            Err(ParseError::Token {
-                ty: self.curr().ty,
-                allowed: std::iter::once(ty).collect(),
+            Err(self.unexpected_token(
+                &[ty],
                 description,
-            })
+            ))
         }
     }
 
@@ -265,8 +265,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn unexpected_token(&self, allowed: &'static [TT], description: &'static str) -> ParseError {
-        ParseError::Token { ty: self.curr().ty, allowed: allowed.iter().copied().collect(), description }
+    fn unexpected_token(&self, allowed: &[TT], description: &'static str) -> ParseError {
+        ParseError::Token {
+            ty: self.curr().ty,
+            pos: self.curr().span.start,
+            allowed: allowed.iter().copied().collect(),
+            description,
+        }
     }
 }
 
@@ -288,28 +293,52 @@ impl<'a> Parser<'a> {
 
     fn block(&mut self) -> Result<ast::Block> {
         let start_pos = self.expect(TT::OpenC, "start of block")?.span.start;
+
         let mut statements = Vec::new();
 
-        loop {
+        let end_pos = loop {
             if let Some(end) = self.accept(TT::CloseC)? {
-                return Ok(ast::Block { span: Span::new(start_pos, end.span.end), statements });
+                break end.span.end;
             }
+            statements.push(self.statement()?)
+        };
 
-            let (kind, start_pos) = if self.at(TT::Let) {
-                let decl = self.variable_declaration()?;
-                let start = decl.span.start;
-                (ast::StatementKind::Declaration(decl), start)
+        Ok(ast::Block {
+            span: Span::new(start_pos, end_pos),
+            statements,
+        })
+    }
+
+    fn statement(&mut self) -> Result<ast::Statement> {
+        let (kind, start_pos) = if self.at(TT::Let) {
+            //declaration
+            let decl = self.variable_declaration()?;
+            let start = decl.span.start;
+            (ast::StatementKind::Declaration(decl), start)
+        } else {
+            let left = self.expression()?;
+            let start_pos = left.span.start;
+
+            let stmt = if self.accept(TT::Eq)?.is_some() {
+                //assignment
+                let right = self.expression()?;
+                ast::StatementKind::Assignment(ast::Assignment {
+                    span: Span::new(start_pos, right.span.end),
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
             } else {
-                let expr = self.expression()?;
-                let start = expr.span.start;
-                (ast::StatementKind::Expression(Box::new(expr)), start)
+                // expression
+                ast::StatementKind::Expression(Box::new(left))
             };
 
-            let end = self.expect(TT::Semi, "end of statement")?.span.end;
-            let span = Span::new(start_pos, end);
+            (stmt, start_pos)
+        };
 
-            statements.push(ast::Statement { span, kind })
-        }
+        let end = self.expect(TT::Semi, "end of statement")?.span.end;
+        let span = Span::new(start_pos, end);
+
+        Ok(ast::Statement { span, kind })
     }
 
     fn variable_declaration(&mut self) -> Result<ast::Declaration> {
