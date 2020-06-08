@@ -12,6 +12,7 @@ pub fn run(prog: &ir::Program) -> i32 {
 
     let value = match &term {
         TerminatorInfo::Return { value: Value::Const(Const { value, .. }) } => *value,
+        TerminatorInfo::Return { .. } => panic!("Non const returns not yet supported"),
         TerminatorInfo::Unreachable => panic!("Reached Unreachable"),
     };
 

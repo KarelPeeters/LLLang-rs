@@ -112,6 +112,10 @@ impl Program {
         prog
     }
 
+    pub fn get_type_int(&mut self, bits: u32) -> Type {
+        self.define_type(TypeInfo::Integer { bits })
+    }
+
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)
     }
@@ -136,7 +140,7 @@ pub struct FunctionInfo {
 
 #[derive(Debug)]
 pub struct StackSlotInfo {
-    ty: Type,
+    pub inner_ty: Type,
 }
 
 #[derive(Debug)]
@@ -146,7 +150,10 @@ pub struct BlockInfo {
 }
 
 #[derive(Debug)]
-pub enum InstructionInfo {}
+pub enum InstructionInfo {
+    Load { addr: Value },
+    Store { addr: Value, value: Value },
+}
 
 #[derive(Debug)]
 pub enum TerminatorInfo {
@@ -154,9 +161,10 @@ pub enum TerminatorInfo {
     Unreachable,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Value {
-    Const(Const)
+    Const(Const),
+    StackSlot(StackSlot),
 }
 
 #[derive(Debug, Clone, Copy)]
