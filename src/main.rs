@@ -25,5 +25,6 @@ fn compile() {
 }
 
 fn main() {
+    color_backtrace::install();
     compile()
 }

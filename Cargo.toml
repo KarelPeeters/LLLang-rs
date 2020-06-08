@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 bimap = "0.4.0"
+color-backtrace = "0.4.2"
