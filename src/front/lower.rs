@@ -1,20 +1,25 @@
 use std::collections::HashMap;
 
 use crate::front::ast;
+use crate::front::ast::ExpressionKind;
 use crate::mid::ir;
+use crate::mid::ir::StackSlot;
 
 type Result<T> = std::result::Result<T, &'static str>;
 
 struct Lower {
-    variables: HashMap<String, ir::Const>,
+    variables: HashMap<String, ir::StackSlot>,
     prog: ir::Program,
+
+    curr_func: ir::Function,
+    curr_block: ir::Block,
 }
 
 impl Lower {
     fn parse_type(&mut self, ty: &ast::Type) -> Result<ir::Type> {
         match ty.string.as_ref() {
-            "int" => Ok(self.prog.get_type_int(32)),
-            "bool" => Ok(self.prog.get_type_int(1)),
+            "int" => Ok(self.prog.define_type_int(32)),
+            "bool" => Ok(self.prog.define_type_int(1)),
             _ => Err("invalid return type"),
         }
     }
@@ -34,35 +39,70 @@ impl Lower {
             }
         } else {
             match lit {
-                "true" => Ok(ir::Const { ty: self.prog.get_type_int(1), value: true as i32 }),
-                "false" => Ok(ir::Const { ty: self.prog.get_type_int(1), value: false as i32 }),
+                "true" => Ok(ir::Const { ty: self.prog.define_type_int(1), value: true as i32 }),
+                "false" => Ok(ir::Const { ty: self.prog.define_type_int(1), value: false as i32 }),
                 _ => Err("cannot infer type for literal"),
             }
         }
     }
 
-    // (x, true) -> the function should return x
-    // (x, false) -> the result of this expression is x
-    fn eval(&mut self, value: &ast::Expression, expect_ty: Option<ir::Type>, ret_type: ir::Type) -> Result<(ir::Const, bool)> {
-        match &value.kind {
+    fn start_new_block(&mut self) {
+        let term = self.prog.define_term(ir::TerminatorInfo::Unreachable);
+        self.curr_block = self.prog.define_block(ir::BlockInfo {
+            instructions: vec![],
+            terminator: term,
+        });
+    }
+
+    fn new_slot(&mut self, inner_ty: ir::Type) -> StackSlot {
+        let ty = self.prog.define_type_ptr(inner_ty);
+        self.prog.define_slot(ir::StackSlotInfo { inner_ty, ty })
+    }
+
+    fn append_instr(&mut self, instr: ir::InstructionInfo) -> ir::Instruction {
+        let instr = self.prog.define_instr(instr);
+        self.prog.get_block_mut(self.curr_block).instructions.push(instr);
+        instr
+    }
+
+    // None means this expression doesn't return control, eg. it returns from the function or breaks
+    fn append_expr(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<Option<ir::Value>> {
+        match &expr.kind {
             ast::ExpressionKind::Literal { value } => {
-                self.parse_literal(&value, expect_ty)
-                    .map(|v| (v, false))
+                let value = self.parse_literal(&value, expect_ty)?;
+                Ok(Some(ir::Value::Const(value)))
             }
             ast::ExpressionKind::Identifier { id } => {
-                self.variables.get(&id.string)
-                    .ok_or("undeclared variable")
-                    .and_then(|&v| {
-                        if expect_ty.map(|et| et == v.ty).unwrap_or(true) {
-                            Ok((v, false))
-                        } else {
-                            Err("type mismatch")
-                        }
-                    })
+                let slot = *self.variables.get(&id.string)
+                    .ok_or("undeclared variable")?;
+
+                //check type
+                if let Some(expect_ty) = expect_ty {
+                    let actual_ty = self.prog.get_slot(slot).inner_ty;
+                    if expect_ty != actual_ty {
+                        return Err("type mismatch")
+                    }
+                }
+
+                //load
+                let load = ir::InstructionInfo::Load {
+                    addr: ir::Value::Slot(slot)
+                };
+                let load = self.append_instr(load);
+                Ok(Some(ir::Value::Instr(load)))
             }
             ast::ExpressionKind::Return { value } => {
-                self.eval(value, Some(ret_type),ret_type)
-                    .map(|(v, _)| (v, true))
+                let ret_type = self.prog.get_func(self.curr_func).ret_type;
+
+                if let Some(value) = self.append_expr(value, Some(ret_type))? {
+                    let ret = self.prog.define_term(ir::TerminatorInfo::Return { value });
+                    self.prog.get_block_mut(self.curr_block).terminator = ret;
+
+                    //start new block so we can continue lowering without actually affecting anything
+                    self.start_new_block();
+                }
+
+                Ok(None)
             }
         }
     }
@@ -73,55 +113,56 @@ impl Lower {
         let ret_type = self.parse_type(&root.ret_type)?;
         self.prog.get_func_mut(self.prog.entry).ret_type = ret_type;
 
-        let mut return_value: Option<ir::Const> = None;
+        let entry_block = self.prog.get_func(self.prog.entry).entry;
 
         for stmt in &root.body.statements {
             match &stmt.kind {
                 ast::StatementKind::Declaration(decl) => {
                     assert!(!decl.mutable, "mutable variables not supported");
+                    //TODO we can now easily remove this limitation
                     let init = decl.init.as_ref().ok_or("variables must have initializers for now")?;
                     let ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
 
-                    let (value, should_ret) = self.eval(&init, ty, ret_type)?;
-                    if should_ret && return_value.is_none() {
-                        return_value = Some(value);
-                    };
-
-                    //the value stored if should_ret doesn't matter but it still needs to exist to allow
-                    //the (dead) code after the return to compile
-                    let value = if should_ret {
-                        if let Some(ty) = ty {
-                            ir::Const { ty, value: -1 }
-                        } else {
-                            return Err("cannot infer type for variable");
-                        }
+                    let slot;
+                    if let Some(value) = self.append_expr(&init, ty)? {
+                        let ty = self.prog.type_of_value(value);
+                        slot = self.new_slot(ty);
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
+                        self.append_instr(store);
                     } else {
-                        value
-                    };
+                        let ty = ty.ok_or("cannot infer type for declaration without value")?;
+                        slot = self.new_slot(ty);
+                    }
 
-                    if self.variables.insert(decl.id.string.clone(), value).is_some() {
+                    self.prog.get_func_mut(self.prog.entry).slots.push(slot);
+                    if self.variables.insert(decl.id.string.clone(), slot).is_some() {
                         return Err("variable declared twice");
                     }
                 }
-                ast::StatementKind::Assignment(_assign) => {
-                    todo!("assignment")
+                ast::StatementKind::Assignment(assign) => {
+                    let id = if let ExpressionKind::Identifier { id } = &assign.left.kind {
+                        id
+                    } else {
+                        return Err("target of assignment should be identifier");
+                    };
+
+                    let slot = *self.variables.get(&id.string)
+                        .ok_or("use of undeclared variable")?;
+                    let ty = self.prog.get_slot(slot).inner_ty;
+
+                    if let Some(value) = self.append_expr(&assign.right, Some(ty))? {
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
+                        self.append_instr(store);
+                    }
                 }
                 ast::StatementKind::Expression(expr) => {
-                    let (value, should_ret) = self.eval(expr, None, ret_type)?;
-                    if should_ret && return_value.is_none() {
-                        return_value = Some(value)
-                    }
+                    self.append_expr(expr, None)?;
                 }
             }
         }
 
-        match return_value {
-            None => return Err("missing return statement"),
-            Some(cst) => {
-                let value = ir::Value::Const(ir::Const { ty: cst.ty, value: cst.value });
-                let ret = self.prog.define_term(ir::TerminatorInfo::Return { value });
-                self.prog.get_block_mut(self.prog.get_func(self.prog.entry).entry).terminator = ret;
-            }
+        if entry_block == self.curr_block {
+            panic!("missing return")
         }
 
         println!("Variables: {:?}", self.variables);
@@ -131,9 +172,12 @@ impl Lower {
 }
 
 pub fn lower(root: &ast::Function) -> Result<ir::Program> {
+    let prog = ir::Program::new();
     let lower = Lower {
         variables: HashMap::new(),
-        prog: ir::Program::new(),
+        curr_func: prog.entry,
+        curr_block: prog.get_func(prog.entry).entry,
+        prog,
     };
     lower.lower(root)
 }

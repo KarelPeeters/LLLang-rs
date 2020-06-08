@@ -87,7 +87,7 @@ pub struct Program {
 }
 
 impl Program {
-    // Return the program representing `fn main() -> int { return 0; }`
+    // Return the program representing `fn main() -> int { unreachable(); }`
     pub fn new() -> Self {
         let mut prog = Self {
             nodes: Default::default(),
@@ -95,33 +95,44 @@ impl Program {
             entry: Node { i: Idx::sentinel(), ph: PhantomData },
         };
 
-        let int_ty = prog.define_type(TypeInfo::Integer { bits: 32 });
-        let term = prog.define_term(TerminatorInfo::Return {
-            value: Value::Const(Const { ty: int_ty, value: 0 })
-        });
+        let ty_int = prog.define_type_int(32);
+        let term = prog.define_term(TerminatorInfo::Unreachable);
         let block = prog.define_block(BlockInfo {
             instructions: vec![],
             terminator: term,
         });
-        prog.entry = prog.define_func(FunctionInfo {
-            ret_type: int_ty,
+        let func = prog.define_func(FunctionInfo {
+            ret_type: ty_int,
             entry: block,
             slots: Default::default(),
         });
+        prog.entry = func;
 
         prog
-    }
-
-    pub fn get_type_int(&mut self, bits: u32) -> Type {
-        self.define_type(TypeInfo::Integer { bits })
     }
 
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)
     }
 
-    pub fn get_type(&mut self, ty: Type) -> &TypeInfo {
+    pub fn define_type_int(&mut self, bits: u32) -> Type {
+        self.define_type(TypeInfo::Integer { bits })
+    }
+
+    pub fn define_type_ptr(&mut self, inner: Type) -> Type {
+        self.types.push(TypeInfo::Pointer { inner })
+    }
+
+    pub fn get_type(&self, ty: Type) -> &TypeInfo {
         &self.types[ty]
+    }
+
+    pub fn type_of_value(&self, value: Value) -> Type {
+        match value {
+            Value::Const(cst) => cst.ty,
+            Value::Slot(slot) => self.get_slot(slot).ty,
+            Value::Instr(instr) => self.get_instr(instr).ty(self),
+        }
     }
 }
 
@@ -129,6 +140,17 @@ impl Program {
 pub enum TypeInfo {
     Integer { bits: u32 },
     Pointer { inner: Type },
+    Void,
+}
+
+impl TypeInfo {
+    fn unwrap_ptr(self) -> Type {
+        if let TypeInfo::Pointer {  inner} = self {
+            inner
+        } else {
+            panic!("Expected a pointer type, got {:?}", self)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -141,6 +163,13 @@ pub struct FunctionInfo {
 #[derive(Debug)]
 pub struct StackSlotInfo {
     pub inner_ty: Type,
+    pub ty: Type,
+}
+
+impl StackSlotInfo {
+    pub fn new(inner_ty: Type, prog: &mut Program) -> Self {
+        Self { inner_ty, ty: prog.define_type_ptr(inner_ty) }
+    }
 }
 
 #[derive(Debug)]
@@ -155,6 +184,16 @@ pub enum InstructionInfo {
     Store { addr: Value, value: Value },
 }
 
+impl InstructionInfo {
+    fn ty(&self, prog: &Program) -> Type {
+        let addr = match self {
+            InstructionInfo::Load { addr } => addr,
+            InstructionInfo::Store { addr, .. } => addr,
+        };
+        prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
+    }
+}
+
 #[derive(Debug)]
 pub enum TerminatorInfo {
     Return { value: Value },
@@ -164,7 +203,8 @@ pub enum TerminatorInfo {
 #[derive(Debug, Copy, Clone)]
 pub enum Value {
     Const(Const),
-    StackSlot(StackSlot),
+    Slot(StackSlot),
+    Instr(Instruction),
 }
 
 #[derive(Debug, Clone, Copy)]
