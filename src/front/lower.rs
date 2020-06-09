@@ -165,8 +165,6 @@ impl Lower {
             panic!("missing return")
         }
 
-        println!("Variables: {:?}", self.variables);
-
         Ok(self.prog)
     }
 }

@@ -273,11 +273,11 @@ impl Display for Program {
 
         for &func in &[self.main] {
             let func_info = self.get_func(func);
-            writeln!(f, "  {:?} -> {} {{", func, self.format_type(func_info.ret_type))?;
+            writeln!(f, "  {:?}: () -> {} {{", func, self.format_type(func_info.ret_type))?;
             writeln!(f, "    slots:")?;
             for &slot in &func_info.slots {
                 let slot_info = self.get_slot(slot);
-                writeln!(f, "      {:?}: {} = * {}", slot, self.format_type(slot_info.ty), self.format_type(slot_info.inner_ty))?;
+                writeln!(f, "      {:?}: {}", slot, self.format_type(slot_info.ty))?;
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
