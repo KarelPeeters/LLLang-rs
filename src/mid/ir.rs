@@ -45,7 +45,6 @@ gen_node_and_program_accessors![
     [Function, FunctionInfo, define_func, get_func, get_func_mut],
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
-    [Terminator, TerminatorInfo, define_term, get_term, get_term_mut],
     [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
 ];
 
@@ -96,10 +95,9 @@ impl Program {
         };
 
         let ty_int = prog.define_type_int(32);
-        let term = prog.define_term(TerminatorInfo::Unreachable);
         let block = prog.define_block(BlockInfo {
             instructions: vec![],
-            terminator: term,
+            terminator: Terminator::Unreachable,
         });
         let func = prog.define_func(FunctionInfo {
             ret_type: ty_int,
@@ -195,7 +193,7 @@ impl InstructionInfo {
 }
 
 #[derive(Debug)]
-pub enum TerminatorInfo {
+pub enum Terminator {
     Return { value: Value },
     Unreachable,
 }

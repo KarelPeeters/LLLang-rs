@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use crate::front::ast;
-use crate::front::ast::ExpressionKind;
 use crate::mid::ir;
-use crate::mid::ir::StackSlot;
 
 type Result<T> = std::result::Result<T, &'static str>;
 
@@ -47,14 +45,13 @@ impl Lower {
     }
 
     fn start_new_block(&mut self) {
-        let term = self.prog.define_term(ir::TerminatorInfo::Unreachable);
         self.curr_block = self.prog.define_block(ir::BlockInfo {
             instructions: vec![],
-            terminator: term,
+            terminator: ir::Terminator::Unreachable,
         });
     }
 
-    fn new_slot(&mut self, inner_ty: ir::Type) -> StackSlot {
+    fn new_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
         let ty = self.prog.define_type_ptr(inner_ty);
         self.prog.define_slot(ir::StackSlotInfo { inner_ty, ty })
     }
@@ -95,7 +92,7 @@ impl Lower {
                 let ret_type = self.prog.get_func(self.curr_func).ret_type;
 
                 if let Some(value) = self.append_expr(value, Some(ret_type))? {
-                    let ret = self.prog.define_term(ir::TerminatorInfo::Return { value });
+                    let ret = ir::Terminator::Return { value };
                     self.prog.get_block_mut(self.curr_block).terminator = ret;
 
                     //start new block so we can continue lowering without actually affecting anything
@@ -140,7 +137,7 @@ impl Lower {
                     }
                 }
                 ast::StatementKind::Assignment(assign) => {
-                    let id = if let ExpressionKind::Identifier { id } = &assign.left.kind {
+                    let id = if let ast::ExpressionKind::Identifier { id } = &assign.left.kind {
                         id
                     } else {
                         return Err("target of assignment should be identifier");

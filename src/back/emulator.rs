@@ -1,19 +1,18 @@
 use crate::mid::ir;
-use crate::mid::ir::{Const, TerminatorInfo, Value};
+use crate::mid::ir::{Const, Terminator, Value};
 
 pub fn run(prog: &ir::Program) -> i32 {
     let func = prog.get_func(prog.entry);
     let block = prog.get_block(func.entry);
-    let term = prog.get_term(block.terminator);
 
     for _ in &block.instructions {
         panic!("Instructions not supported yet")
     }
 
-    let value = match &term {
-        TerminatorInfo::Return { value: Value::Const(Const { value, .. }) } => *value,
-        TerminatorInfo::Return { .. } => panic!("Non const returns not yet supported"),
-        TerminatorInfo::Unreachable => panic!("Reached Unreachable"),
+    let value = match &block.terminator {
+        Terminator::Return { value: Value::Const(Const { value, .. }) } => *value,
+        Terminator::Return { .. } => panic!("Non const returns not yet supported"),
+        Terminator::Unreachable => panic!("Reached Unreachable"),
     };
 
     value
