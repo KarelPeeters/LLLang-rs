@@ -115,25 +115,28 @@ impl Lower {
         for stmt in &root.body.statements {
             match &stmt.kind {
                 ast::StatementKind::Declaration(decl) => {
-                    assert!(!decl.mutable, "mutable variables not supported");
-                    //TODO we can now easily remove this limitation
-                    let init = decl.init.as_ref().ok_or("variables must have initializers for now")?;
-                    let ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
+                    assert!(!decl.mutable, "everything is mutable for now");
+                    let expect_ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
 
-                    let slot;
-                    if let Some(value) = self.append_expr(&init, ty)? {
-                        let ty = self.prog.type_of_value(value);
-                        slot = self.new_slot(ty);
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
-                        self.append_instr(store);
-                    } else {
-                        let ty = ty.ok_or("cannot infer type for declaration without value")?;
-                        slot = self.new_slot(ty);
-                    }
+                    let value = decl.init.as_ref()
+                        .map(|init| self.append_expr(init, expect_ty))
+                        .transpose()?.flatten();
 
+                    //figure out the type
+                    let value_ty = value.map(|v| self.prog.type_of_value(v));
+                    let ty = expect_ty.or(value_ty).ok_or("cannot infer type for variable")?;
+
+                    //define the slot
+                    let slot = self.new_slot(ty);
                     self.prog.get_func_mut(self.prog.main).slots.push(slot);
                     if self.variables.insert(decl.id.string.clone(), slot).is_some() {
                         return Err("variable declared twice");
+                    }
+
+                    //optionally store the value
+                    if let Some(value) = value {
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
+                        self.append_instr(store);
                     }
                 }
                 ast::StatementKind::Assignment(assign) => {
