@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
@@ -60,7 +61,6 @@ gen_node_and_program_accessors![
 
 //TODO implement Eq for Node
 
-#[derive(Hash)]
 pub struct Node<T> {
     i: Idx<NodeInfo>,
     ph: PhantomData<T>,
@@ -81,6 +81,12 @@ impl<T> PartialEq for Node<T> {
 }
 
 impl<T> Eq for Node<T> {}
+
+impl<T> Hash for Node<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.i.hash(state)
+    }
+}
 
 pub type Type = Idx<TypeInfo>;
 
@@ -216,14 +222,14 @@ impl Terminator {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
     Const(Const),
     Slot(StackSlot),
     Instr(Instruction),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Const {
     pub ty: Type,
     pub value: i32,

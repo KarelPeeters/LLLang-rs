@@ -1,19 +1,58 @@
-use crate::mid::ir;
-use crate::mid::ir::{Const, Terminator, Value};
+use std::collections::HashMap;
 
-pub fn run(prog: &ir::Program) -> i32 {
-    let func = prog.get_func(prog.main);
-    let block = prog.get_block(func.entry);
+use crate::mid::ir::{Const, InstructionInfo, Program, StackSlot, Terminator, Value};
 
-    for _ in &block.instructions {
-        panic!("Instructions not supported yet")
+fn address_unwrap_slot(value: &Value) -> &StackSlot {
+    if let Value::Slot(slot) = value {
+        slot
+    } else {
+        panic!("only slot addresses supported for now")
+    }
+}
+
+struct Emulator {
+    memory: HashMap<Value, Const>,
+}
+
+impl Emulator {
+    fn eval(&mut self, value: Value) -> Const {
+        if let Value::Const(cst) = value {
+            cst
+        } else {
+            if let Some(&cst) = self.memory.get(&value) {
+                cst
+            } else {
+                panic!("Load from {:?} which is not yet defined", value)
+            }
+        }
     }
 
-    let value = match &block.terminator {
-        Terminator::Return { value: Value::Const(Const { value, .. }) } => *value,
-        Terminator::Return { .. } => panic!("Non const returns not yet supported"),
-        Terminator::Unreachable => panic!("Reached Unreachable"),
-    };
+    fn run(&mut self, prog: &Program) -> Const {
+        let func = prog.get_func(prog.main);
+        let block = prog.get_block(func.entry);
 
-    value
+        for &instr in &block.instructions {
+            let instr_info = prog.get_instr(instr);
+            match instr_info {
+                InstructionInfo::Load { addr } => {
+                    let value = self.eval(*addr);
+                    self.memory.insert(Value::Instr(instr), value);
+                }
+                InstructionInfo::Store { addr, value } => {
+                    let value = self.eval(*value);
+                    self.memory.insert(*addr, value);
+                }
+            }
+        }
+
+        match block.terminator {
+            Terminator::Return { value } => return self.eval(value),
+            Terminator::Unreachable => panic!("Reached Unreachable"),
+        }
+    }
+}
+
+pub fn run(prog: &Program) -> Const {
+    let mut emulator = Emulator { memory: Default::default() };
+    emulator.run(prog)
 }
