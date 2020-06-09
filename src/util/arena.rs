@@ -13,9 +13,13 @@ pub struct Idx<T> {
 }
 
 impl<T> Idx<T> {
+    fn new(i: usize) -> Self {
+        Self { i, ph: PhantomData }
+    }
+
     // a fake index that will never be part of an actual arena
     pub fn sentinel() -> Idx<T> {
-        Idx { i: usize::MAX, ph: PhantomData }
+        Self::new(usize::MAX)
     }
 }
 
@@ -28,7 +32,7 @@ impl<T> Debug for Idx<T> {
 //Traits implemented manually because #[derive(...)] places bounds on T
 impl<T> Clone for Idx<T> {
     fn clone(&self) -> Self {
-        Self { i: self.i, ph: PhantomData }
+        Self::new(self.i)
     }
 }
 
@@ -59,7 +63,7 @@ impl<T> Arena<T> {
         let i = self.next_i;
         self.next_i += 1;
         assert!(self.map.insert(i, value).is_none());
-        Idx { i, ph: PhantomData }
+        Idx::new(i)
     }
 
     pub fn pop(&mut self, index: Idx<T>) -> T {
@@ -103,18 +107,22 @@ pub struct ArenaSet<T: Eq + Hash> {
 impl<T: Eq + Hash> ArenaSet<T> {
     pub fn push(&mut self, value: T) -> Idx<T> {
         if let Some(&i) = self.map.get_by_right(&value) {
-            Idx { i, ph: PhantomData }
+            Idx::new(i)
         } else {
             let i = self.next_i;
             self.next_i += 1;
             self.map.insert(i, value);
-            Idx { i, ph: PhantomData }
+            Idx::new(i)
         }
     }
 
     pub fn pop(&mut self, index: Idx<T>) -> T {
         self.map.remove_by_left(&index.i)
             .unwrap_or_else(|| panic!("Value at {:?} not found", index.i)).1
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=(Idx<T>, &T)> {
+        self.into_iter()
     }
 }
 
@@ -138,9 +146,31 @@ impl<T: Debug + Eq + Hash> Debug for ArenaSet<T> {
     }
 }
 
+pub struct ArenaSetIterator<'s, T> {
+    inner: bimap::hash::Iter<'s, usize, T>,
+}
+
+impl<'s, T: Eq + Hash> IntoIterator for &'s ArenaSet<T> {
+    type Item = (Idx<T>, &'s T);
+    type IntoIter = ArenaSetIterator<'s, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ArenaSetIterator { inner: self.map.iter() }
+    }
+}
+
+impl<'s, T: 's> Iterator for ArenaSetIterator<'s, T> {
+    type Item = (Idx<T>, &'s T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+            .map(|(&i, v)| (Idx::new(i), v))
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::util::arena::{Arena, ArenaSet};
+    use crate::util::arena::{Arena, ArenaSet, Idx};
 
     struct MyIndex(usize);
 
@@ -192,7 +222,7 @@ mod test {
 
     #[test]
     fn pop_set() {
-        let mut arena: Arena<char> = Default::default();
+        let mut arena: ArenaSet<char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
         arena.pop(ai);
@@ -202,10 +232,26 @@ mod test {
     #[test]
     #[should_panic]
     fn pop_twice_set() {
-        let mut arena: Arena<char> = Default::default();
+        let mut arena: ArenaSet<char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
-        arena.pop(ai);
-        arena.pop(ai);
+        assert_eq!(arena.pop(ai), 'a');
+        arena.pop(ai); //panics
+    }
+
+    #[test]
+    fn iter_set() {
+        let mut arena: ArenaSet<char> = Default::default();
+        let ai = arena.push('a');
+        let bi = arena.push('b');
+
+        let expected = vec![
+            (ai, &'a'),
+            (bi, &'b'),
+        ];
+        let mut actual: Vec<(Idx<char>, &char)> = arena.iter().collect();
+        actual.sort_by_key(|x| x.0.i);
+
+        assert_eq!(actual, expected);
     }
 }

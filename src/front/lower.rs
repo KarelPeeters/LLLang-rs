@@ -108,9 +108,9 @@ impl Lower {
         if &root.id.string != "main" { return Err("function should be called main"); };
 
         let ret_type = self.parse_type(&root.ret_type)?;
-        self.prog.get_func_mut(self.prog.entry).ret_type = ret_type;
+        self.prog.get_func_mut(self.prog.main).ret_type = ret_type;
 
-        let entry_block = self.prog.get_func(self.prog.entry).entry;
+        let entry_block = self.prog.get_func(self.prog.main).entry;
 
         for stmt in &root.body.statements {
             match &stmt.kind {
@@ -131,7 +131,7 @@ impl Lower {
                         slot = self.new_slot(ty);
                     }
 
-                    self.prog.get_func_mut(self.prog.entry).slots.push(slot);
+                    self.prog.get_func_mut(self.prog.main).slots.push(slot);
                     if self.variables.insert(decl.id.string.clone(), slot).is_some() {
                         return Err("variable declared twice");
                     }
@@ -172,8 +172,8 @@ pub fn lower(root: &ast::Function) -> Result<ir::Program> {
     let prog = ir::Program::new();
     let lower = Lower {
         variables: HashMap::new(),
-        curr_func: prog.entry,
-        curr_block: prog.get_func(prog.entry).entry,
+        curr_func: prog.main,
+        curr_block: prog.get_func(prog.main).entry,
         prog,
     };
     lower.lower(root)

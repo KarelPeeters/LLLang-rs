@@ -1,12 +1,19 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter, Display};
 use std::marker::PhantomData;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
+use std::collections::VecDeque;
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
         $(
         pub type $node = Node<$info>;
+
+        impl Debug for Node<$info> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{:?} {}", self.i, stringify!($node))
+            }
+        }
         )*
 
         #[derive(Debug)]
@@ -43,9 +50,9 @@ macro_rules! gen_node_and_program_accessors {
 
 gen_node_and_program_accessors![
     [Function, FunctionInfo, define_func, get_func, get_func_mut],
+    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
-    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
 ];
 
 //TODO think about debug printing Node, right now it's kind of crappy with PhantomData
@@ -53,7 +60,7 @@ gen_node_and_program_accessors![
 
 //TODO implement Eq for Node
 
-#[derive(Debug, Hash)]
+#[derive(Hash)]
 pub struct Node<T> {
     i: Idx<NodeInfo>,
     ph: PhantomData<T>,
@@ -79,10 +86,12 @@ pub type Type = Idx<TypeInfo>;
 
 #[derive(Debug)]
 pub struct Program {
+    //all values that may be used multiple times are stored as nodes
     nodes: Arena<NodeInfo>,
+    //the types are stored separately in a set for interning
     types: ArenaSet<TypeInfo>,
 
-    pub entry: Function,
+    pub main: Function,
 }
 
 impl Program {
@@ -91,7 +100,7 @@ impl Program {
         let mut prog = Self {
             nodes: Default::default(),
             types: Default::default(),
-            entry: Node { i: Idx::sentinel(), ph: PhantomData },
+            main: Node { i: Idx::sentinel(), ph: PhantomData },
         };
 
         let ty_int = prog.define_type_int(32);
@@ -104,7 +113,7 @@ impl Program {
             entry: block,
             slots: Default::default(),
         });
-        prog.entry = func;
+        prog.main = func;
 
         prog
     }
@@ -198,6 +207,15 @@ pub enum Terminator {
     Unreachable,
 }
 
+impl Terminator {
+    pub fn successors(&self) -> &[Block] {
+        match self {
+            Terminator::Return { .. } => &[],
+            Terminator::Unreachable => &[],
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum Value {
     Const(Const),
@@ -209,4 +227,75 @@ pub enum Value {
 pub struct Const {
     pub ty: Type,
     pub value: i32,
+}
+
+//Formatting related stuff
+impl Program {
+    /// Wrap a type as a Display value that recursively prints the type
+    fn format_type(&self, ty: Type) -> impl Display + '_ {
+        struct Wrapped<'a> {
+            ty: Type,
+            prog: &'a Program,
+        }
+
+        impl Display for Wrapped<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                match self.prog.get_type(self.ty) {
+                    TypeInfo::Integer { bits } =>
+                        write!(f, "i{}", bits),
+                    TypeInfo::Pointer { inner } =>
+                        write!(f, "*{}", self.prog.format_type(*inner)),
+                    TypeInfo::Void =>
+                        write!(f, "void"),
+                }
+            }
+        }
+
+        Wrapped { ty, prog: self }
+    }
+}
+
+impl Display for Program {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Program {{")?;
+        writeln!(f, "  main: {:?}", self.main)?;
+
+        writeln!(f, "  types:")?;
+        for (ty, _) in &self.types {
+            writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?
+        }
+
+        for &func in &[self.main] {
+            let func_info = self.get_func(func);
+            writeln!(f, "  {:?} -> {} {{", func, self.format_type(func_info.ret_type))?;
+            writeln!(f, "    slots:")?;
+            for &slot in &func_info.slots {
+                let slot_info = self.get_slot(slot);
+                writeln!(f, "      {:?}: {} = * {}", slot, self.format_type(slot_info.ty), self.format_type(slot_info.inner_ty))?;
+            }
+            writeln!(f, "    entry: {:?}", func_info.entry)?;
+
+            let mut blocks_left = VecDeque::new();
+            blocks_left.push_front(func_info.entry);
+
+            while let Some(block) = blocks_left.pop_front() {
+                let block_info = self.get_block(block);
+                writeln!(f, "    {:?} {{", block)?;
+
+                blocks_left.extend(block_info.terminator.successors());
+
+                for &instr in &block_info.instructions {
+                    let instr_info = self.get_instr(instr);
+                    writeln!(f, "      {:?}: {:?}", instr, instr_info)?;
+                }
+
+                writeln!(f, "      term: {:?}", block_info.terminator)?;
+                writeln!(f, "    }}")?;
+            }
+            writeln!(f, "  }}")?;
+        }
+
+        writeln!(f, "}}")?;
+        Ok(())
+    }
 }

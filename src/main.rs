@@ -17,7 +17,7 @@ fn compile() {
 
     let ir_program = front::lower::lower(&ast_func)
         .expect("Failed to resolve");
-    println!("========IR============\n{:#?}\n\n", ir_program);
+    println!("========IR============\n{:}\n\n", ir_program);
 
     println!("========Emulator======");
     let result = back::emulator::run(&ir_program);

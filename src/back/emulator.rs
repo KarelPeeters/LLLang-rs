@@ -2,7 +2,7 @@ use crate::mid::ir;
 use crate::mid::ir::{Const, Terminator, Value};
 
 pub fn run(prog: &ir::Program) -> i32 {
-    let func = prog.get_func(prog.entry);
+    let func = prog.get_func(prog.main);
     let block = prog.get_block(func.entry);
 
     for _ in &block.instructions {
