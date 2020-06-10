@@ -157,7 +157,7 @@ pub enum TypeInfo {
 }
 
 impl TypeInfo {
-    fn unwrap_ptr(self) -> Type {
+    pub fn unwrap_ptr(self) -> Type {
         if let TypeInfo::Pointer {  inner} = self {
             inner
         } else {

@@ -9,13 +9,14 @@ mod back;
 mod mid;
 mod util;
 
-//TODO proper error handling
-fn assemble_and_link(asm: &str) -> std::io::Result<bool> {
+fn write_assembly(asm: &str) -> std::io::Result<()> {
     std::fs::create_dir_all("ignored/build")?;
     let mut file = File::create("ignored/build/main.asm")?;
     file.write_all(asm.as_bytes())?;
-    drop(file);
+    Ok(())
+}
 
+fn assemble_and_link() -> std::io::Result<bool> {
     println!("Assembling...");
     let result = Command::new("nasm")
         .current_dir("ignored/build")
@@ -66,14 +67,16 @@ fn compile() -> std::io::Result<()> {
     let asm = back::x86_asm::lower(&ir_program);
     println!("{}\n", asm);
 
-    if assemble_and_link(&asm)? {
-        run_exe()?;
-    }
-
-    Ok(())
+    write_assembly(&asm)
 }
 
 fn main() -> std::io::Result<()> {
     color_backtrace::install();
-    compile()
+    compile()?;
+
+    if assemble_and_link()? {
+        run_exe()?;
+    }
+
+    Ok(())
 }
