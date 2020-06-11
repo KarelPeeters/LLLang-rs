@@ -52,7 +52,7 @@ fn compile() -> std::io::Result<()> {
     let source = read_to_string("ignored/src/main.ll")?;
 
     // println!("========AST===========");
-    let ast_func = front::parser::parse(&source).expect("failed to parse");
+    let ast_func = front::parser::parse(&source).expect("failed to parse, unexpected");
     // println!("{:#?}\n\n", ast_func);
 
     let ir_program = front::lower::lower(&ast_func).expect("failed to lower");

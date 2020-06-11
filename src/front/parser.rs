@@ -27,6 +27,8 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("return", TT::Return),
     ("let", TT::Let),
     ("mut", TT::Mut),
+    ("if", TT::If),
+    ("else", TT::Else),
     (";", TT::Semi),
     (":", TT::Colon),
     ("=", TT::Eq),
@@ -53,6 +55,8 @@ pub enum TokenType {
     Return,
     Let,
     Mut,
+    If,
+    Else,
 
     Semi,
     Colon,
@@ -127,11 +131,11 @@ impl<'a> Tokenizer<'a> {
         let index = match self.left.find(pattern) {
             Some(i) => i,
             None => {
-                return if allow_eof { Ok(()) } else { Err(ParseError::Eof) };
+                return if allow_eof { Ok(()) } else { Err(ParseError::Eof) }
             }
         };
 
-        self.skip_fixed(index);
+        self.skip_fixed(index + pattern.len());
         Ok(())
     }
 
@@ -147,14 +151,14 @@ impl<'a> Tokenizer<'a> {
                 self.skip_past("*/", false)?;
             }
 
-            if prev_left == self.left { return Ok(()); }
+            if prev_left == self.left { return Ok(()) }
         }
     }
 
     fn parse_next(&mut self) -> Result<Token> {
         self.skip_whitespace_and_comments()?;
         let start_pos = self.pos;
-        if self.left.is_empty() { return Ok(Token::eof_token(start_pos)); }
+        if self.left.is_empty() { return Ok(Token::eof_token(start_pos)) }
 
         for (pattern, ty) in TRIVIAL_TOKEN_LIST {
             if self.left.starts_with(pattern) {
@@ -215,15 +219,18 @@ impl<'a> Tokenizer<'a> {
 
 struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
+    last_popped_end: Pos,
 }
 
 #[allow(dead_code)]
 impl<'a> Parser<'a> {
     fn pop(&mut self) -> Result<Token> {
-        self.tokenizer.advance()
+        let token = self.tokenizer.advance()?;
+        self.last_popped_end = token.span.end;
+        Ok(token)
     }
 
-    fn curr(&self) -> &Token {
+    fn peek(&self) -> &Token {
         &self.tokenizer.curr
     }
 
@@ -232,7 +239,7 @@ impl<'a> Parser<'a> {
     }
 
     fn at(&mut self, ty: TT) -> bool {
-        self.curr().ty == ty
+        self.peek().ty == ty
     }
 
     /// pop and return the next token if the type matches, otherwise do nothing and return None
@@ -250,6 +257,7 @@ impl<'a> Parser<'a> {
             self.pop()
         } else {
             Err(self.unexpected_token(
+                self.peek(),
                 &[ty],
                 description,
             ))
@@ -266,17 +274,17 @@ impl<'a> Parser<'a> {
 
     /// pop and return the next token if the type matches any of the given types, otherwise return an error
     fn expect_any(&mut self, tys: &'static [TT], description: &'static str) -> Result<Token> {
-        if tys.contains(&self.curr().ty) {
+        if tys.contains(&self.peek().ty) {
             Ok(self.pop()?)
         } else {
-            Err(self.unexpected_token(tys, description))
+            Err(self.unexpected_token(self.peek(), tys, description))
         }
     }
 
-    fn unexpected_token(&self, allowed: &[TT], description: &'static str) -> ParseError {
+    fn unexpected_token(&self, token: &Token, allowed: &[TT], description: &'static str) -> ParseError {
         ParseError::Token {
-            ty: self.curr().ty,
-            pos: self.curr().span.start,
+            ty: token.ty,
+            pos: token.span.start,
             allowed: allowed.iter().copied().collect(),
             description,
         }
@@ -304,48 +312,67 @@ impl<'a> Parser<'a> {
 
         let mut statements = Vec::new();
 
-        let end_pos = loop {
-            if let Some(end) = self.accept(TT::CloseC)? {
-                break end.span.end;
-            }
+        while self.accept(TT::CloseC)?.is_none() {
             statements.push(self.statement()?)
-        };
+        }
 
         Ok(ast::Block {
-            span: Span::new(start_pos, end_pos),
+            span: Span::new(start_pos, self.last_popped_end),
             statements,
         })
     }
 
     fn statement(&mut self) -> Result<ast::Statement> {
-        let (kind, start_pos) = if self.at(TT::Let) {
-            //declaration
-            let decl = self.variable_declaration()?;
-            let start = decl.span.start;
-            (ast::StatementKind::Declaration(decl), start)
-        } else {
-            let left = self.expression()?;
-            let start_pos = left.span.start;
+        let token = self.peek();
+        let start_pos = token.span.start;
 
-            let stmt = if self.accept(TT::Eq)?.is_some() {
-                //assignment
-                let right = self.expression()?;
-                ast::StatementKind::Assignment(ast::Assignment {
-                    span: Span::new(start_pos, right.span.end),
-                    left: Box::new(left),
-                    right: Box::new(right),
-                })
-            } else {
-                // expression
-                ast::StatementKind::Expression(Box::new(left))
-            };
+        let (kind, need_semi) = match token.ty {
+            TT::Let => {
+                //declaration
+                let decl = self.variable_declaration()?;
+                (ast::StatementKind::Declaration(decl), true)
+            },
+            TT::If => {
+                self.pop()?;
+                let cond = self.expression()?;
+                let then_block = self.block()?;
 
-            (stmt, start_pos)
+                let else_block = self.accept(TT::Else)?
+                    .map(|_| self.block())
+                    .transpose()?;
+
+                (ast::StatementKind::If(ast::IfStatement {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    cond: Box::new(cond),
+                    then_block,
+                    else_block,
+                }), false)
+            },
+            _ => {
+                let left = self.expression()?;
+
+                let kind = if self.accept(TT::Eq)?.is_some() {
+                    //assignment
+                    let right = self.expression()?;
+                    ast::StatementKind::Assignment(ast::Assignment {
+                        span: Span::new(left.span.start, right.span.end),
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    })
+                } else {
+                    // expression
+                    ast::StatementKind::Expression(Box::new(left))
+                };
+
+                (kind, true)
+            }
         };
 
-        let end = self.expect(TT::Semi, "end of statement")?.span.end;
-        let span = Span::new(start_pos, end);
+        if need_semi {
+            self.expect(TT::Semi, "end of statement")?.span.end;
+        }
 
+        let span = Span::new(start_pos, self.last_popped_end);
         Ok(ast::Statement { span, kind })
     }
 
@@ -353,24 +380,15 @@ impl<'a> Parser<'a> {
         let start_pos = self.expect(TT::Let, "variable declaration")?.span.start;
         let mutable = self.accept(TT::Mut)?.is_some();
         let id = self.identifier()?;
-        let mut end_pos = id.span.end;
 
-        let ty = if self.accept(TT::Colon)?.is_some() {
-            let ty = self.type_decl()?;
-            end_pos = ty.span.end;
-            Some(ty)
-        } else {
-            None
-        };
-        let init = if self.accept(TT::Eq)?.is_some() {
-            let expr = self.expression()?;
-            end_pos = expr.span.end;
-            Some(Box::new(expr))
-        } else {
-            None
-        };
+        let ty = self.accept(TT::Colon)?
+            .map(|_| self.type_decl())
+            .transpose()?;
+        let init = self.accept(TT::Eq)?
+            .map(|_| self.expression().map(Box::new))
+            .transpose()?;
 
-        Ok(ast::Declaration { span: Span::new(start_pos, end_pos), mutable, ty, id, init })
+        Ok(ast::Declaration { span: Span::new(start_pos, self.last_popped_end), mutable, ty, id, init })
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
@@ -400,7 +418,8 @@ impl<'a> Parser<'a> {
                 (ast::ExpressionKind::DeRef { inner: Box::new(expr) }, span)
             }
             _ => return Err(self.unexpected_token(
-                &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id],
+                &token,
+                &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id, TT::Ampersand, TT::Star],
                 "expression",
             ))
         };
@@ -435,6 +454,9 @@ impl<'a> Parser<'a> {
 }
 
 pub fn parse(input: &str) -> Result<ast::Function> {
-    let mut parser = Parser { tokenizer: Tokenizer::new(input) };
+    let mut parser = Parser {
+        tokenizer: Tokenizer::new(input),
+        last_popped_end: Pos { line: 1, col: 1 },
+    };
     parser.function()
 }

@@ -1,9 +1,9 @@
-use std::fmt::{Debug, Formatter, Display};
+use std::collections::{HashSet, VecDeque};
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
-use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
@@ -95,15 +95,25 @@ pub struct Program {
     //the types are stored separately in a set for interning
     types: ArenaSet<TypeInfo>,
 
+    //predefined types
+    ty_bool: Type,
+    ty_void: Type,
+
     pub main: Function,
 }
 
 impl Program {
     // Return the program representing `fn main() -> int { unreachable(); }`
     pub fn new() -> Self {
+        let mut types = ArenaSet::default();
+        let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
+        let ty_void = types.push(TypeInfo::Void);
+
         let mut prog = Self {
             nodes: Default::default(),
-            types: Default::default(),
+            types,
+            ty_bool,
+            ty_void,
             main: Node { i: Idx::sentinel(), ph: PhantomData },
         };
 
@@ -134,12 +144,21 @@ impl Program {
         self.types.push(TypeInfo::Pointer { inner })
     }
 
+    pub fn type_bool(&self) -> Type {
+        self.ty_bool
+    }
+
+    pub fn type_void(&self) -> Type {
+        self.ty_void
+    }
+
     pub fn get_type(&self, ty: Type) -> &TypeInfo {
         &self.types[ty]
     }
 
     pub fn type_of_value(&self, value: Value) -> Type {
         match value {
+            Value::Undef(ty) => ty,
             Value::Const(cst) => cst.ty,
             Value::Slot(slot) => self.get_slot(slot).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
@@ -209,8 +228,11 @@ impl InstructionInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Terminator {
+    Jump { target: Block },
+    //TODO figure out a way to get named fields here
+    Branch { cond: Value, targets: [Block; 2] },
     Return { value: Value },
     Unreachable,
 }
@@ -218,6 +240,8 @@ pub enum Terminator {
 impl Terminator {
     pub fn successors(&self) -> &[Block] {
         match self {
+            Terminator::Jump { target } => std::slice::from_ref(target),
+            Terminator::Branch { targets, .. } => targets,
             Terminator::Return { .. } => &[],
             Terminator::Unreachable => &[],
         }
@@ -226,6 +250,7 @@ impl Terminator {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
+    Undef(Type),
     Const(Const),
     Slot(StackSlot),
     Instr(Instruction),
@@ -235,6 +260,38 @@ pub enum Value {
 pub struct Const {
     pub ty: Type,
     pub value: i32,
+}
+
+//Visitors
+impl Program {
+    /// Visit all the blocks reachable from the entry of `func`
+    pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, func: Function, mut f: F) -> Result<(), E> {
+        let func = self.get_func(func);
+
+        let mut blocks_left = VecDeque::new();
+        let mut blocks_seen = HashSet::new();
+        blocks_left.push_front(func.entry);
+
+        while let Some(block) = blocks_left.pop_front() {
+            if !blocks_seen.insert(block) { continue }
+
+            f(block)?;
+
+            let block_info = self.get_block(block);
+            blocks_left.extend(block_info.terminator.successors());
+        }
+
+        Ok(())
+    }
+
+    /// Visit all the blocks reachable from the entry of `func`
+    pub fn visit_blocks<F: FnMut(Block)>(&self, func: Function, mut f: F) {
+        //change this to use ! once that's stable
+        self.try_visit_blocks::<(), _>(func, |block| {
+            f(block);
+            Ok(())
+        }).unwrap();
+    }
 }
 
 //Formatting related stuff
@@ -283,14 +340,9 @@ impl Display for Program {
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
-            let mut blocks_left = VecDeque::new();
-            blocks_left.push_front(func_info.entry);
-
-            while let Some(block) = blocks_left.pop_front() {
+            self.try_visit_blocks(func, |block| {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
-
-                blocks_left.extend(block_info.terminator.successors());
 
                 for &instr in &block_info.instructions {
                     let instr_info = self.get_instr(instr);
@@ -299,7 +351,9 @@ impl Display for Program {
 
                 writeln!(f, "      term: {:?}", block_info.terminator)?;
                 writeln!(f, "    }}")?;
-            }
+
+                Ok(())
+            })?;
             writeln!(f, "  }}")?;
         }
 

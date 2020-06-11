@@ -46,6 +46,8 @@ impl Emulator {
         }
 
         match block.terminator {
+            Terminator::Jump { .. } | Terminator::Branch { .. } =>
+                todo!("control flow in emulator"),
             Terminator::Return { value } => return self.eval(value),
             Terminator::Unreachable => panic!("Reached Unreachable"),
         }

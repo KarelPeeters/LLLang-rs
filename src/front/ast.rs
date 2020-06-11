@@ -1,5 +1,3 @@
-#![warn(missing_debug_implementations)]
-
 use crate::front::Span;
 
 #[derive(Debug)]
@@ -45,6 +43,7 @@ pub enum StatementKind {
     Declaration(Declaration),
     Assignment(Assignment),
     Expression(Box<Expression>),
+    If(IfStatement),
 }
 
 #[derive(Debug)]
@@ -64,6 +63,14 @@ pub struct Assignment {
 }
 
 #[derive(Debug)]
+pub struct IfStatement {
+    pub span: Span,
+    pub cond: Box<Expression>,
+    pub then_block: Block,
+    pub else_block: Option<Block>,
+}
+
+#[derive(Debug)]
 pub struct Expression {
     pub span: Span,
     pub kind: ExpressionKind,
@@ -76,6 +83,6 @@ pub enum ExpressionKind {
     
     Ref { inner: Box<Expression> },
     DeRef { inner: Box<Expression> },
-    
+
     Return { value: Box<Expression> },
 }
