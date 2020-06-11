@@ -54,12 +54,12 @@ fn compile() -> std::io::Result<()> {
     let source = read_to_string("ignored/src/main.ll")?;
 
     println!("----Parser-----");
-    let ast_func = front::parser::parse(&source)
+    let ast = front::parser::parse(&source)
         .expect("failed to parse, unexpected");
-    write_output("main.ast", &format!("{:#?}", ast_func))?;
+    write_output("main.ast", &format!("{:#?}", ast))?;
 
     println!("----Lower------");
-    let ir_program = front::lower::lower(&ast_func).expect("failed to lower");
+    let ir_program = front::lower::lower(&ast).expect("failed to lower");
     write_output("main.ir", &format!("{}", ir_program))?;
 
     // println!("----Emulator----");

@@ -14,7 +14,7 @@ fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
             assert!(*bits == 32 || *bits == 1, "only 32 bits int and bool supported for now");
             4
         },
-        TypeInfo::Pointer { .. } => 4, //TODO support non-32-bit later
+        TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4, //TODO support non-32-bit later
         TypeInfo::Void => {
             //TODO this needs to be handled specially by load and store code
             //  maybe even remove the Void type from the IR? is it actually necessary?
@@ -56,6 +56,9 @@ impl AsmBuilder<'_> {
             Value::Const(cst) => {
                 self.append_instr(&format!("mov eax, {}", cst.value))
             },
+            Value::Func(_func) => {
+                todo!("func as value in x86")
+            }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
                 self.append_instr(&format!("lea eax, [esp-{}]", slot_pos));
@@ -69,7 +72,8 @@ impl AsmBuilder<'_> {
 
     fn append_address_to_ebx(&mut self, addr: &Value){
         match addr {
-            Value::Undef(_) => {
+            //func as address isn't meaningful
+            Value::Undef(_) | Value::Func(_) => {
                 self.append_instr(";mov ebx, undef") //easy
             },
             Value::Const(cst) => {

@@ -256,7 +256,7 @@ impl<'a> Parser<'a> {
         if self.at(ty) {
             self.pop()
         } else {
-            Err(self.unexpected_token(
+            Err(Self::unexpected_token(
                 self.peek(),
                 &[ty],
                 description,
@@ -277,11 +277,11 @@ impl<'a> Parser<'a> {
         if tys.contains(&self.peek().ty) {
             Ok(self.pop()?)
         } else {
-            Err(self.unexpected_token(self.peek(), tys, description))
+            Err(Self::unexpected_token(self.peek(), tys, description))
         }
     }
 
-    fn unexpected_token(&self, token: &Token, allowed: &[TT], description: &'static str) -> ParseError {
+    fn unexpected_token(token: &Token, allowed: &[TT], description: &'static str) -> ParseError {
         ParseError::Token {
             ty: token.ty,
             pos: token.span.start,
@@ -289,9 +289,33 @@ impl<'a> Parser<'a> {
             description,
         }
     }
+
+    fn list<A, F: FnMut(&mut Self) -> Result<A>>(&mut self, end: TT, mut item: F) -> Result<(Span, Vec<A>)> {
+        let mut result = Vec::new();
+        let start_pos = self.peek().span.start;
+        while self.accept(end)?.is_none() {
+            result.push(item(self)?);
+        }
+        let end_pos = self.last_popped_end;
+        Ok((Span::new(start_pos, end_pos), result))
+    }
 }
 
 impl<'a> Parser<'a> {
+    fn program(&mut self) -> Result<ast::Program> {
+        let (_, items) = self.list(TT::Eof, Self::item)?;
+        Ok(ast::Program { items })
+    }
+
+    fn item(&mut self) -> Result<ast::Item> {
+        let token = self.peek();
+
+        match token.ty {
+            TT::Fun => self.function().map(ast::Item::Function),
+            _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
+        }
+    }
+
     fn function(&mut self) -> Result<ast::Function> {
         let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
         let id = self.identifier()?;
@@ -302,24 +326,16 @@ impl<'a> Parser<'a> {
         Ok(ast::Function {
             span: Span::new(start_pos, body.span.end),
             id,
-            ret_type: ret_ty,
+            ret_ty: ret_ty,
             body,
         })
     }
 
     fn block(&mut self) -> Result<ast::Block> {
         let start_pos = self.expect(TT::OpenC, "start of block")?.span.start;
+        let (span, statements) = self.list(TT::CloseC, Self::statement)?;
 
-        let mut statements = Vec::new();
-
-        while self.accept(TT::CloseC)?.is_none() {
-            statements.push(self.statement()?)
-        }
-
-        Ok(ast::Block {
-            span: Span::new(start_pos, self.last_popped_end),
-            statements,
-        })
+        Ok(ast::Block { span: Span::new(start_pos, span.end), statements, })
     }
 
     fn statement(&mut self) -> Result<ast::Statement> {
@@ -420,7 +436,7 @@ impl<'a> Parser<'a> {
                 let span = Span::new(token.span.start, expr.span.end);
                 (ast::ExpressionKind::DeRef { inner: Box::new(expr) }, span)
             }
-            _ => return Err(self.unexpected_token(
+            _ => return Err(Self::unexpected_token(
                 &token,
                 &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id, TT::Ampersand, TT::Star],
                 "expression",
@@ -456,10 +472,10 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(input: &str) -> Result<ast::Function> {
+pub fn parse(input: &str) -> Result<ast::Program> {
     let mut parser = Parser {
         tokenizer: Tokenizer::new(input),
         last_popped_end: Pos { line: 1, col: 1 },
     };
-    parser.function()
+    parser.program()
 }

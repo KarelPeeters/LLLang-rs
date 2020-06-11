@@ -2,21 +2,25 @@ use std::collections::HashMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
+use std::marker::PhantomData;
 
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
-struct Lower {
+struct Lower<'a> {
     prog: ir::Program,
+    functions: HashMap<&'a str, ir::Function>,
 
     //TODO replace this global state with parameters
     curr_func: ir::Function,
     curr_block: ir::Block,
+
+    ph: PhantomData<&'a ()>,
 }
 
 #[derive(Default)]
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
-    variables: HashMap<String, ir::StackSlot>,
+    variables: HashMap<String, LRValue>,
 }
 
 impl Scope<'_> {
@@ -24,13 +28,13 @@ impl Scope<'_> {
         Scope { parent: Some(self), variables: Default::default() }
     }
 
-    fn declare_variable<'a>(&mut self, id: &'a ast::Identifier, slot: ir::StackSlot) -> Result<'a, ()> {
-        if self.variables.insert(id.string.to_owned(), slot).is_some() {
-            Err(Error::VariableDeclaredTwice(id))
+    fn declare_variable<'a>(&mut self, id: &'a ast::Identifier, var: LRValue) -> Result<'a, ()> {
+        if self.variables.insert(id.string.to_owned(), var).is_some() {
+            Err(Error::IdentifierDeclaredTwice(id))
         } else { Ok(()) }
     }
 
-    fn find_variable<'a>(&self, id: &'a ast::Identifier) -> Result<'a, ir::StackSlot> {
+    fn find_variable<'a>(&self, id: &'a ast::Identifier) -> Result<'a, LRValue> {
         if let Some(&s) = self.variables.get(&id.string) {
             Ok(s)
         } else if let Some(p) = self.parent {
@@ -48,8 +52,8 @@ enum LRValue {
     Right(ir::Value),
 }
 
-impl Lower {
-    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
+impl<'a> Lower<'a> {
+    fn parse_type(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
         match &ty.kind {
             ast::TypeKind::Simple(string) => match string.as_ref() {
                 "int" => Ok(self.prog.define_type_int(32)),
@@ -137,7 +141,7 @@ impl Lower {
     }
 
     /// None means this expression doesn't return control, eg. it returns from the function or breaks
-    fn append_expr<'a>(&mut self,
+    fn append_expr(&mut self,
                        scope: &mut Scope,
                        expr: &'a ast::Expression,
                        expect_ty: Option<ir::Type>,
@@ -148,11 +152,11 @@ impl Lower {
                 Ok(LRValue::Right(ir::Value::Const(value)))
             }
             ast::ExpressionKind::Identifier { id } => {
-                let slot = scope.find_variable(id)?;
+                let var = scope.find_variable(id)?;
 
                 //check type
                 if let Some(expect_ty) = expect_ty {
-                    let actual_ty = self.prog.get_slot(slot).inner_ty;
+                    let actual_ty = self.type_of_lrvalue(var);
                     if expect_ty != actual_ty {
                         return Err(Error::TypeMismatch {
                             expected: expect_ty,
@@ -161,7 +165,7 @@ impl Lower {
                     }
                 }
 
-                Ok(LRValue::Left(ir::Value::Slot(slot)))
+                Ok(var)
             }
             ast::ExpressionKind::Ref { inner } => {
                 let expect_ty_inner = expect_ty
@@ -184,8 +188,8 @@ impl Lower {
                     .map(LRValue::Left)
             }
             ast::ExpressionKind::Return { value } => {
-                let ret_type = self.prog.get_func(self.curr_func).ret_type;
-                let value = self.append_expr_loaded(scope, value, Some(ret_type))?;
+                let ret_ty = self.prog.get_func(self.curr_func).ret_ty;
+                let value = self.append_expr_loaded(scope, value, Some(ret_ty))?;
 
                 let ret = ir::Terminator::Return { value };
                 self.prog.get_block_mut(self.curr_block).terminator = ret;
@@ -198,7 +202,7 @@ impl Lower {
         }
     }
 
-    fn append_expr_loaded<'a>(&mut self,
+    fn append_expr_loaded(&mut self,
                               scope: &mut Scope,
                               expr: &'a ast::Expression,
                               expect_ty: Option<ir::Type>,
@@ -207,25 +211,66 @@ impl Lower {
         Ok(self.append_load(value))
     }
 
-    fn lower(mut self, main: &ast::Function) -> Result<ir::Program> {
-        if &main.id.string != "main" { return Err(Error::NoMainFunction) };
+    fn append_func(&mut self, scope: &Scope, func: &'a ast::Function) -> Result<'a, ()> {
+        let ir_func = *self.functions.get(&*func.id.string).unwrap();
+        self.curr_func = ir_func;
 
-        let ret_type = self.parse_type(&main.ret_type)?;
-        self.prog.get_func_mut(self.prog.main).ret_type = ret_type;
+        self.start_new_block();
+        self.prog.get_func_mut(ir_func).entry = self.curr_block;
 
-        let entry_block = self.curr_block;
+        self.append_block(&mut scope.nest(), &func.body)?;
 
-        let mut scope = Scope::default();
-        self.append_block(&mut scope, &main.body)?;
-        if entry_block == self.curr_block {
+        if self.prog.get_func(self.curr_func).entry == self.curr_block {
             //TODO this return check has lots of false negatives
-            return Err(Error::MissingReturn(main))
+            return Err(Error::MissingReturn(func))
+        }
+
+        Ok(())
+    }
+
+    fn lower(mut self, prog: &'a ast::Program) -> Result<ir::Program> {
+        let mut scope = Scope::default();
+
+        //temporary entry block, will be overwritten later
+        let tmp_entry = self.prog.get_func(self.prog.main).entry;
+
+        //parse all function headers and create ir equivalents
+        let mut main = None;
+        for item in &prog.items {
+            match item {
+                ast::Item::Function(func) => {
+                    let ret_ty = self.parse_type(&func.ret_ty)?;
+                    let ir_func = ir::FunctionInfo::new(ret_ty, tmp_entry, &mut self.prog);
+                    let ir_func = self.prog.define_func(ir_func);
+
+                    scope.declare_variable(&func.id, LRValue::Right(ir::Value::Func(ir_func)))?;
+                    assert!(self.functions.insert(&func.id.string, ir_func).is_none());
+
+                    if &func.id.string == "main" {
+                        main = Some(ir_func);
+                    }
+                },
+            }
+        }
+
+        for item in &prog.items {
+            match item {
+                ast::Item::Function(func) => {
+                    self.append_func(&scope, func)?;
+                },
+            }
+        }
+
+        if let Some(main) = main {
+            self.prog.main = main;
+        } else {
+            return Err(Error::NoMainFunction)
         }
 
         Ok(self.prog)
     }
 
-    fn append_block<'a>(&mut self, scope: &mut Scope, block: &'a ast::Block) -> Result<'a, ()> {
+    fn append_block(&mut self, scope: &Scope, block: &'a ast::Block) -> Result<'a, ()> {
         let scope = &mut scope.nest();
 
         for stmt in &block.statements {
@@ -247,7 +292,7 @@ impl Lower {
                     //define the slot
                     let slot = self.new_slot(ty);
                     self.prog.get_func_mut(self.curr_func).slots.push(slot);
-                    scope.declare_variable(&decl.id, slot)?;
+                    scope.declare_variable(&decl.id, LRValue::Left(ir::Value::Slot(slot)))?;
 
                     //optionally store the value
                     if let Some(value) = value {
@@ -332,17 +377,19 @@ pub enum Error<'a> {
 
     //other
     UndeclaredIdentifier(&'a ast::Identifier),
-    VariableDeclaredTwice(&'a ast::Identifier),
+    IdentifierDeclaredTwice(&'a ast::Identifier),
     NoMainFunction,
     MissingReturn(&'a ast::Function),
 }
 
-pub fn lower(root: &ast::Function) -> Result<ir::Program> {
-    let prog = ir::Program::new();
+pub fn lower(prog: &ast::Program) -> Result<ir::Program> {
+    let ir_prog = ir::Program::new();
     let lower = Lower {
-        curr_func: prog.main,
-        curr_block: prog.get_func(prog.main).entry,
-        prog,
+        functions: Default::default(),
+        curr_func: ir_prog.main,
+        curr_block: ir_prog.get_func(ir_prog.main).entry,
+        prog: ir_prog,
+        ph: PhantomData
     };
-    lower.lower(root)
+    lower.lower(prog)
 }

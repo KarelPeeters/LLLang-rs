@@ -70,6 +70,10 @@ impl<T> Arena<T> {
         self.map.remove(&index.i)
             .unwrap_or_else(|| panic!("Value at {:?} not found", index.i))
     }
+
+    pub fn iter(&self) -> impl Iterator<Item=(Idx<T>, &T)> {
+        self.into_iter()
+    }
 }
 
 impl<T> Index<Idx<T>> for Arena<T> {
@@ -95,6 +99,28 @@ impl<T> Default for Arena<T> {
 impl<T: Debug> Debug for Arena<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.map.fmt(f)
+    }
+}
+
+pub struct ArenaIterator<'s, T> {
+    inner: std::collections::hash_map::Iter<'s, usize, T>,
+}
+
+impl<'s, T> IntoIterator for &'s Arena<T> {
+    type Item = (Idx<T>, &'s T);
+    type IntoIter = ArenaIterator<'s, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ArenaIterator { inner: self.map.iter() }
+    }
+}
+
+impl<'s, T: 's> Iterator for ArenaIterator<'s, T> {
+    type Item = (Idx<T>, &'s T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+            .map(|(&i, v)| (Idx::new(i), v))
     }
 }
 

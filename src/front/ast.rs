@@ -19,10 +19,20 @@ pub struct Identifier {
 }
 
 #[derive(Debug)]
+pub struct Program {
+    pub items: Vec<Item>
+}
+
+#[derive(Debug)]
+pub enum Item {
+    Function(Function)
+}
+
+#[derive(Debug)]
 pub struct Function {
     pub span: Span,
     pub id: Identifier,
-    pub ret_type: Type,
+    pub ret_ty: Type,
     pub body: Block,
 }
 

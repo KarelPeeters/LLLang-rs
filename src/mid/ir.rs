@@ -122,11 +122,8 @@ impl Program {
             instructions: vec![],
             terminator: Terminator::Unreachable,
         });
-        let func = prog.define_func(FunctionInfo {
-            ret_type: ty_int,
-            entry: block,
-            slots: Default::default(),
-        });
+        let func = FunctionInfo::new(ty_int, block, &mut prog);
+        let func = prog.define_func(func);
         prog.main = func;
 
         prog
@@ -142,6 +139,10 @@ impl Program {
 
     pub fn define_type_ptr(&mut self, inner: Type) -> Type {
         self.types.push(TypeInfo::Pointer { inner })
+    }
+
+    pub fn define_type_func(&mut self, ret_ty: Type) -> Type {
+        self.types.push(TypeInfo::Func { ret_ty })
     }
 
     pub fn type_bool(&self) -> Type {
@@ -160,6 +161,7 @@ impl Program {
         match value {
             Value::Undef(ty) => ty,
             Value::Const(cst) => cst.ty,
+            Value::Func(func) => self.get_func(func).ty,
             Value::Slot(slot) => self.get_slot(slot).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
         }
@@ -168,9 +170,10 @@ impl Program {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TypeInfo {
+    Void,
     Integer { bits: u32 },
     Pointer { inner: Type },
-    Void,
+    Func { ret_ty: Type },
 }
 
 impl TypeInfo {
@@ -185,9 +188,17 @@ impl TypeInfo {
 
 #[derive(Debug)]
 pub struct FunctionInfo {
-    pub ret_type: Type,
+    pub ret_ty: Type,
+    pub ty: Type,
     pub entry: Block,
     pub slots: Vec<StackSlot>,
+}
+
+impl FunctionInfo {
+    pub fn new(ret_ty: Type, entry: Block, prog: &mut Program) -> Self {
+        let ty = prog.define_type_func(ret_ty);
+        Self { ret_ty, ty, entry, slots: vec![] }
+    }
 }
 
 #[derive(Debug)]
@@ -252,6 +263,7 @@ impl Terminator {
 pub enum Value {
     Undef(Type),
     Const(Const),
+    Func(Function),
     Slot(StackSlot),
     Instr(Instruction),
 }
@@ -269,6 +281,7 @@ impl Const {
 }
 
 //Visitors
+//TODO think about how to structure this, right now it's kind of crappy and non consistent
 impl Program {
     /// Visit all the blocks reachable from the entry of `func`
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, func: Function, mut f: F) -> Result<(), E> {
@@ -298,6 +311,25 @@ impl Program {
             Ok(())
         }).unwrap();
     }
+
+    /// Visit all the functions in this program
+    pub fn try_visit_funcs<E, F: FnMut(Function) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
+        for (node, node_info) in &self.nodes {
+            if let NodeInfo::Function(_) = node_info {
+                f(Node { i: node, ph: PhantomData })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Visit all the functions in this program
+    pub fn visit_funcs<F: FnMut(Function)>(&self, mut f: F) {
+        for (node, node_info) in &self.nodes {
+            if let NodeInfo::Function(_) = node_info {
+                f(Node { i: node, ph: PhantomData });
+            }
+        }
+    }
 }
 
 //Formatting related stuff
@@ -312,12 +344,14 @@ impl Program {
         impl Display for Wrapped<'_> {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 match self.prog.get_type(self.ty) {
+                    TypeInfo::Void =>
+                        write!(f, "void"),
                     TypeInfo::Integer { bits } =>
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
                         write!(f, "*{}", self.prog.format_type(*inner)),
-                    TypeInfo::Void =>
-                        write!(f, "void"),
+                    TypeInfo::Func { ret_ty } =>
+                        write!(f, "() -> {}", self.prog.format_type(*ret_ty)),
                 }
             }
         }
@@ -336,9 +370,9 @@ impl Display for Program {
             writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?
         }
 
-        for &func in &[self.main] {
+        self.try_visit_funcs(|func| {
             let func_info = self.get_func(func);
-            writeln!(f, "  {:?}: () -> {} {{", func, self.format_type(func_info.ret_type))?;
+            writeln!(f, "  {:?}: () -> {} {{", func, self.format_type(func_info.ret_ty))?;
             writeln!(f, "    slots:")?;
             for &slot in &func_info.slots {
                 let slot_info = self.get_slot(slot);
@@ -361,7 +395,9 @@ impl Display for Program {
                 Ok(())
             })?;
             writeln!(f, "  }}")?;
-        }
+
+            Ok(())
+        })?;
 
         writeln!(f, "}}")?;
         Ok(())
