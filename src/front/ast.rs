@@ -44,6 +44,7 @@ pub enum StatementKind {
     Assignment(Assignment),
     Expression(Box<Expression>),
     If(IfStatement),
+    Block(Block),
 }
 
 #[derive(Debug)]

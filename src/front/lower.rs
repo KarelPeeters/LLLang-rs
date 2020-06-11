@@ -10,9 +10,37 @@ struct Lower {
 
     //TODO replace this global state with parameters
     curr_func: ir::Function,
-    curr_func_vars: HashMap<String, ir::StackSlot>,
     curr_block: ir::Block,
 }
+
+#[derive(Default)]
+struct Scope<'p> {
+    parent: Option<&'p Scope<'p>>,
+    variables: HashMap<String, ir::StackSlot>,
+}
+
+impl Scope<'_> {
+    fn nest(&self) -> Scope {
+        Scope { parent: Some(self), variables: Default::default() }
+    }
+
+    fn declare_variable<'a>(&mut self, id: &'a ast::Identifier, slot: ir::StackSlot) -> Result<'a, ()> {
+        if self.variables.insert(id.string.to_owned(), slot).is_some() {
+            Err(Error::VariableDeclaredTwice(id))
+        } else { Ok(()) }
+    }
+
+    fn find_variable<'a>(&self, id: &'a ast::Identifier) -> Result<'a, ir::StackSlot> {
+        if let Some(&s) = self.variables.get(&id.string) {
+            Ok(s)
+        } else if let Some(p) = self.parent {
+            p.find_variable(id)
+        } else {
+            Err(Error::UndeclaredIdentifier(id))
+        }
+    }
+}
+
 
 #[derive(Debug, Copy, Clone)]
 enum LRValue {
@@ -109,15 +137,18 @@ impl Lower {
     }
 
     /// None means this expression doesn't return control, eg. it returns from the function or breaks
-    fn append_expr<'a>(&mut self, expr: &'a ast::Expression, expect_ty: Option<ir::Type>) -> Result<'a, LRValue> {
+    fn append_expr<'a>(&mut self,
+                       scope: &mut Scope,
+                       expr: &'a ast::Expression,
+                       expect_ty: Option<ir::Type>,
+    ) -> Result<'a, LRValue> {
         match &expr.kind {
             ast::ExpressionKind::Literal { value } => {
                 let value = self.parse_literal(expr.span, &value, expect_ty)?;
                 Ok(LRValue::Right(ir::Value::Const(value)))
             }
             ast::ExpressionKind::Identifier { id } => {
-                let slot = *self.curr_func_vars.get(&id.string)
-                    .ok_or(Error::UndeclaredIdentifier(id))?;
+                let slot = scope.find_variable(id)?;
 
                 //check type
                 if let Some(expect_ty) = expect_ty {
@@ -138,7 +169,7 @@ impl Lower {
                         .as_ptr().ok_or(Error::ExpectPointerType { actual: ty })
                     ).transpose()?;
 
-                let inner = self.append_expr(inner, expect_ty_inner)?;
+                let inner = self.append_expr(scope, inner, expect_ty_inner)?;
                 match inner {
                     //ref turns an lvalue into an rvalue
                     LRValue::Left(inner) => Ok(LRValue::Right(inner)),
@@ -149,12 +180,12 @@ impl Lower {
                 let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
 
                 //load to get the value and wrap as lvalue again
-                self.append_expr_loaded(inner, expect_ty_inner)
+                self.append_expr_loaded(scope, inner, expect_ty_inner)
                     .map(LRValue::Left)
             }
             ast::ExpressionKind::Return { value } => {
                 let ret_type = self.prog.get_func(self.curr_func).ret_type;
-                let value = self.append_expr_loaded(value, Some(ret_type))?;
+                let value = self.append_expr_loaded(scope, value, Some(ret_type))?;
 
                 let ret = ir::Terminator::Return { value };
                 self.prog.get_block_mut(self.curr_block).terminator = ret;
@@ -167,8 +198,12 @@ impl Lower {
         }
     }
 
-    fn append_expr_loaded<'a>(&mut self, expr: &'a ast::Expression, expect_ty: Option<ir::Type>) -> Result<'a, ir::Value> {
-        let value = self.append_expr(expr, expect_ty)?;
+    fn append_expr_loaded<'a>(&mut self,
+                              scope: &mut Scope,
+                              expr: &'a ast::Expression,
+                              expect_ty: Option<ir::Type>,
+    ) -> Result<'a, ir::Value> {
+        let value = self.append_expr(scope, expr, expect_ty)?;
         Ok(self.append_load(value))
     }
 
@@ -179,7 +214,9 @@ impl Lower {
         self.prog.get_func_mut(self.prog.main).ret_type = ret_type;
 
         let entry_block = self.curr_block;
-        self.append_block(&main.body)?;
+
+        let mut scope = Scope::default();
+        self.append_block(&mut scope, &main.body)?;
         if entry_block == self.curr_block {
             //TODO this return check has lots of false negatives
             return Err(Error::MissingReturn(main))
@@ -188,7 +225,9 @@ impl Lower {
         Ok(self.prog)
     }
 
-    fn append_block<'a>(&mut self, block: &'a ast::Block) -> Result<'a, ()> {
+    fn append_block<'a>(&mut self, scope: &mut Scope, block: &'a ast::Block) -> Result<'a, ()> {
+        let scope = &mut scope.nest();
+
         for stmt in &block.statements {
             match &stmt.kind {
                 ast::StatementKind::Declaration(decl) => {
@@ -198,7 +237,7 @@ impl Lower {
                         .transpose()?;
 
                     let value = decl.init.as_ref()
-                        .map(|init| self.append_expr_loaded(init, expect_ty))
+                        .map(|init| self.append_expr_loaded(scope, init, expect_ty))
                         .transpose()?;
 
                     //figure out the type
@@ -208,9 +247,7 @@ impl Lower {
                     //define the slot
                     let slot = self.new_slot(ty);
                     self.prog.get_func_mut(self.curr_func).slots.push(slot);
-                    if self.curr_func_vars.insert(decl.id.string.clone(), slot).is_some() {
-                        return Err(Error::VariableDeclaredTwice(decl))
-                    }
+                    scope.declare_variable(&decl.id, slot)?;
 
                     //optionally store the value
                     if let Some(value) = value {
@@ -219,28 +256,28 @@ impl Lower {
                     }
                 }
                 ast::StatementKind::Assignment(assign) => {
-                    let addr = self.append_expr(&assign.left, None)?;
+                    let addr = self.append_expr(scope, &assign.left, None)?;
                     let ty = self.type_of_lrvalue(addr);
 
-                    let value = self.append_expr_loaded(&assign.right, Some(ty))?;
+                    let value = self.append_expr_loaded(scope, &assign.right, Some(ty))?;
                     self.append_store(assign.span, addr, value)?;
                 }
                 ast::StatementKind::If(if_stmt) => {
                     //condition
-                    let cond = self.append_expr_loaded(&if_stmt.cond, Some(self.prog.type_bool()))?;
+                    let cond = self.append_expr_loaded(scope, &if_stmt.cond, Some(self.prog.type_bool()))?;
                     let cond_end_block = self.curr_block;
 
                     //then
                     self.start_new_block();
                     let then_start_block = self.curr_block;
-                    self.append_block(&if_stmt.then_block)?;
+                    self.append_block(scope, &if_stmt.then_block)?;
                     let then_end_block = self.curr_block;
 
                     //else
                     self.start_new_block();
                     let else_start_block = self.curr_block;
                     if let Some(else_block) = &if_stmt.else_block {
-                        self.append_block(else_block)?;
+                        self.append_block(scope, else_block)?;
                     }
                     let else_end_block = self.curr_block;
 
@@ -256,8 +293,11 @@ impl Lower {
                     self.prog.get_block_mut(then_end_block).terminator = jump_end;
                     self.prog.get_block_mut(else_end_block).terminator = jump_end;
                 }
+                ast::StatementKind::Block(block) => {
+                    self.append_block(scope, block)?;
+                }
                 ast::StatementKind::Expression(expr) => {
-                    self.append_expr(expr, Some(self.prog.type_void()))?;
+                    self.append_expr(scope, expr, Some(self.prog.type_void()))?;
                 }
             }
         }
@@ -292,7 +332,7 @@ pub enum Error<'a> {
 
     //other
     UndeclaredIdentifier(&'a ast::Identifier),
-    VariableDeclaredTwice(&'a ast::Declaration),
+    VariableDeclaredTwice(&'a ast::Identifier),
     NoMainFunction,
     MissingReturn(&'a ast::Function),
 }
@@ -300,7 +340,6 @@ pub enum Error<'a> {
 pub fn lower(root: &ast::Function) -> Result<ir::Program> {
     let prog = ir::Program::new();
     let lower = Lower {
-        curr_func_vars: HashMap::new(),
         curr_func: prog.main,
         curr_block: prog.get_func(prog.main).entry,
         prog,

@@ -348,6 +348,9 @@ impl<'a> Parser<'a> {
                     else_block,
                 }), false)
             },
+            TT::OpenC => {
+                (ast::StatementKind::Block(self.block()?), false)
+            }
             _ => {
                 let left = self.expression()?;
 
