@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use crate::front::ast;
-use crate::front::ast::TypeKind;
+use crate::front::{ast, Span};
 use crate::mid::ir;
 
-type Result<T> = std::result::Result<T, &'static str>;
+type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
 struct Lower {
     prog: ir::Program,
@@ -22,38 +21,41 @@ enum LRValue {
 }
 
 impl Lower {
-    fn parse_type(&mut self, ty: &ast::Type) -> Result<ir::Type> {
+    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
         match &ty.kind {
-            TypeKind::Simple(string) => match string.as_ref() {
+            ast::TypeKind::Simple(string) => match string.as_ref() {
                 "int" => Ok(self.prog.define_type_int(32)),
                 "bool" => Ok(self.prog.type_bool()),
-                _ => Err("invalid return type"),
+                _ => Err(Error::InvalidType(ty)),
             },
-            TypeKind::Ref(inner) => {
+            ast::TypeKind::Ref(inner) => {
                 let inner = self.parse_type(inner)?;
                 Ok(self.prog.define_type_ptr(inner))
             },
         }
     }
 
-    fn parse_literal(&mut self, lit: &str, ty: Option<ir::Type>) -> Result<ir::Const> {
+    fn parse_literal(&mut self, span: Span, lit: &str, ty: Option<ir::Type>) -> Result<'static, ir::Const> {
         if let Some(ty) = ty {
-            match self.prog.get_type(ty) {
-                ir::TypeInfo::Integer { bits: 1 } => Ok(ir::Const {
-                    ty,
-                    value: lit.parse::<bool>().map_err(|_| "failed to parse bool")? as i32,
-                }),
-                ir::TypeInfo::Integer { bits: 32 } => Ok(ir::Const {
-                    ty,
-                    value: lit.parse::<i32>().map_err(|_| "failed to parse int")?,
-                }),
-                _ => Err("unknown literal type")
-            }
+            let (value, ty_str) = match self.prog.get_type(ty) {
+                ir::TypeInfo::Integer { bits: 1 } =>
+                    (lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()), "int"),
+                ir::TypeInfo::Integer { bits: 32 } =>
+                    (lit.parse::<i32>().map_err(|_| ()), "bool"),
+                _ => return Err(Error::InvalidLiteralType(ty))
+            };
+
+            value
+                .map(|value| ir::Const::new(ty, value))
+                .map_err(|()| Error::InvalidLiteral {
+                    lit: lit.to_owned(),
+                    ty: ty_str,
+                })
         } else {
             match lit {
-                "true" => Ok(ir::Const { ty: self.prog.type_bool(), value: true as i32 }),
-                "false" => Ok(ir::Const { ty: self.prog.type_bool(), value: false as i32 }),
-                _ => Err("cannot infer type for literal"),
+                "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
+                "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
+                _ => Err(Error::CannotInferType(span)),
             }
         }
     }
@@ -97,46 +99,50 @@ impl Lower {
         }
     }
 
-    fn append_store(&mut self, addr: LRValue, value: ir::Value) -> Result<ir::Value> {
+    fn append_store(&mut self, span: Span, addr: LRValue, value: ir::Value) -> Result<'static, ir::Value> {
         match addr {
             LRValue::Left(addr) =>
                 Ok(ir::Value::Instr(self.append_instr(ir::InstructionInfo::Store { addr, value }))),
             LRValue::Right(_) =>
-                Err("attempt to store into rvalue"),
+                Err(Error::StoreIntoRValue(span)),
         }
     }
 
     /// None means this expression doesn't return control, eg. it returns from the function or breaks
-    fn append_expr(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<LRValue> {
+    fn append_expr<'a>(&mut self, expr: &'a ast::Expression, expect_ty: Option<ir::Type>) -> Result<'a, LRValue> {
         match &expr.kind {
             ast::ExpressionKind::Literal { value } => {
-                let value = self.parse_literal(&value, expect_ty)?;
+                let value = self.parse_literal(expr.span, &value, expect_ty)?;
                 Ok(LRValue::Right(ir::Value::Const(value)))
             }
             ast::ExpressionKind::Identifier { id } => {
                 let slot = *self.curr_func_vars.get(&id.string)
-                    .ok_or("use of undeclared variable")?;
+                    .ok_or(Error::UndeclaredIdentifier(id))?;
 
                 //check type
                 if let Some(expect_ty) = expect_ty {
                     let actual_ty = self.prog.get_slot(slot).inner_ty;
                     if expect_ty != actual_ty {
-                        return Err("type mismatch")
+                        return Err(Error::TypeMismatch {
+                            expected: expect_ty,
+                            actual: actual_ty,
+                        })
                     }
                 }
 
                 Ok(LRValue::Left(ir::Value::Slot(slot)))
             }
             ast::ExpressionKind::Ref { inner } => {
-                let expect_ty_inner = expect_ty.map(|ty| self.prog.get_type(ty).as_ptr()
-                    .ok_or("expected non-pointer type, got reference"))
-                    .transpose()?;
+                let expect_ty_inner = expect_ty
+                    .map(|ty| self.prog.get_type(ty)
+                        .as_ptr().ok_or(Error::ExpectPointerType { actual: ty })
+                    ).transpose()?;
 
                 let inner = self.append_expr(inner, expect_ty_inner)?;
                 match inner {
                     //ref turns an lvalue into an rvalue
                     LRValue::Left(inner) => Ok(LRValue::Right(inner)),
-                    LRValue::Right(_) => Err("attempt to take reference of lvalue"),
+                    LRValue::Right(_) => Err(Error::ReferenceOfLValue(expr.span)),
                 }
             }
             ast::ExpressionKind::DeRef { inner } => {
@@ -155,19 +161,19 @@ impl Lower {
 
                 //start block and return undef so we can continue as if nothing happened
                 self.start_new_block();
-                let ty = expect_ty.ok_or("cannot infer type for !")?;
+                let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
                 Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
             }
         }
     }
 
-    fn append_expr_loaded(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<ir::Value> {
+    fn append_expr_loaded<'a>(&mut self, expr: &'a ast::Expression, expect_ty: Option<ir::Type>) -> Result<'a, ir::Value> {
         let value = self.append_expr(expr, expect_ty)?;
         Ok(self.append_load(value))
     }
 
     fn lower(mut self, main: &ast::Function) -> Result<ir::Program> {
-        if &main.id.string != "main" { return Err("function should be called main") };
+        if &main.id.string != "main" { return Err(Error::NoMainFunction) };
 
         let ret_type = self.parse_type(&main.ret_type)?;
         self.prog.get_func_mut(self.prog.main).ret_type = ret_type;
@@ -176,18 +182,20 @@ impl Lower {
         self.append_block(&main.body)?;
         if entry_block == self.curr_block {
             //TODO this return check has lots of false negatives
-            return Err("missing return")
+            return Err(Error::MissingReturn(main))
         }
 
         Ok(self.prog)
     }
 
-    fn append_block(&mut self, block: &ast::Block) -> Result<()> {
+    fn append_block<'a>(&mut self, block: &'a ast::Block) -> Result<'a, ()> {
         for stmt in &block.statements {
             match &stmt.kind {
                 ast::StatementKind::Declaration(decl) => {
                     assert!(!decl.mutable, "everything is mutable for now");
-                    let expect_ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
+                    let expect_ty = decl.ty.as_ref()
+                        .map(|ty| self.parse_type(ty))
+                        .transpose()?;
 
                     let value = decl.init.as_ref()
                         .map(|init| self.append_expr_loaded(init, expect_ty))
@@ -195,13 +203,13 @@ impl Lower {
 
                     //figure out the type
                     let value_ty = value.map(|v| self.prog.type_of_value(v));
-                    let ty = expect_ty.or(value_ty).ok_or("cannot infer type for variable")?;
+                    let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
 
                     //define the slot
                     let slot = self.new_slot(ty);
                     self.prog.get_func_mut(self.curr_func).slots.push(slot);
                     if self.curr_func_vars.insert(decl.id.string.clone(), slot).is_some() {
-                        return Err("variable declared twice")
+                        return Err(Error::VariableDeclaredTwice(decl))
                     }
 
                     //optionally store the value
@@ -215,7 +223,7 @@ impl Lower {
                     let ty = self.type_of_lrvalue(addr);
 
                     let value = self.append_expr_loaded(&assign.right, Some(ty))?;
-                    self.append_store(addr, value)?;
+                    self.append_store(assign.span, addr, value)?;
                 }
                 ast::StatementKind::If(if_stmt) => {
                     //condition
@@ -256,6 +264,37 @@ impl Lower {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub enum Error<'a> {
+    //types
+    InvalidType(&'a ast::Type),
+    CannotInferType(Span),
+    TypeMismatch {
+        expected: ir::Type,
+        actual: ir::Type,
+    },
+    ExpectPointerType {
+        actual: ir::Type
+    },
+
+    //literals
+    InvalidLiteralType(ir::Type),
+    InvalidLiteral {
+        lit: String,
+        ty: &'static str,
+    },
+
+    //lrvalue
+    StoreIntoRValue(Span),
+    ReferenceOfLValue(Span),
+
+    //other
+    UndeclaredIdentifier(&'a ast::Identifier),
+    VariableDeclaredTwice(&'a ast::Declaration),
+    NoMainFunction,
+    MissingReturn(&'a ast::Function),
 }
 
 pub fn lower(root: &ast::Function) -> Result<ir::Program> {

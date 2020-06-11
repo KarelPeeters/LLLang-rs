@@ -2,6 +2,7 @@
 
 use std::fs::{File, read_to_string};
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 
 mod front;
@@ -9,10 +10,11 @@ mod back;
 mod mid;
 mod util;
 
-fn write_assembly(asm: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all("ignored/build")?;
-    let mut file = File::create("ignored/build/main.asm")?;
-    file.write_all(asm.as_bytes())?;
+pub fn write_output<P: AsRef<Path>>(name: P, string: &str) -> std::io::Result<()> {
+    let path = Path::new("ignored/build/").join(name);
+
+    let mut file = File::create(path)?;
+    file.write_all(string.as_bytes())?;
     Ok(())
 }
 
@@ -51,27 +53,35 @@ fn run_exe() -> std::io::Result<()> {
 fn compile() -> std::io::Result<()> {
     let source = read_to_string("ignored/src/main.ll")?;
 
-    // println!("========AST===========");
-    let ast_func = front::parser::parse(&source).expect("failed to parse, unexpected");
-    // println!("{:#?}\n\n", ast_func);
+    println!("----Parser-----");
+    let ast_func = front::parser::parse(&source)
+        .expect("failed to parse, unexpected");
+    write_output("main.ast", &format!("{:#?}", ast_func))?;
 
+    println!("----Lower------");
     let ir_program = front::lower::lower(&ast_func).expect("failed to lower");
-    println!("========IR============\n{:}\n\n", ir_program);
+    write_output("main.ir", &format!("{}", ir_program))?;
 
+    // println!("----Emulator----");
     // let emulator_result = back::emulator::run(&ir_program);
-    // println!("========Emulator======\n{:?}\n\n", emulator_result);
+    // println!("--------Emulator----==\n{:?}\n\n", emulator_result);
 
+    println!("----Backend----");
     let asm = back::x86_asm::lower(&ir_program);
-    println!("========ASM===========\n{}\n", asm);
+    write_output("main.asm", &asm)?;
 
-    write_assembly(&asm)
+    Ok(())
 }
 
 fn main() -> std::io::Result<()> {
+    std::fs::create_dir_all("ignored/build")?;
+
     color_backtrace::install();
     compile()?;
 
+    println!("----NASM-------");
     if assemble_and_link()? {
+        println!("----Running----");
         run_exe()?;
     }
 

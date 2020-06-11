@@ -262,6 +262,12 @@ pub struct Const {
     pub value: i32,
 }
 
+impl Const {
+    pub fn new(ty: Type, value: i32) -> Self {
+        Self { ty, value }
+    }
+}
+
 //Visitors
 impl Program {
     /// Visit all the blocks reachable from the entry of `func`
