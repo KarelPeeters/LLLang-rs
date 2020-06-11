@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::front::ast;
+use crate::front::ast::TypeKind;
 use crate::mid::ir;
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -13,12 +14,24 @@ struct Lower {
     curr_block: ir::Block,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum LRValue {
+    Left(ir::Value),
+    Right(ir::Value),
+}
+
 impl Lower {
     fn parse_type(&mut self, ty: &ast::Type) -> Result<ir::Type> {
-        match ty.string.as_ref() {
-            "int" => Ok(self.prog.define_type_int(32)),
-            "bool" => Ok(self.prog.define_type_int(1)),
-            _ => Err("invalid return type"),
+        match &ty.kind {
+            TypeKind::Simple(string) => match string.as_ref() {
+                "int" => Ok(self.prog.define_type_int(32)),
+                "bool" => Ok(self.prog.define_type_int(1)),
+                _ => Err("invalid return type"),
+            },
+            TypeKind::Ref(inner) => {
+                let inner = self.parse_type(inner)?;
+                Ok(self.prog.define_type_ptr(inner))
+            },
         }
     }
 
@@ -44,6 +57,18 @@ impl Lower {
         }
     }
 
+    fn type_of_lrvalue(&self, value: LRValue) -> ir::Type {
+        match value {
+            LRValue::Left(value) => {
+                let ty = self.prog.type_of_value(value);
+                self.prog.get_type(ty).as_ptr().expect("lvalue should have pointer type")
+            },
+            LRValue::Right(value) => {
+                self.prog.type_of_value(value)
+            },
+        }
+    }
+
     fn start_new_block(&mut self) {
         self.curr_block = self.prog.define_block(ir::BlockInfo {
             instructions: vec![],
@@ -62,16 +87,34 @@ impl Lower {
         instr
     }
 
-    // None means this expression doesn't return control, eg. it returns from the function or breaks
-    fn append_expr(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<Option<ir::Value>> {
+    fn append_load(&mut self, value: LRValue) -> ir::Value {
+        match value {
+            LRValue::Left(value) =>
+                ir::Value::Instr(self.append_instr(ir::InstructionInfo::Load { addr: value })),
+            LRValue::Right(value) =>
+                value,
+        }
+    }
+
+    fn append_store(&mut self, addr: LRValue, value: ir::Value) -> Result<ir::Value> {
+        match addr {
+            LRValue::Left(addr) =>
+                Ok(ir::Value::Instr(self.append_instr(ir::InstructionInfo::Store { addr, value }))),
+            LRValue::Right(_) =>
+                Err("attempt to store into rvalue"),
+        }
+    }
+
+    /// None means this expression doesn't return control, eg. it returns from the function or breaks
+    fn append_expr(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<Option<LRValue>> {
         match &expr.kind {
             ast::ExpressionKind::Literal { value } => {
                 let value = self.parse_literal(&value, expect_ty)?;
-                Ok(Some(ir::Value::Const(value)))
+                Ok(Some(LRValue::Right(ir::Value::Const(value))))
             }
             ast::ExpressionKind::Identifier { id } => {
                 let slot = *self.variables.get(&id.string)
-                    .ok_or("undeclared variable")?;
+                    .ok_or("use of undeclared variable")?;
 
                 //check type
                 if let Some(expect_ty) = expect_ty {
@@ -81,17 +124,35 @@ impl Lower {
                     }
                 }
 
-                //load
-                let load = ir::InstructionInfo::Load {
-                    addr: ir::Value::Slot(slot)
-                };
-                let load = self.append_instr(load);
-                Ok(Some(ir::Value::Instr(load)))
+                Ok(Some(LRValue::Left(ir::Value::Slot(slot))))
+            }
+            ast::ExpressionKind::Ref { inner } => {
+                let expect_ty_inner = expect_ty.map(|ty| self.prog.get_type(ty).as_ptr()
+                    .ok_or("expected non-pointer type, got reference"))
+                    .transpose()?;
+
+                let inner = self.append_expr(inner, expect_ty_inner)?;
+                if let Some(inner) = inner {
+                    match inner {
+                        //ref turns an lvalue into an rvalue
+                        LRValue::Left(inner) => Ok(Some(LRValue::Right(inner))),
+                        LRValue::Right(_) => Err("attempt to take reference of lvalue"),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            ast::ExpressionKind::DeRef { inner } => {
+                let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
+
+                //load to get the value and wrap as lvalue again
+                self.append_expr_loaded(inner, expect_ty_inner)
+                    .map(|v| v.map(LRValue::Left))
             }
             ast::ExpressionKind::Return { value } => {
                 let ret_type = self.prog.get_func(self.curr_func).ret_type;
 
-                if let Some(value) = self.append_expr(value, Some(ret_type))? {
+                if let Some(value) = self.append_expr_loaded(value, Some(ret_type))? {
                     let ret = ir::Terminator::Return { value };
                     self.prog.get_block_mut(self.curr_block).terminator = ret;
 
@@ -102,6 +163,11 @@ impl Lower {
                 Ok(None)
             }
         }
+    }
+
+    fn append_expr_loaded(&mut self, expr: &ast::Expression, expect_ty: Option<ir::Type>) -> Result<Option<ir::Value>> {
+        let value = self.append_expr(expr, expect_ty)?;
+        Ok(value.map(|value| self.append_load(value)))
     }
 
     fn lower(mut self, root: &ast::Function) -> Result<ir::Program> {
@@ -119,7 +185,7 @@ impl Lower {
                     let expect_ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
 
                     let value = decl.init.as_ref()
-                        .map(|init| self.append_expr(init, expect_ty))
+                        .map(|init| self.append_expr_loaded(init, expect_ty))
                         .transpose()?.flatten();
 
                     //figure out the type
@@ -140,19 +206,12 @@ impl Lower {
                     }
                 }
                 ast::StatementKind::Assignment(assign) => {
-                    let id = if let ast::ExpressionKind::Identifier { id } = &assign.left.kind {
-                        id
-                    } else {
-                        return Err("target of assignment should be identifier");
-                    };
+                    let addr = self.append_expr(&assign.left, None)?
+                        .expect("left side of assignment can't be a 'never' value");
+                    let ty = self.type_of_lrvalue(addr);
 
-                    let slot = *self.variables.get(&id.string)
-                        .ok_or("use of undeclared variable")?;
-                    let ty = self.prog.get_slot(slot).inner_ty;
-
-                    if let Some(value) = self.append_expr(&assign.right, Some(ty))? {
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
-                        self.append_instr(store);
+                    if let Some(value) = self.append_expr_loaded(&assign.right, Some(ty))? {
+                        self.append_store(addr, value)?;
                     }
                 }
                 ast::StatementKind::Expression(expr) => {

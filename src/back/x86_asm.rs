@@ -88,7 +88,9 @@ impl AsmBuilder {
         for &instr in &entry.instructions {
             match prog.get_instr(instr) {
                 InstructionInfo::Load { addr } => {
-                    let ty = prog.get_type(prog.get_type(prog.type_of_value(*addr)).unwrap_ptr());
+                    println!("Loading from {:?}", addr);
+                    let ty = prog.get_type(prog.get_type(prog.type_of_value(*addr))
+                        .as_ptr().expect("address should have pointer type"));
 
                     self.instr_stack_positions.insert(instr, stack_size);
                     stack_size += type_size_in_bytes(ty);

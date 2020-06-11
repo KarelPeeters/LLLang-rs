@@ -59,8 +59,6 @@ gen_node_and_program_accessors![
 //TODO think about debug printing Node, right now it's kind of crappy with PhantomData
 //  also improve NodeType printing
 
-//TODO implement Eq for Node
-
 pub struct Node<T> {
     i: Idx<NodeInfo>,
     ph: PhantomData<T>,
@@ -157,11 +155,11 @@ pub enum TypeInfo {
 }
 
 impl TypeInfo {
-    pub fn unwrap_ptr(self) -> Type {
+    pub fn as_ptr(self) -> Option<Type> {
         if let TypeInfo::Pointer {  inner} = self {
-            inner
+            Some(inner)
         } else {
-            panic!("Expected a pointer type, got {:?}", self)
+            None
         }
     }
 }
@@ -199,11 +197,15 @@ pub enum InstructionInfo {
 
 impl InstructionInfo {
     fn ty(&self, prog: &Program) -> Type {
-        let addr = match self {
-            InstructionInfo::Load { addr } => addr,
-            InstructionInfo::Store { addr, .. } => addr,
-        };
-        prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
+        match self {
+            InstructionInfo::Load { addr } => {
+                prog.get_type(prog.type_of_value(*addr)).as_ptr()
+                    .expect("load addr should have a pointer type")
+            },
+            InstructionInfo::Store { .. } => {
+                panic!("Store doesn't have a return type")
+            },
+        }
     }
 }
 

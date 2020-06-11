@@ -22,7 +22,7 @@ impl Emulator {
             if let Some(&cst) = self.memory.get(&value) {
                 cst
             } else {
-                panic!("Load from {:?} which is not yet defined", value)
+                panic!("attempt to use {:?} as value, not yet supported", value)
             }
         }
     }

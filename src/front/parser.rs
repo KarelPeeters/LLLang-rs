@@ -30,6 +30,8 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     (";", TT::Semi),
     (":", TT::Colon),
     ("=", TT::Eq),
+    ("&", TT::Ampersand),
+    ("*", TT::Star),
     ("(", TT::OpenB),
     (")", TT::CloseB),
     ("{", TT::OpenC),
@@ -55,6 +57,8 @@ pub enum TokenType {
     Semi,
     Colon,
     Eq,
+    Ampersand,
+    Star,
 
     OpenB,
     CloseB,
@@ -196,7 +200,7 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
-    pub fn advance(&mut self) -> Result<Token> {
+    fn advance(&mut self) -> Result<Token> {
         let next = self.parse_next()?;
 
         let mut result = Token::eof_token(self.pos);
@@ -231,6 +235,7 @@ impl<'a> Parser<'a> {
         self.curr().ty == ty
     }
 
+    /// pop and return the next token if the type matches, otherwise do nothing and return None
     fn accept(&mut self, ty: TT) -> Result<Option<Token>> {
         if self.at(ty) {
             self.pop().map(Option::Some)
@@ -239,6 +244,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// pop and return the next token if the type matches, otherwise return an error
     fn expect(&mut self, ty: TT, description: &'static str) -> Result<Token> {
         if self.at(ty) {
             self.pop()
@@ -250,6 +256,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// call `expect` on each type in sequence, return an error if any `expect` fails
     fn expect_all(&mut self, tys: &[TT], description: &'static str) -> Result<()> {
         for &ty in tys {
             self.expect(ty, description)?;
@@ -257,6 +264,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// pop and return the next token if the type matches any of the given types, otherwise return an error
     fn expect_any(&mut self, tys: &'static [TT], description: &'static str) -> Result<Token> {
         if tys.contains(&self.curr().ty) {
             Ok(self.pop()?)
@@ -280,7 +288,7 @@ impl<'a> Parser<'a> {
         let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
         let id = self.identifier()?;
         self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow], "function header")?;
-        let ret_ty = self.type_name()?;
+        let ret_ty = self.type_decl()?;
         let body = self.block()?;
 
         Ok(ast::Function {
@@ -348,7 +356,7 @@ impl<'a> Parser<'a> {
         let mut end_pos = id.span.end;
 
         let ty = if self.accept(TT::Colon)?.is_some() {
-            let ty = self.type_name()?;
+            let ty = self.type_decl()?;
             end_pos = ty.span.end;
             Some(ty)
         } else {
@@ -372,7 +380,7 @@ impl<'a> Parser<'a> {
         let (kind, kind_span) = match token.ty {
             TT::Return => {
                 let value = self.expression()?;
-                let span = value.span;
+                let span = Span::new(token.span.start, value.span.end);
                 (ast::ExpressionKind::Return { value: Box::new(value) }, span)
             }
             TT::IntLit | TT::True | TT::False => {
@@ -380,6 +388,16 @@ impl<'a> Parser<'a> {
             }
             TT::Id => {
                 (ast::ExpressionKind::Identifier { id: ast::Identifier { span: token.span, string: token.string } }, token.span)
+            }
+            TT::Ampersand => {
+                let expr = self.expression()?;
+                let span = Span::new(token.span.start, expr.span.end);
+                (ast::ExpressionKind::Ref { inner: Box::new(expr) }, span)
+            }
+            TT::Star => {
+                let expr = self.expression()?;
+                let span = Span::new(token.span.start, expr.span.end);
+                (ast::ExpressionKind::DeRef { inner: Box::new(expr) }, span)
             }
             _ => return Err(self.unexpected_token(
                 &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id],
@@ -398,10 +416,21 @@ impl<'a> Parser<'a> {
         Ok(ast::Identifier { span: token.span, string: token.string })
     }
 
-
-    fn type_name(&mut self) -> Result<ast::Type> {
-        let token = self.expect(TT::Id, "type declaration")?;
-        Ok(ast::Type { span: token.span, string: token.string })
+    fn type_decl(&mut self) -> Result<ast::Type> {
+        let amper = self.accept(TT::Ampersand)?;
+        if let Some(amper) = amper {
+            let inner = self.type_decl()?;
+            Ok(ast::Type {
+                span: Span::new(amper.span.start, inner.span.end),
+                kind: ast::TypeKind::Ref(Box::new(inner)),
+            })
+        } else {
+            let token = self.expect(TT::Id, "type declaration")?;
+            Ok(ast::Type {
+                span: token.span,
+                kind: ast::TypeKind::Simple(token.string),
+            })
+        }
     }
 }
 

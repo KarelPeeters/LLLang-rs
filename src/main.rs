@@ -55,17 +55,14 @@ fn compile() -> std::io::Result<()> {
     let ast_func = front::parser::parse(&source).expect("failed to parse");
     // println!("{:#?}\n\n", ast_func);
 
-    println!("========IR============");
-    let ir_program = front::lower::lower(&ast_func).expect("failed to resolve");
-    println!("{:}\n\n", ir_program);
+    let ir_program = front::lower::lower(&ast_func).expect("failed to lower");
+    println!("========IR============\n{:}\n\n", ir_program);
 
-    println!("========Emulator======");
-    let emulator_result = back::emulator::run(&ir_program);
-    println!("{:?}\n\n", emulator_result);
+    // let emulator_result = back::emulator::run(&ir_program);
+    // println!("========Emulator======\n{:?}\n\n", emulator_result);
 
-    println!("========ASM===========");
     let asm = back::x86_asm::lower(&ir_program);
-    println!("{}\n", asm);
+    println!("========ASM===========\n{}\n", asm);
 
     write_assembly(&asm)
 }

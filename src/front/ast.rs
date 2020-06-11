@@ -1,9 +1,17 @@
+#![warn(missing_debug_implementations)]
+
 use crate::front::Span;
 
 #[derive(Debug)]
 pub struct Type {
     pub span: Span,
-    pub string: String,
+    pub kind: TypeKind,
+}
+
+#[derive(Debug)]
+pub enum TypeKind {
+    Simple(String),
+    Ref(Box<Type>),
 }
 
 #[derive(Debug)]
@@ -65,5 +73,9 @@ pub struct Expression {
 pub enum ExpressionKind {
     Literal { value: String },
     Identifier { id: Identifier },
+    
+    Ref { inner: Box<Expression> },
+    DeRef { inner: Box<Expression> },
+    
     Return { value: Box<Expression> },
 }
