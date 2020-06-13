@@ -32,8 +32,16 @@ pub enum Item {
 pub struct Function {
     pub span: Span,
     pub id: Identifier,
-    pub ret_ty: Type,
+    pub ret_ty: Option<Type>,
+    pub params: Vec<Parameter>,
     pub body: Block,
+}
+
+#[derive(Debug)]
+pub struct Parameter {
+    pub span: Span,
+    pub id: Identifier,
+    pub ty: Type,
 }
 
 #[derive(Debug)]
@@ -95,7 +103,10 @@ pub enum ExpressionKind {
     Ref { inner: Box<Expression> },
     DeRef { inner: Box<Expression> },
 
-    Call { target: Box<Expression> },
+    Call {
+        target: Box<Expression>,
+        args: Vec<Expression>,
+    },
 
     Return { value: Option<Box<Expression>> },
 }

@@ -31,6 +31,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("else", TT::Else),
     (";", TT::Semi),
     (":", TT::Colon),
+    (",", TT::Comma),
     ("=", TT::Eq),
     ("&", TT::Ampersand),
     ("*", TT::Star),
@@ -60,6 +61,7 @@ pub enum TokenType {
 
     Semi,
     Colon,
+    Comma,
     Eq,
     Ampersand,
     Star,
@@ -300,12 +302,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn list<A, F: FnMut(&mut Self) -> Result<A>>(&mut self, end: TT, mut item: F) -> Result<(Span, Vec<A>)> {
+    fn list<A, F: FnMut(&mut Self) -> Result<A>>(
+        &mut self,
+        end: TT,
+        sep: Option<TT>,
+        mut item: F,
+    ) -> Result<(Span, Vec<A>)> {
         let mut result = Vec::new();
         let start_pos = self.peek().span.start;
+
         while self.accept(end)?.is_none() {
             result.push(item(self)?);
+
+            if self.accept(end)?.is_some() { break }
+
+            if let Some(sep) = sep {
+                self.expect(sep, "separator")?;
+            }
         }
+
         let end_pos = self.last_popped_end;
         Ok((Span::new(start_pos, end_pos), result))
     }
@@ -313,7 +328,7 @@ impl<'a> Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn program(&mut self) -> Result<ast::Program> {
-        let (_, items) = self.list(TT::Eof, Self::item)?;
+        let (_, items) = self.list(TT::Eof, None, Self::item)?;
         Ok(ast::Program { items })
     }
 
@@ -329,23 +344,36 @@ impl<'a> Parser<'a> {
     fn function(&mut self) -> Result<ast::Function> {
         let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
         let id = self.identifier()?;
-        self.expect_all(&[TT::OpenB, TT::CloseB, TT::Arrow], "function header")?;
-        let ret_ty = self.type_decl()?;
+
+        self.expect(TT::OpenB, "start of parameters")?;
+        let (_, params) = self.list(TT::CloseB, Some(TT::Comma), Self::parameter)?;
+
+        let ret_ty = if self.accept(TT::Arrow)?.is_some() {
+            Some(self.type_decl()?)
+        } else {
+            None
+        };
+
         let body = self.block()?;
 
-        Ok(ast::Function {
-            span: Span::new(start_pos, body.span.end),
-            id,
-            ret_ty,
-            body,
-        })
+        let span = Span::new(start_pos, body.span.end);
+        Ok(ast::Function { span, id, ret_ty, params, body, })
+    }
+
+    fn parameter(&mut self) -> Result<ast::Parameter> {
+        let id = self.identifier()?;
+        self.expect(TT::Colon, "parameter type")?;
+        let ty = self.type_decl()?;
+
+        let span = Span::new(id.span.start, ty.span.end);
+        Ok(ast::Parameter { span, id, ty })
     }
 
     fn block(&mut self) -> Result<ast::Block> {
         let start_pos = self.expect(TT::OpenC, "start of block")?.span.start;
-        let (span, statements) = self.list(TT::CloseC, Self::statement)?;
+        let (span, statements) = self.list(TT::CloseC, None,Self::statement)?;
 
-        Ok(ast::Block { span: Span::new(start_pos, span.end), statements, })
+        Ok(ast::Block { span: Span::new(start_pos, span.end), statements })
     }
 
     fn statement(&mut self) -> Result<ast::Statement> {
@@ -466,11 +494,13 @@ impl<'a> Parser<'a> {
 
         if self.accept(TT::OpenB)?.is_some() {
             //function call
-            let end_pos = self.expect(TT::CloseB, "end of parameters")?.span.end;
+            let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;
+            let span = Span::new(expr.span.start, self.last_popped_end);
             Ok(ast::Expression {
-                span: Span::new(expr.span.start, end_pos),
+                span,
                 kind: ast::ExpressionKind::Call {
-                    target: Box::new(expr)
+                    target: Box::new(expr),
+                    args,
                 },
             })
         } else {

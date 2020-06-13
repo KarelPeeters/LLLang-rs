@@ -123,22 +123,22 @@ impl<'s, T: 's> Iterator for ArenaIterator<'s, T> {
     }
 }
 
-pub struct ArenaSet<T: Eq + Hash + Copy> {
+pub struct ArenaSet<T: Eq + Hash + Clone> {
     //TODO this implementation should also be optimized
-    //TODO this copy bound could theoretically be removed
+    //TODO this clone bound should be removed
     map_fwd: IndexMap<usize, T>,
     map_back: IndexMap<T, usize>,
     next_i: usize,
 }
 
-impl<T: Eq + Hash + Copy> ArenaSet<T> {
+impl<T: Eq + Hash + Clone> ArenaSet<T> {
     pub fn push(&mut self, value: T) -> Idx<T> {
         if let Some(&i) = self.map_back.get(&value) {
             Idx::new(i)
         } else {
             let i = self.next_i;
             self.next_i += 1;
-            self.map_fwd.insert(i, value);
+            self.map_fwd.insert(i, value.clone());
             self.map_back.insert(value, i);
             Idx::new(i)
         }
@@ -156,7 +156,7 @@ impl<T: Eq + Hash + Copy> ArenaSet<T> {
     }
 }
 
-impl<T: Eq + Hash + Copy> Index<Idx<T>> for ArenaSet<T> {
+impl<T: Eq + Hash + Clone> Index<Idx<T>> for ArenaSet<T> {
     type Output = T;
     fn index(&self, index: Idx<T>) -> &Self::Output {
         self.map_fwd.get(&index.i)
@@ -164,7 +164,7 @@ impl<T: Eq + Hash + Copy> Index<Idx<T>> for ArenaSet<T> {
     }
 }
 
-impl<T: Eq + Hash + Copy> Default for ArenaSet<T> {
+impl<T: Eq + Hash + Clone> Default for ArenaSet<T> {
     fn default() -> Self {
         Self {
             map_fwd: Default::default(),
@@ -174,7 +174,7 @@ impl<T: Eq + Hash + Copy> Default for ArenaSet<T> {
     }
 }
 
-impl<T: Debug + Eq + Hash + Copy> Debug for ArenaSet<T> {
+impl<T: Debug + Eq + Hash + Clone> Debug for ArenaSet<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.map_fwd.fmt(f)
     }
@@ -184,7 +184,7 @@ pub struct ArenaSetIterator<'s, T> {
     inner: indexmap::map::Iter<'s, usize, T>,
 }
 
-impl<'s, T: Eq + Hash + Copy> IntoIterator for &'s ArenaSet<T> {
+impl<'s, T: Eq + Hash + Clone> IntoIterator for &'s ArenaSet<T> {
     type Item = (Idx<T>, &'s T);
     type IntoIter = ArenaSetIterator<'s, T>;
 

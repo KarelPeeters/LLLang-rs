@@ -4,6 +4,7 @@ use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
+use crate::mid::ir::FunctionType;
 
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
@@ -138,9 +139,9 @@ impl<'a> Lower<'a> {
         });
     }
 
-    fn new_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
-        let ty = self.prog.define_type_ptr(inner_ty);
-        self.prog.define_slot(ir::StackSlotInfo { inner_ty, ty })
+    fn define_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
+        let slot = ir::StackSlotInfo::new(inner_ty, &mut self.prog);
+        self.prog.define_slot(slot)
     }
 
     fn append_instr(&mut self, instr: ir::InstructionInfo) -> ir::Instruction {
@@ -206,27 +207,42 @@ impl<'a> Lower<'a> {
                 self.append_expr_loaded(scope, inner, expect_ty_inner)
                     .map(LRValue::Left)
             }
-            ast::ExpressionKind::Call { target } => {
-                let expect_ty = expect_ty.and_then(|ty|
-                    if ty == self.prog.type_void() {
-                        //we don't care about the return type of the function here
-                        None
-                    } else {
-                        Some(self.prog.define_type_func(ty))
-                    }
-                );
-                let target = self.append_expr_loaded(scope, target, expect_ty)?;
+            ast::ExpressionKind::Call { target, args } => {
+                let target = self.append_expr_loaded(scope, target, None)?;
 
-                //we still need to verify that target was indeed a function
-                let ty = self.prog.type_of_value(target);
-                self.prog.get_type(ty).as_func()
-                    .ok_or_else(|| Error::ExpectFunctionType { actual: self.prog.format_type(ty).to_string() })?;
+                //check that the target is a function
+                let target_ty = self.prog.type_of_value(target);
+                println!("target_ty: {}", self.prog.format_type(target_ty));
+                let target_ty = self.prog.get_type(target_ty).as_func()
+                    .ok_or_else(|| Error::ExpectFunctionType { actual: self.prog.format_type(target_ty).to_string() })?;
 
-                let call = self.append_instr(ir::InstructionInfo::Call { target });
+
+                //check return type and arg count
+                self.check_type_match(expr, expect_ty, target_ty.ret)?;
+                if target_ty.params.len() != args.len() {
+                    return Err(Error::WrongArgCount {
+                        call: expr, expected: target_ty.params.len(), actual: args.len(),
+                    })
+                }
+
+                //append arg expressions and typecheck them
+                let target_param_types = target_ty.params.clone();
+                let ir_args =  args.iter()
+                    .enumerate()
+                    .map(|(i, arg)|
+                        self.append_expr_loaded(scope, arg, Some(target_param_types[i]))
+                    )
+                    .collect::<Result<_>>()?;
+
+                let call = ir::InstructionInfo::Call {
+                    target,
+                    args: ir_args,
+                };
+                let call = self.append_instr(call);
                 Ok(LRValue::Right(ir::Value::Instr(call)))
             },
             ast::ExpressionKind::Return { value } => {
-                let ret_ty = self.prog.get_func(self.curr_func).ret_ty;
+                let ret_ty = self.prog.get_func(self.curr_func).func_ty.ret;
 
                 let value = if let Some(value) = value {
                     self.append_expr_loaded(scope, value, Some(ret_ty))?
@@ -264,7 +280,28 @@ impl<'a> Lower<'a> {
         self.start_new_block();
         self.prog.get_func_mut(ir_func).entry = self.curr_block;
 
-        self.append_block(&mut scope.nest(), &func.body)?;
+        let mut scope = scope.nest();
+
+        for param in &func.params {
+            let ty = self.parse_type(&param.ty)?;
+            let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
+
+            //allocate slots for parameters so their address can be taken
+            let slot = self.define_slot(ty);
+            self.append_instr(ir::InstructionInfo::Store {
+                addr: ir::Value::Slot(slot),
+                value: ir::Value::Param(ir_param),
+            });
+
+            //push slot and param to function
+            let curr_func = self.prog.get_func_mut(self.curr_func);
+            curr_func.params.push(ir_param);
+            curr_func.slots.push(slot);
+
+            scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
+        }
+
+        self.append_block(&mut scope, &func.body)?;
 
         if self.prog.get_func(self.curr_func).entry == self.curr_block {
             //TODO this return check has lots of false negatives
@@ -285,8 +322,15 @@ impl<'a> Lower<'a> {
         for item in &prog.items {
             match item {
                 ast::Item::Function(func) => {
-                    let ret_ty = self.parse_type(&func.ret_ty)?;
-                    let ir_func = ir::FunctionInfo::new(ret_ty, tmp_entry, &mut self.prog);
+                    let ret_ty = func.ret_ty.as_ref()
+                        .map_or(Ok(self.prog.type_void()), |t| self.parse_type(t))?;
+
+                    let param_tys = func.params.iter()
+                        .map(|param| self.parse_type(&param.ty))
+                        .collect::<Result<_>>()?;
+                    let func_ty = FunctionType { params: param_tys, ret: ret_ty };
+
+                    let ir_func = ir::FunctionInfo::new(func_ty, tmp_entry, &mut self.prog);
                     let ir_func = self.prog.define_func(ir_func);
 
                     scope.declare_variable(&func.id, LRValue::Right(ir::Value::Func(ir_func)))?;
@@ -336,7 +380,7 @@ impl<'a> Lower<'a> {
                     let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
 
                     //define the slot
-                    let slot = self.new_slot(ty);
+                    let slot = self.define_slot(ty);
                     self.prog.get_func_mut(self.curr_func).slots.push(slot);
                     scope.declare_variable(&decl.id, LRValue::Left(ir::Value::Slot(slot)))?;
 
@@ -431,11 +475,18 @@ pub enum Error<'a> {
     StoreIntoRValue(Span),
     ReferenceOfLValue(Span),
 
-    //other
+    //identifier
     UndeclaredIdentifier(&'a ast::Identifier),
     IdentifierDeclaredTwice(&'a ast::Identifier),
+
+    //other
     NoMainFunction,
     MissingReturn(&'a ast::Function),
+    WrongArgCount {
+        call: &'a ast::Expression,
+        expected: usize,
+        actual: usize,
+    }
 }
 
 pub fn lower(prog: &ast::Program) -> Result<ir::Program> {

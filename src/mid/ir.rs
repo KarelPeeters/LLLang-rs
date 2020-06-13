@@ -51,6 +51,7 @@ macro_rules! gen_node_and_program_accessors {
 
 gen_node_and_program_accessors![
     [Function, FunctionInfo, define_func, get_func, get_func_mut],
+    [Parameter, ParameterInfo, define_param, get_param, get_param_mut],
     [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
@@ -122,7 +123,9 @@ impl Program {
             instructions: vec![],
             terminator: Terminator::Unreachable,
         });
-        let func = FunctionInfo::new(ty_int, block, &mut prog);
+
+        let func_ty = FunctionType { params: Vec::new(), ret: ty_int };
+        let func = FunctionInfo::new(func_ty, block, &mut prog);
         let func = prog.define_func(func);
         prog.main = func;
 
@@ -141,8 +144,8 @@ impl Program {
         self.types.push(TypeInfo::Pointer { inner })
     }
 
-    pub fn define_type_func(&mut self, ret_ty: Type) -> Type {
-        self.types.push(TypeInfo::Func { ret_ty })
+    pub fn define_type_func(&mut self, func_ty: FunctionType) -> Type {
+        self.types.push(TypeInfo::Func(func_ty))
     }
 
     pub fn type_bool(&self) -> Type {
@@ -162,32 +165,39 @@ impl Program {
             Value::Undef(ty) => ty,
             Value::Const(cst) => cst.ty,
             Value::Func(func) => self.get_func(func).ty,
+            Value::Param(param) => self.get_param(param).ty,
             Value::Slot(slot) => self.get_slot(slot).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeInfo {
     Void,
     Integer { bits: u32 },
     Pointer { inner: Type },
-    Func { ret_ty: Type },
+    Func(FunctionType),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FunctionType {
+    pub params: Vec<Type>,
+    pub ret: Type,
 }
 
 impl TypeInfo {
-    pub fn as_ptr(self) -> Option<Type> {
+    pub fn as_ptr(&self) -> Option<Type> {
         if let TypeInfo::Pointer { inner } = self {
-            Some(inner)
+            Some(*inner)
         } else {
             None
         }
     }
 
-    pub fn as_func(self) -> Option<Type> {
-        if let TypeInfo::Func { ret_ty } = self {
-            Some(ret_ty)
+    pub fn as_func(&self) -> Option<&FunctionType> {
+        if let TypeInfo::Func(func_ty) = self {
+            Some(func_ty)
         } else {
             None
         }
@@ -196,17 +206,23 @@ impl TypeInfo {
 
 #[derive(Debug)]
 pub struct FunctionInfo {
-    pub ret_ty: Type,
     pub ty: Type,
+    pub func_ty: FunctionType,
     pub entry: Block,
+    pub params: Vec<Parameter>,
     pub slots: Vec<StackSlot>,
 }
 
 impl FunctionInfo {
-    pub fn new(ret_ty: Type, entry: Block, prog: &mut Program) -> Self {
-        let ty = prog.define_type_func(ret_ty);
-        Self { ret_ty, ty, entry, slots: vec![] }
+    pub fn new(func_ty: FunctionType, entry: Block, prog: &mut Program) -> Self {
+        let ty = prog.define_type_func(func_ty.clone());
+        Self { ty, func_ty, entry, params: Vec::new(), slots: Vec::new() }
     }
+}
+
+#[derive(Debug)]
+pub struct ParameterInfo {
+    pub ty: Type,
 }
 
 #[derive(Debug)]
@@ -231,7 +247,7 @@ pub struct BlockInfo {
 pub enum InstructionInfo {
     Load { addr: Value },
     Store { addr: Value, value: Value },
-    Call { target: Value },
+    Call { target: Value, args: Vec<Value> },
 }
 
 impl InstructionInfo {
@@ -244,9 +260,10 @@ impl InstructionInfo {
             InstructionInfo::Store { .. } => {
                 prog.type_void()
             },
-            InstructionInfo::Call { target } => {
+            InstructionInfo::Call { target, .. } => {
                 prog.get_type(prog.type_of_value(*target)).as_func()
                     .expect("call target should have a function type")
+                    .ret
             }
         }
     }
@@ -277,6 +294,7 @@ pub enum Value {
     Undef(Type),
     Const(Const),
     Func(Function),
+    Param(Parameter),
     Slot(StackSlot),
     Instr(Instruction),
 }
@@ -363,8 +381,15 @@ impl Program {
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
                         write!(f, "*{}", self.prog.format_type(*inner)),
-                    TypeInfo::Func { ret_ty } =>
-                        write!(f, "() -> {}", self.prog.format_type(*ret_ty)),
+                    TypeInfo::Func(func_ty) => {
+                        write!(f, "(")?;
+                        for (i, &param_ty) in func_ty.params.iter().enumerate() {
+                            if i > 0 { write!(f, ", ")?; }
+                            write!(f, "{}", self.prog.format_type(param_ty))?;
+                        }
+                        write!(f, ") -> {}", self.prog.format_type(func_ty.ret))?;
+                        Ok(())
+                    }
                 }
             }
         }
@@ -385,7 +410,12 @@ impl Display for Program {
 
         self.try_visit_funcs(|func| {
             let func_info = self.get_func(func);
-            writeln!(f, "  {:?}: () -> {} {{", func, self.format_type(func_info.ret_ty))?;
+            writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
+            writeln!(f, "    params:")?;
+            for &param in &func_info.params {
+                let param_info = self.get_param(param);
+                writeln!(f, "      {:?}: {}", param, self.format_type(param_info.ty))?;
+            }
             writeln!(f, "    slots:")?;
             for &slot in &func_info.slots {
                 let slot_info = self.get_slot(slot);

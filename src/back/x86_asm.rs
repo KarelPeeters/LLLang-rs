@@ -62,6 +62,9 @@ impl AsmBuilder<'_> {
                 let func_number = self.func_number(*func);
                 self.append_instr(&format!("mov eax, func_{}", func_number));
             }
+            Value::Param(_param) => {
+                todo!("parameters in x86");
+            }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
                 self.append_instr(&format!("lea eax, [esp+{}]", self.stack_size - slot_pos));
@@ -82,6 +85,9 @@ impl AsmBuilder<'_> {
             Value::Const(cst) => {
                 self.append_instr(&format!("mov ebx, {}", cst.value));
             },
+            Value::Param(_param) => {
+                todo!("parameters in x86")
+            }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
                 self.append_instr(&format!("lea ebx, [esp+{}]", self.stack_size - slot_pos));
@@ -115,7 +121,8 @@ impl AsmBuilder<'_> {
                     self.append_instr("mov eax, [ebx]");
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
                 },
-                InstructionInfo::Call { target } => {
+                InstructionInfo::Call { target, args } => {
+                    assert!(args.is_empty(), "todo: parameters in x86");
                     self.append_instr(";call");
                     self.append_value_to_eax(target);
                     self.append_instr("call eax");
