@@ -72,34 +72,33 @@ impl<'a> Lower<'a> {
 
     fn parse_literal(&mut self, span: Span, lit: &str, expect_ty: Option<ir::Type>) -> Result<'static, ir::Const> {
         if let Some(ty) = expect_ty {
-            if ty != self.prog.type_void() {
-                let value = match self.prog.get_type(ty) {
-                    ir::TypeInfo::Integer { bits: 1 } =>
-                        lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()),
-                    ir::TypeInfo::Integer { bits: 32 } =>
-                        lit.parse::<i32>().map_err(|_| ()),
-                    _ => {
-                        return Err(Error::InvalidLiteralType {
-                            span,
-                            ty: self.prog.format_type(ty).to_string(),
-                        })
-                    }
-                };
-
-                return value
-                    .map(|value| ir::Const::new(ty, value))
-                    .map_err(|()| Error::InvalidLiteral {
+            let value = match self.prog.get_type(ty) {
+                ir::TypeInfo::Integer { bits: 1 } =>
+                    lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()),
+                ir::TypeInfo::Integer { bits: 32 } =>
+                    lit.parse::<i32>().map_err(|_| ()),
+                _ => {
+                    return Err(Error::InvalidLiteralType {
                         span,
-                        lit: lit.to_owned(),
                         ty: self.prog.format_type(ty).to_string(),
-                    });
-            }
-        }
+                    })
+                }
+            };
 
-        match lit {
-            "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
-            "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
-            _ => Err(Error::CannotInferType(span)),
+            match value {
+                Ok(value) => Ok(ir::Const::new(ty, value)),
+                Err(()) => Err(Error::InvalidLiteral {
+                    span,
+                    lit: lit.to_owned(),
+                    ty: self.prog.format_type(ty).to_string(),
+                }),
+            }
+        } else {
+            match lit {
+                "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
+                "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
+                _ => Err(Error::CannotInferType(span)),
+            }
         }
     }
 
@@ -117,10 +116,6 @@ impl<'a> Lower<'a> {
 
     fn check_type_match(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()> {
         if let Some(expected) = expected {
-            if expected == self.prog.type_void() {
-                return Ok(())
-            }
-
             if expected != actual {
                 return Err(Error::TypeMismatch {
                     expression: expr,
@@ -174,7 +169,7 @@ impl<'a> Lower<'a> {
                        expr: &'a ast::Expression,
                        expect_ty: Option<ir::Type>,
     ) -> Result<'a, LRValue> {
-        match &expr.kind {
+        let result_value = match &expr.kind {
             ast::ExpressionKind::Literal { value } => {
                 let value = self.parse_literal(expr.span, &value, expect_ty)?;
                 Ok(LRValue::Right(ir::Value::Const(value)))
@@ -212,7 +207,6 @@ impl<'a> Lower<'a> {
 
                 //check that the target is a function
                 let target_ty = self.prog.type_of_value(target);
-                println!("target_ty: {}", self.prog.format_type(target_ty));
                 let target_ty = self.prog.get_type(target_ty).as_func()
                     .ok_or_else(|| Error::ExpectFunctionType { actual: self.prog.format_type(target_ty).to_string() })?;
 
@@ -258,10 +252,20 @@ impl<'a> Lower<'a> {
 
                 //start block and return undef so we can continue as if nothing happened
                 self.start_new_block();
-                let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
+                //TODO ideally ir would have a "never" type which we could use here
+                //  or even more ideally we'd have proper typechecking in lower!
+                let ty = expect_ty.unwrap_or(self.prog.type_void());
                 Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
             }
+        }?;
+
+        //check that the returned value's type is indeed expect_ty
+        if cfg!(debug_assertions) {
+            let ty = self.type_of_lrvalue(result_value);
+            self.check_type_match(expr, expect_ty, ty).expect("bug in lower")
         }
+
+        Ok(result_value)
     }
 
     fn append_expr_loaded(&mut self,
@@ -432,7 +436,7 @@ impl<'a> Lower<'a> {
                     self.append_block(scope, block)?;
                 }
                 ast::StatementKind::Expression(expr) => {
-                    self.append_expr(scope, expr, Some(self.prog.type_void()))?;
+                    self.append_expr(scope, expr, None)?;
                 }
             }
         }
