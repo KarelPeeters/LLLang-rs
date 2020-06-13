@@ -1,29 +1,26 @@
-use indexmap::map::IndexMap;
+use indexmap::map::{IndexMap};
 
-use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value};
+use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Type, Parameter};
 
 const HEADER: &str = r"global _main
 extern  _ExitProcess@4
 
 section .text";
 
-fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
-    match ty {
-        TypeInfo::Integer { bits: 32 } => 4,
-        //TODO maybe this can be made smaller, what is alignment anyway?
-        TypeInfo::Integer { bits: 1 } => 4,
-        TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
-        TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
-        TypeInfo::Void => 0
-    }
+#[derive(Default)]
+struct StackInfo {
+    size: i32,
+    param_positions: IndexMap<Parameter, i32>,
+    slot_positions: IndexMap<StackSlot, i32>,
+    instr_positions: IndexMap<Instruction, i32>,
 }
 
 struct AsmBuilder<'p> {
     prog: &'p Program,
     string: String,
-    stack_size: i32,
-    slot_stack_positions: IndexMap<StackSlot, i32>,
-    instr_stack_positions: IndexMap<Instruction, i32>,
+
+    stack: StackInfo,
+
     //TODO make these match the indices in the IR debug format
     block_numbers: IndexMap<Block, usize>,
     func_numbers: IndexMap<Function, usize>,
@@ -40,6 +37,17 @@ impl AsmBuilder<'_> {
         *self.func_numbers.entry(func).or_insert(next_num)
     }
 
+    fn type_size_in_bytes(&self, ty: Type) -> i32 {
+        match self.prog.get_type(ty) {
+            TypeInfo::Integer { bits: 32 } => 4,
+            //TODO maybe this can be made smaller, what is alignment anyway?
+            TypeInfo::Integer { bits: 1 } => 4,
+            TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
+            TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
+            TypeInfo::Void => 0
+        }
+    }
+
     fn append_ln(&mut self, line: &str) {
         self.string.push_str(line);
         self.string.push('\n');
@@ -50,7 +58,7 @@ impl AsmBuilder<'_> {
         self.append_ln(instr);
     }
 
-    fn append_value_to_eax(&mut self, value: &Value) {
+    fn append_value_to_eax(&mut self, value: Value) {
         match value {
             Value::Undef(_) => {
                 self.append_instr(";mov eax, undef") //easy
@@ -59,24 +67,29 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("mov eax, {}", cst.value))
             },
             Value::Func(func) => {
-                let func_number = self.func_number(*func);
+                let func_number = self.func_number(func);
                 self.append_instr(&format!("mov eax, func_{}", func_number));
             }
-            Value::Param(_param) => {
-                todo!("parameters in x86");
+            Value::Param(param) => {
+                let param_pos = *self.stack.param_positions.get(&param).unwrap();
+                self.append_instr(&format!("mov eax, [esp+{}]", self.stack.size - param_pos));
             }
             Value::Slot(slot) => {
-                let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
-                self.append_instr(&format!("lea eax, [esp+{}]", self.stack_size - slot_pos));
+                let slot_pos = *self.stack.slot_positions.get(&slot).unwrap();
+                self.append_instr(&format!("lea eax, [esp+{}]", self.stack.size - slot_pos));
             },
             Value::Instr(instr) => {
-                let instr_pos = *self.instr_stack_positions.get(instr).unwrap();
-                self.append_instr(&format!("mov eax, [esp+{}]", self.stack_size - instr_pos));
+                let instr_pos = *self.stack.instr_positions.get(&instr).unwrap();
+                self.append_instr(&format!("mov eax, [esp+{}]", self.stack.size - instr_pos));
             },
         }
     }
 
-    fn append_address_to_ebx(&mut self, addr: &Value){
+    fn append_stack_pos_to_ebx(&mut self, pos: i32) {
+        self.append_instr(&format!("lea ebx, [esp+{}]", self.stack.size - pos));
+    }
+
+    fn append_address_to_ebx(&mut self, addr: Value){
         match addr {
             //func as address isn't meaningful
             Value::Undef(_) | Value::Func(_) => {
@@ -85,16 +98,14 @@ impl AsmBuilder<'_> {
             Value::Const(cst) => {
                 self.append_instr(&format!("mov ebx, {}", cst.value));
             },
-            Value::Param(_param) => {
-                todo!("parameters in x86")
+            Value::Param(param) => {
+                self.append_stack_pos_to_ebx(*self.stack.param_positions.get(&param).unwrap());
             }
             Value::Slot(slot) => {
-                let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
-                self.append_instr(&format!("lea ebx, [esp+{}]", self.stack_size - slot_pos));
+                self.append_stack_pos_to_ebx(*self.stack.slot_positions.get(&slot).unwrap());
             },
-            Value::Instr(instr) => {
-                let instr_pos = *self.instr_stack_positions.get(instr).unwrap();
-                self.append_instr(&format!("mov ebx, [esp+{}]", self.stack_size - instr_pos));
+            Value::Instr(_) => {
+                panic!("this shouldn't happen, instructions are never used as addresses");
             },
         }
     }
@@ -107,26 +118,37 @@ impl AsmBuilder<'_> {
 
         //write out instructions
         for &instr in &block.instructions {
-            let instr_pos = *self.instr_stack_positions.get(&instr).unwrap();
+            let instr_pos = *self.stack.instr_positions.get(&instr).unwrap();
             match self.prog.get_instr(instr) {
                 InstructionInfo::Store { addr, value } => {
                     self.append_instr(";store");
-                    self.append_value_to_eax(value);
-                    self.append_address_to_ebx(addr);
+                    self.append_value_to_eax(*value);
+                    self.append_address_to_ebx(*addr);
                     self.append_instr("mov [ebx], eax");
                 },
                 InstructionInfo::Load { addr } => {
                     self.append_instr(";load");
-                    self.append_address_to_ebx(addr);
+                    self.append_address_to_ebx(*addr);
                     self.append_instr("mov eax, [ebx]");
-                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+                    self.append_instr(&format!("mov [esp+{}], eax", self.stack.size - instr_pos));
                 },
                 InstructionInfo::Call { target, args } => {
-                    assert!(args.is_empty(), "todo: parameters in x86");
                     self.append_instr(";call");
-                    self.append_value_to_eax(target);
+
+                    //push arguments to stack
+
+
+                    let mut stack_pos = 8;
+                    for &arg in args {
+                        self.append_value_to_eax(arg);
+                        self.append_instr(&format!("mov [esp-{}], eax", stack_pos));
+
+                        stack_pos += self.type_size_in_bytes(self.prog.type_of_value(arg));
+                    }
+
+                    self.append_value_to_eax(*target);
                     self.append_instr("call eax");
-                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+                    self.append_instr(&format!("mov [esp+{}], eax", self.stack.size - instr_pos));
                 }
             }
         }
@@ -141,16 +163,16 @@ impl AsmBuilder<'_> {
                 let true_block_number = self.block_number(*true_block);
                 let false_block_number = self.block_number(*false_block);
 
-                self.append_value_to_eax(cond);
+                self.append_value_to_eax(*cond);
 
                 self.append_instr("test eax, eax");
                 self.append_instr(&format!("jnz block_{}", true_block_number));
                 self.append_instr(&format!("jmp block_{}", false_block_number));
             },
             Terminator::Return { value } => {
-                self.append_value_to_eax(value);
+                self.append_value_to_eax(*value);
                 //shrink stack
-                self.append_instr(&format!("add esp, {}", self.stack_size));
+                self.append_instr(&format!("add esp, {}", self.stack.size));
                 self.append_instr("ret");
             }
             Terminator::Unreachable => {
@@ -159,37 +181,45 @@ impl AsmBuilder<'_> {
         }
     }
 
-    fn append_func(&mut self, func: Function) {
+    /// calculate the stack position for each parameter, slot and instruction
+    fn calc_stack_positions(&self, func: Function) -> StackInfo {
         let func_info = self.prog.get_func(func);
 
-        //determine the stack position for each slot and value-returning instruction
-        //start at 8 to leave place for return address TODO why 8?
-        let mut stack_size = 8;
+        let mut stack = StackInfo::default();
+        //start at 8 to leave place for return address TODO why 8 and not 4?
+        stack.size = 8;
+
+        for &param in &func_info.params {
+            stack.param_positions.insert(param, stack.size);
+            stack.size += self.type_size_in_bytes(self.prog.get_param(param).ty);
+        }
 
         for &slot in &func_info.slots {
-            let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
-            let size = type_size_in_bytes(ty);
-
-            self.slot_stack_positions.insert(slot, stack_size);
-            stack_size += size;
+            stack.slot_positions.insert(slot, stack.size);
+            stack.size += self.type_size_in_bytes(self.prog.get_slot(slot).ty);
         }
 
         self.prog.visit_blocks(func, |block| {
             for &instr in &self.prog.get_block(block).instructions {
-                let ty = self.prog.get_type(self.prog.type_of_value(Value::Instr(instr)));
-                self.instr_stack_positions.insert(instr, stack_size);
-                stack_size += type_size_in_bytes(ty);
+                stack.instr_positions.insert(instr, stack.size);
+                stack.size += self.type_size_in_bytes(self.prog.type_of_value(Value::Instr(instr)));
             }
         });
 
-        self.stack_size = stack_size;
+        stack
+    }
 
+    fn append_func(&mut self, func: Function) {
+        self.stack = self.calc_stack_positions(func);
+
+        //function label
         let func_number = self.func_number(func);
         self.append_ln(&format!("func_{}:", func_number));
 
         //grow stack
-        self.append_instr(&format!("sub esp, {}", stack_size));
+        self.append_instr(&format!("sub esp, {}", self.stack.size));
 
+        //append actual code
         self.prog.visit_blocks(func, |block| {
             self.append_block(block);
         });
@@ -216,9 +246,7 @@ pub fn lower(prog: &Program) -> String {
     let mut asm = AsmBuilder {
         prog,
         string: Default::default(),
-        stack_size: Default::default(),
-        slot_stack_positions: Default::default(),
-        instr_stack_positions: Default::default(),
+        stack: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
     };
