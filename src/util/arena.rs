@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-use bimap::BiHashMap;
 use indexmap::map::IndexMap;
 
 #[derive(Eq)]
@@ -124,27 +123,32 @@ impl<'s, T: 's> Iterator for ArenaIterator<'s, T> {
     }
 }
 
-pub struct ArenaSet<T: Eq + Hash> {
-    //TODO this implementation could also be optimized similar to Arena
-    map: BiHashMap<usize, T>,
+pub struct ArenaSet<T: Eq + Hash + Copy> {
+    //TODO this implementation should also be optimized
+    //TODO this copy bound could theoretically be removed
+    map_fwd: IndexMap<usize, T>,
+    map_back: IndexMap<T, usize>,
     next_i: usize,
 }
 
-impl<T: Eq + Hash> ArenaSet<T> {
+impl<T: Eq + Hash + Copy> ArenaSet<T> {
     pub fn push(&mut self, value: T) -> Idx<T> {
-        if let Some(&i) = self.map.get_by_right(&value) {
+        if let Some(&i) = self.map_back.get(&value) {
             Idx::new(i)
         } else {
             let i = self.next_i;
             self.next_i += 1;
-            self.map.insert(i, value);
+            self.map_fwd.insert(i, value);
+            self.map_back.insert(value, i);
             Idx::new(i)
         }
     }
 
     pub fn pop(&mut self, index: Idx<T>) -> T {
-        self.map.remove_by_left(&index.i)
-            .unwrap_or_else(|| panic!("Value at {:?} not found", index.i)).1
+        let value = self.map_fwd.remove(&index.i)
+            .unwrap_or_else(|| panic!("Value at {:?} not found", index.i));
+        self.map_back.remove(&value);
+        value
     }
 
     pub fn iter(&self) -> impl Iterator<Item=(Idx<T>, &T)> {
@@ -152,36 +156,40 @@ impl<T: Eq + Hash> ArenaSet<T> {
     }
 }
 
-impl<T: Eq + Hash> Index<Idx<T>> for ArenaSet<T> {
+impl<T: Eq + Hash + Copy> Index<Idx<T>> for ArenaSet<T> {
     type Output = T;
     fn index(&self, index: Idx<T>) -> &Self::Output {
-        self.map.get_by_left(&index.i)
+        self.map_fwd.get(&index.i)
             .unwrap_or_else(|| panic!("Value at {:?} not found", index.i))
     }
 }
 
-impl<T: Eq + Hash> Default for ArenaSet<T> {
+impl<T: Eq + Hash + Copy> Default for ArenaSet<T> {
     fn default() -> Self {
-        Self { map: Default::default(), next_i: 0 }
+        Self {
+            map_fwd: Default::default(),
+            map_back: Default::default(),
+            next_i: 0,
+        }
     }
 }
 
-impl<T: Debug + Eq + Hash> Debug for ArenaSet<T> {
+impl<T: Debug + Eq + Hash + Copy> Debug for ArenaSet<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.map.fmt(f)
+        self.map_fwd.fmt(f)
     }
 }
 
 pub struct ArenaSetIterator<'s, T> {
-    inner: bimap::hash::Iter<'s, usize, T>,
+    inner: indexmap::map::Iter<'s, usize, T>,
 }
 
-impl<'s, T: Eq + Hash> IntoIterator for &'s ArenaSet<T> {
+impl<'s, T: Eq + Hash + Copy> IntoIterator for &'s ArenaSet<T> {
     type Item = (Idx<T>, &'s T);
     type IntoIter = ArenaSetIterator<'s, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        ArenaSetIterator { inner: self.map.iter() }
+        ArenaSetIterator { inner: self.map_fwd.iter() }
     }
 }
 
