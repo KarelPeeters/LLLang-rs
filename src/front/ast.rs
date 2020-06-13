@@ -97,5 +97,5 @@ pub enum ExpressionKind {
 
     Call { target: Box<Expression> },
 
-    Return { value: Box<Expression> },
+    Return { value: Option<Box<Expression>> },
 }

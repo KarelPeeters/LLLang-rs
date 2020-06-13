@@ -222,6 +222,16 @@ struct Parser<'a> {
     last_popped_end: Pos,
 }
 
+const EXPR_START_TOKENS: &[TT] = &[
+    TT::Return,
+    TT::Ampersand,
+    TT::Star,
+    TT::IntLit,
+    TT::True,
+    TT::False,
+    TT::Id,
+];
+
 #[allow(dead_code)]
 impl<'a> Parser<'a> {
     fn pop(&mut self) -> Result<Token> {
@@ -416,10 +426,17 @@ impl<'a> Parser<'a> {
         match token.ty {
             TT::Return => {
                 let token = self.pop()?;
-                let value = self.expression()?;
+
+                //TODO maybe replace this with a more general try_expression?
+                let value = if self.at(TT::Semi) {
+                    None
+                } else {
+                    Some(Box::new(self.expression()?))
+                };
+
                 Ok(ast::Expression {
-                    span: Span::new(token.span.start, value.span.end),
-                    kind: ast::ExpressionKind::Return { value: Box::new(value) },
+                    span: Span::new(token.span.start, self.last_popped_end),
+                    kind: ast::ExpressionKind::Return { value },
                 })
             }
             _ => self.unary()
@@ -481,7 +498,7 @@ impl<'a> Parser<'a> {
                     },
                 })
             }
-            _ => Err(Self::unexpected_token(token, &[], "todo"))
+            _ => Err(Self::unexpected_token(token, EXPR_START_TOKENS, "expression"))
         }
     }
 

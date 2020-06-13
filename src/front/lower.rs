@@ -59,6 +59,7 @@ impl<'a> Lower<'a> {
             ast::TypeKind::Simple(string) => match string.as_ref() {
                 "int" => Ok(self.prog.define_type_int(32)),
                 "bool" => Ok(self.prog.type_bool()),
+                "void" => Ok(self.prog.type_void()),
                 _ => Err(Error::InvalidType(ty)),
             },
             ast::TypeKind::Ref(inner) => {
@@ -226,7 +227,15 @@ impl<'a> Lower<'a> {
             },
             ast::ExpressionKind::Return { value } => {
                 let ret_ty = self.prog.get_func(self.curr_func).ret_ty;
-                let value = self.append_expr_loaded(scope, value, Some(ret_ty))?;
+
+                let value = if let Some(value) = value {
+                    self.append_expr_loaded(scope, value, Some(ret_ty))?
+                } else {
+                    //check that function return type is indeed void
+                    let void = self.prog.type_void();
+                    self.check_type_match(expr, Some(ret_ty), void)?;
+                    ir::Value::Undef(void)
+                };
 
                 let ret = ir::Terminator::Return { value };
                 self.prog.get_block_mut(self.curr_block).terminator = ret;
