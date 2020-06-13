@@ -91,9 +91,11 @@ pub struct Expression {
 pub enum ExpressionKind {
     Literal { value: String },
     Identifier { id: Identifier },
-    
+
     Ref { inner: Box<Expression> },
     DeRef { inner: Box<Expression> },
+
+    Call { target: Box<Expression> },
 
     Return { value: Box<Expression> },
 }

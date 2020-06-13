@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 use bimap::BiHashMap;
+use indexmap::map::IndexMap;
 
 #[derive(Eq)]
 pub struct Idx<T> {
@@ -53,7 +53,7 @@ impl<T> Hash for Idx<T> {
 pub struct Arena<T> {
     //TODO for now this is implemented as a map, but this can be improved
     //  to just be a vec using generational indices
-    map: HashMap<usize, T>,
+    map: IndexMap<usize, T>,
     next_i: usize,
 }
 
@@ -103,7 +103,7 @@ impl<T: Debug> Debug for Arena<T> {
 }
 
 pub struct ArenaIterator<'s, T> {
-    inner: std::collections::hash_map::Iter<'s, usize, T>,
+    inner: indexmap::map::Iter<'s, usize, T>,
 }
 
 impl<'s, T> IntoIterator for &'s Arena<T> {
@@ -223,9 +223,19 @@ mod test {
     fn pop_twice() {
         let mut arena: Arena<char> = Default::default();
         let ai = arena.push('a');
-        let bi = arena.push('b');
+        arena.push('b');
         arena.pop(ai);
         arena.pop(ai);
+    }
+
+    #[test]
+    fn duplicate() {
+        let mut arena: Arena<char> = Default::default();
+        let ai0 = arena.push('a');
+        let ai1 = arena.push('a');
+        assert_eq!(arena[ai0], 'a');
+        assert_eq!(arena[ai1], 'a');
+        assert_ne!(ai0, ai1)
     }
 
     #[test]
@@ -260,9 +270,25 @@ mod test {
     fn pop_twice_set() {
         let mut arena: ArenaSet<char> = Default::default();
         let ai = arena.push('a');
-        let bi = arena.push('b');
+        arena.push('b');
         assert_eq!(arena.pop(ai), 'a');
         arena.pop(ai); //panics
+    }
+
+    #[test]
+    fn iter() {
+        let mut arena: Arena<char> = Default::default();
+        let ai = arena.push('a');
+        let bi = arena.push('b');
+
+        let expected = vec![
+            (ai, &'a'),
+            (bi, &'b'),
+        ];
+        let mut actual: Vec<(Idx<char>, &char)> = arena.iter().collect();
+        actual.sort_by_key(|x| x.0.i);
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

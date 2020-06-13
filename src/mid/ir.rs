@@ -178,8 +178,16 @@ pub enum TypeInfo {
 
 impl TypeInfo {
     pub fn as_ptr(self) -> Option<Type> {
-        if let TypeInfo::Pointer {  inner} = self {
+        if let TypeInfo::Pointer { inner } = self {
             Some(inner)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_func(self) -> Option<Type> {
+        if let TypeInfo::Func { ret_ty } = self {
+            Some(ret_ty)
         } else {
             None
         }
@@ -223,6 +231,7 @@ pub struct BlockInfo {
 pub enum InstructionInfo {
     Load { addr: Value },
     Store { addr: Value, value: Value },
+    Call { target: Value },
 }
 
 impl InstructionInfo {
@@ -233,8 +242,12 @@ impl InstructionInfo {
                     .expect("load addr should have a pointer type")
             },
             InstructionInfo::Store { .. } => {
-                panic!("Store doesn't have a return type")
+                prog.type_void()
             },
+            InstructionInfo::Call { target } => {
+                prog.get_type(prog.type_of_value(*target)).as_func()
+                    .expect("call target should have a function type")
+            }
         }
     }
 }
@@ -335,7 +348,7 @@ impl Program {
 //Formatting related stuff
 impl Program {
     /// Wrap a type as a Display value that recursively prints the type
-    fn format_type(&self, ty: Type) -> impl Display + '_ {
+    pub fn format_type(&self, ty: Type) -> impl Display + '_ {
         struct Wrapped<'a> {
             ty: Type,
             prog: &'a Program,

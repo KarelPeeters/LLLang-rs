@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::map::IndexMap;
 
 use crate::mid::ir::{Const, InstructionInfo, Program, StackSlot, Terminator, Value};
 
@@ -11,7 +11,7 @@ fn address_unwrap_slot(value: &Value) -> &StackSlot {
 }
 
 struct Emulator {
-    memory: HashMap<Value, Const>,
+    memory: IndexMap<Value, Const>,
 }
 
 impl Emulator {
@@ -42,6 +42,7 @@ impl Emulator {
                     let value = self.eval(*value);
                     self.memory.insert(*addr, value);
                 }
+                InstructionInfo::Call { .. } => todo!("call in emulator")
             }
         }
 

@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::marker::PhantomData;
+
+use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
-use std::marker::PhantomData;
 
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
 struct Lower<'a> {
     prog: ir::Program,
-    functions: HashMap<&'a str, ir::Function>,
+    functions: IndexMap<&'a str, ir::Function>,
 
     //TODO replace this global state with parameters
     curr_func: ir::Function,
@@ -20,7 +21,7 @@ struct Lower<'a> {
 #[derive(Default)]
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
-    variables: HashMap<String, LRValue>,
+    variables: IndexMap<String, LRValue>,
 }
 
 impl Scope<'_> {
@@ -67,28 +68,36 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn parse_literal(&mut self, span: Span, lit: &str, ty: Option<ir::Type>) -> Result<'static, ir::Const> {
-        if let Some(ty) = ty {
-            let (value, ty_str) = match self.prog.get_type(ty) {
-                ir::TypeInfo::Integer { bits: 1 } =>
-                    (lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()), "int"),
-                ir::TypeInfo::Integer { bits: 32 } =>
-                    (lit.parse::<i32>().map_err(|_| ()), "bool"),
-                _ => return Err(Error::InvalidLiteralType(ty))
-            };
+    fn parse_literal(&mut self, span: Span, lit: &str, expect_ty: Option<ir::Type>) -> Result<'static, ir::Const> {
+        if let Some(ty) = expect_ty {
+            if ty != self.prog.type_void() {
+                let value = match self.prog.get_type(ty) {
+                    ir::TypeInfo::Integer { bits: 1 } =>
+                        lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()),
+                    ir::TypeInfo::Integer { bits: 32 } =>
+                        lit.parse::<i32>().map_err(|_| ()),
+                    _ => {
+                        return Err(Error::InvalidLiteralType {
+                            span,
+                            ty: self.prog.format_type(ty).to_string(),
+                        })
+                    }
+                };
 
-            value
-                .map(|value| ir::Const::new(ty, value))
-                .map_err(|()| Error::InvalidLiteral {
-                    lit: lit.to_owned(),
-                    ty: ty_str,
-                })
-        } else {
-            match lit {
-                "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
-                "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
-                _ => Err(Error::CannotInferType(span)),
+                return value
+                    .map(|value| ir::Const::new(ty, value))
+                    .map_err(|()| Error::InvalidLiteral {
+                        span,
+                        lit: lit.to_owned(),
+                        ty: self.prog.format_type(ty).to_string(),
+                    });
             }
+        }
+
+        match lit {
+            "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
+            "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
+            _ => Err(Error::CannotInferType(span)),
         }
     }
 
@@ -102,6 +111,23 @@ impl<'a> Lower<'a> {
                 self.prog.type_of_value(value)
             },
         }
+    }
+
+    fn check_type_match(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()> {
+        if let Some(expected) = expected {
+            if expected == self.prog.type_void() {
+                return Ok(())
+            }
+
+            if expected != actual {
+                return Err(Error::TypeMismatch {
+                    expression: expr,
+                    expected: self.prog.format_type(expected).to_string(),
+                    actual: self.prog.format_type(actual).to_string(),
+                })
+            }
+        }
+        Ok(())
     }
 
     fn start_new_block(&mut self) {
@@ -153,25 +179,17 @@ impl<'a> Lower<'a> {
             }
             ast::ExpressionKind::Identifier { id } => {
                 let var = scope.find_variable(id)?;
-
-                //check type
-                if let Some(expect_ty) = expect_ty {
-                    let actual_ty = self.type_of_lrvalue(var);
-                    if expect_ty != actual_ty {
-                        return Err(Error::TypeMismatch {
-                            expected: expect_ty,
-                            actual: actual_ty,
-                        })
-                    }
-                }
-
+                self.check_type_match(expr, expect_ty, self.type_of_lrvalue(var))?;
                 Ok(var)
             }
             ast::ExpressionKind::Ref { inner } => {
                 let expect_ty_inner = expect_ty
-                    .map(|ty| self.prog.get_type(ty)
-                        .as_ptr().ok_or(Error::ExpectPointerType { actual: ty })
-                    ).transpose()?;
+                    .map(|ty| {
+                        self.prog
+                            .get_type(ty)
+                            .as_ptr()
+                            .ok_or(Error::ExpectPointerType { actual: self.prog.format_type(ty).to_string() })
+                    }).transpose()?;
 
                 let inner = self.append_expr(scope, inner, expect_ty_inner)?;
                 match inner {
@@ -187,6 +205,25 @@ impl<'a> Lower<'a> {
                 self.append_expr_loaded(scope, inner, expect_ty_inner)
                     .map(LRValue::Left)
             }
+            ast::ExpressionKind::Call { target } => {
+                let expect_ty = expect_ty.and_then(|ty|
+                    if ty == self.prog.type_void() {
+                        //we don't care about the return type of the function here
+                        None
+                    } else {
+                        Some(self.prog.define_type_func(ty))
+                    }
+                );
+                let target = self.append_expr_loaded(scope, target, expect_ty)?;
+
+                //we still need to verify that target was indeed a function
+                let ty = self.prog.type_of_value(target);
+                self.prog.get_type(ty).as_func()
+                    .ok_or_else(|| Error::ExpectFunctionType { actual: self.prog.format_type(ty).to_string() })?;
+
+                let call = self.append_instr(ir::InstructionInfo::Call { target });
+                Ok(LRValue::Right(ir::Value::Instr(call)))
+            },
             ast::ExpressionKind::Return { value } => {
                 let ret_ty = self.prog.get_func(self.curr_func).ret_ty;
                 let value = self.append_expr_loaded(scope, value, Some(ret_ty))?;
@@ -351,24 +388,34 @@ impl<'a> Lower<'a> {
     }
 }
 
+type TypeString = String;
+
 #[derive(Debug)]
 pub enum Error<'a> {
     //types
     InvalidType(&'a ast::Type),
     CannotInferType(Span),
     TypeMismatch {
-        expected: ir::Type,
-        actual: ir::Type,
+        expression: &'a ast::Expression,
+        expected: TypeString,
+        actual: TypeString,
     },
     ExpectPointerType {
-        actual: ir::Type
+        actual: TypeString
+    },
+    ExpectFunctionType {
+        actual: TypeString
     },
 
     //literals
-    InvalidLiteralType(ir::Type),
+    InvalidLiteralType {
+        span: Span,
+        ty: TypeString,
+    },
     InvalidLiteral {
+        span: Span,
         lit: String,
-        ty: &'static str,
+        ty: TypeString,
     },
 
     //lrvalue

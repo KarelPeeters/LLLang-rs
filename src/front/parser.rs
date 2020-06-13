@@ -326,7 +326,7 @@ impl<'a> Parser<'a> {
         Ok(ast::Function {
             span: Span::new(start_pos, body.span.end),
             id,
-            ret_ty: ret_ty,
+            ret_ty,
             body,
         })
     }
@@ -411,42 +411,78 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
-        //TODO maybe change this pop into some accept-like structure?
-        let token = self.pop()?;
+        let token = self.peek();
 
-        let (kind, kind_span) = match token.ty {
+        match token.ty {
             TT::Return => {
+                let token = self.pop()?;
                 let value = self.expression()?;
-                let span = Span::new(token.span.start, value.span.end);
-                (ast::ExpressionKind::Return { value: Box::new(value) }, span)
+                Ok(ast::Expression {
+                    span: Span::new(token.span.start, value.span.end),
+                    kind: ast::ExpressionKind::Return { value: Box::new(value) },
+                })
             }
+            _ => self.unary()
+        }
+    }
+
+    fn unary(&mut self) -> Result<ast::Expression> {
+        let token = self.peek();
+
+        let expr = match token.ty {
+            TT::Ampersand => {
+                //reference
+                let token = self.pop()?;
+                let inner = Box::new(self.unary()?);
+                let span = Span::new(token.span.start, inner.span.end);
+                Ok(ast::Expression { span, kind: ast::ExpressionKind::Ref { inner } })
+            },
+            TT::Star => {
+                //dereference
+                let token = self.pop()?;
+                let inner = Box::new(self.unary()?);
+                let span = Span::new(token.span.start, inner.span.end);
+                Ok(ast::Expression { span, kind: ast::ExpressionKind::DeRef { inner } })
+            },
+            _ => self.atomic(),
+        }?;
+
+        if self.accept(TT::OpenB)?.is_some() {
+            //function call
+            let end_pos = self.expect(TT::CloseB, "end of parameters")?.span.end;
+            Ok(ast::Expression {
+                span: Span::new(expr.span.start, end_pos),
+                kind: ast::ExpressionKind::Call {
+                    target: Box::new(expr)
+                },
+            })
+        } else {
+            Ok(expr)
+        }
+    }
+
+    fn atomic(&mut self) -> Result<ast::Expression> {
+        let token = self.peek();
+
+        match token.ty {
             TT::IntLit | TT::True | TT::False => {
-                (ast::ExpressionKind::Literal { value: token.string }, token.span)
+                let token = self.pop()?;
+                Ok(ast::Expression {
+                    span: token.span,
+                    kind: ast::ExpressionKind::Literal { value: token.string },
+                })
             }
             TT::Id => {
-                (ast::ExpressionKind::Identifier { id: ast::Identifier { span: token.span, string: token.string } }, token.span)
+                let token = self.pop()?;
+                Ok(ast::Expression {
+                    span: token.span,
+                    kind: ast::ExpressionKind::Identifier {
+                        id: ast::Identifier { span: token.span, string: token.string }
+                    },
+                })
             }
-            TT::Ampersand => {
-                let expr = self.expression()?;
-                let span = Span::new(token.span.start, expr.span.end);
-                (ast::ExpressionKind::Ref { inner: Box::new(expr) }, span)
-            }
-            TT::Star => {
-                let expr = self.expression()?;
-                let span = Span::new(token.span.start, expr.span.end);
-                (ast::ExpressionKind::DeRef { inner: Box::new(expr) }, span)
-            }
-            _ => return Err(Self::unexpected_token(
-                &token,
-                &[TT::Return, TT::IntLit, TT::True, TT::False, TT::Id, TT::Ampersand, TT::Star],
-                "expression",
-            ))
-        };
-
-        Ok(ast::Expression {
-            span: Span::new(token.span.start, kind_span.end),
-            kind,
-        })
+            _ => Err(Self::unexpected_token(token, &[], "todo"))
+        }
     }
 
     fn identifier(&mut self) -> Result<ast::Identifier> {

@@ -22,6 +22,8 @@ fn assemble_and_link() -> std::io::Result<bool> {
     println!("Assembling...");
     let result = Command::new("nasm")
         .current_dir("ignored/build")
+        .arg("-g")
+        .arg("-O0")
         .arg("-fwin32")
         .arg("main.asm")
         .status()?;
