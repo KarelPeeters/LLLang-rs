@@ -2,89 +2,151 @@
 
 use std::fs::{File, read_to_string};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use clap::Clap;
+use derive_more::From;
+
+use crate::front::parser::ParseError;
 
 mod front;
 mod back;
 mod mid;
 mod util;
 
-pub fn write_output<P: AsRef<Path>>(name: P, string: &str) -> std::io::Result<()> {
-    let path = Path::new("ignored/build/").join(name);
-
-    let mut file = File::create(path)?;
-    file.write_all(string.as_bytes())?;
-    Ok(())
+#[derive(Debug, From)]
+enum CompileError {
+    IO(std::io::Error),
+    Parse(ParseError),
+    Lower,
+    Assemble,
+    Link,
 }
 
-fn assemble_and_link() -> std::io::Result<bool> {
-    println!("Assembling...");
+type Result<T> = std::result::Result<T, CompileError>;
+
+fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
+    let source = read_to_string(ll_path)?;
+
+    println!("----Parser-----");
+    let ast = front::parser::parse(&source)
+        .expect("failed to parse, unexpected");
+    let ast_file = ll_path.with_extension("ast");
+    File::create(&ast_file)?
+        .write_fmt(format_args!("{:#?}", ast))?;
+
+    println!("----Lower------");
+    let ir_program = front::lower::lower(&ast)
+        .expect("failed to lower");
+    let ir_file = ll_path.with_extension("ir");
+    File::create(&ir_file)?
+        .write_fmt(format_args!("{}", ir_program))?;
+
+    println!("----Backend----");
+    let asm = back::x86_asm::lower(&ir_program);
+    let asm_file = ll_path.with_extension("asm");
+    File::create(&asm_file)?
+        .write_all(asm.as_bytes())?;
+
+    Ok(asm_file)
+}
+
+fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
+    println!("----Assemble---");
     let result = Command::new("nasm")
-        .current_dir("ignored/build")
-        .arg("-g")
+        .current_dir(asm_path.parent().unwrap())
+        .arg("-gcv8")
         .arg("-O0")
         .arg("-fwin32")
-        .arg("main.asm")
+        .arg(asm_path.file_name().unwrap())
         .status()?;
 
-    if !result.success() { return Ok(false) }
+    if !result.success() {
+        return Err(CompileError::Assemble)
+    }
 
-    println!("Linking...");
+    //TODO investigate extra build folder with exe files?
+    //TODO change nasm and link to run with cwd=build for extra files
+
     let result = Command::new("link")
-        .current_dir("ignored/build")
+        .current_dir(asm_path.parent().unwrap())
         .arg("/subsystem:console")
         .arg("/nodefaultlib")
         .arg("/entry:main")
-        .arg("main.obj")
+        .arg(asm_path.with_extension("obj").file_name().unwrap())
         .arg("C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.17763.0\\um\\x86\\kernel32.lib")
         .status()?;
 
-    Ok(result.success())
+    if !result.success() {
+        return Err(CompileError::Link)
+    }
+
+    Ok(asm_path.with_extension("exe"))
 }
 
-fn run_exe() -> std::io::Result<()> {
-    let result = Command::new("ignored/build/main.exe")
-        .current_dir("ignored/build")
-        .status()?;
+fn run_exe(exe_path: &Path) -> std::io::Result<()> {
+    println!("{:?}", exe_path);
+    println!("----Running----");
+    let result = Command::new(exe_path).status()?;
 
     println!("Exit code: {}", result);
     Ok(())
 }
 
-fn compile() -> std::io::Result<()> {
-    let source = read_to_string("ignored/src/main.ll")?;
-
-    println!("----Parser-----");
-    let ast = front::parser::parse(&source)
-        .expect("failed to parse, unexpected");
-    write_output("main.ast", &format!("{:#?}", ast))?;
-
-    println!("----Lower------");
-    let ir_program = front::lower::lower(&ast).expect("failed to lower");
-    write_output("main.ir", &format!("{}", ir_program))?;
-
-    // println!("----Emulator----");
-    // let emulator_result = back::emulator::run(&ir_program);
-    // println!("--------Emulator----==\n{:?}\n\n", emulator_result);
-
-    println!("----Backend----");
-    let asm = back::x86_asm::lower(&ir_program);
-    write_output("main.asm", &asm)?;
-
-    Ok(())
+#[derive(Clap, Debug)]
+struct Opts {
+    #[clap(subcommand)]
+    command: SubCommand
 }
 
-fn main() -> std::io::Result<()> {
-    std::fs::create_dir_all("ignored/build")?;
+#[derive(Clap, Debug)]
+enum SubCommand {
+    Run {
+        file: String,
+    },
+    Build {
+        file: String,
+    },
+}
 
+#[derive(Debug)]
+enum Level {
+    LL,
+    ASM,
+}
+
+fn main() -> Result<()> {
+    //better panic backtraces
     color_backtrace::install();
-    compile()?;
 
-    println!("----NASM-------");
-    if assemble_and_link()? {
-        println!("----Running----");
-        run_exe()?;
+    let opts: Opts = Opts::parse();
+
+    let (file, do_run) = match opts.command {
+        SubCommand::Run { file } => (file, true),
+        SubCommand::Build { file } => (file, false),
+    };
+
+    let path = Path::new(&file).to_path_buf();
+
+    let level = match path.extension().and_then(|os| os.to_str()) {
+        Some("ll") => Level::LL,
+        Some("asm") => Level::ASM,
+        _ => {
+            eprintln!("Expected either .ll or .asm file as input");
+            return Ok(())
+        }
+    };
+
+    let asm_path = match level {
+        Level::LL => compile_ll_to_asm(&path)?,
+        Level::ASM => path,
+    };
+
+    let exe_path = compile_asm_to_exe(&asm_path)?;
+
+    if do_run {
+        run_exe(&exe_path)?;
     }
 
     Ok(())

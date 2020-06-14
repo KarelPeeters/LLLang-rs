@@ -6,6 +6,7 @@ use crate::front::{ast, Span};
 use crate::mid::ir;
 use crate::mid::ir::FunctionType;
 
+type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
 struct Lower<'a> {
@@ -448,7 +449,7 @@ impl<'a> Lower<'a> {
 type TypeString = String;
 
 #[derive(Debug)]
-pub enum Error<'a> {
+pub enum LowerError<'a> {
     //types
     InvalidType(&'a ast::Type),
     CannotInferType(Span),

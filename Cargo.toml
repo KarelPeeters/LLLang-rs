@@ -1,5 +1,5 @@
 [package]
-name = "lllang-rs"
+name = "lllang"
 version = "0.1.0"
 authors = ["Karel Peeters <karel.peeters.leuven@gmail.com>"]
 edition = "2018"
@@ -9,3 +9,5 @@ edition = "2018"
 [dependencies]
 color-backtrace = "0.4.2"
 indexmap = "1.4.0"
+clap = { git = "https://github.com/clap-rs/clap/", rev="20daf00d519d12ec92923a7bde42cc9211823e69" } # = "3.0.0"
+derive_more = "0.99.7"
