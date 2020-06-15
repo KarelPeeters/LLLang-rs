@@ -18,18 +18,6 @@ fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
     }
 }
 
-fn binop_to_instr(op: BinaryOp) -> &'static str {
-    match op {
-        BinaryOp::Add => "add",
-        BinaryOp::Sub => "sub",
-        BinaryOp::Eq | BinaryOp::Neq => todo!("== and != in x86"),
-        //TODO these are more complicated, we need to mess with multiple registers here
-        BinaryOp::Mul => todo!("mul in x86"),
-        BinaryOp::Div => todo!("div in x86"),
-        BinaryOp::Mod => todo!("mod in x86"),
-    }
-}
-
 struct AsmBuilder<'p> {
     prog: &'p Program,
     string: String,

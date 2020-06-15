@@ -33,12 +33,14 @@ macro_rules! gen_node_and_program_accessors {
                 }
             }
 
+            #[allow(dead_code)]
             pub fn $get(&self, node: $node) -> &$info {
                 let node = &self.nodes[node.i];
                 if let NodeInfo::$node(info) = node { info }
                 else { panic!("Expected {:?}, got {:?}", std::any::type_name::<$info>(), node ) }
             }
 
+            #[allow(dead_code)]
             pub fn $get_mut(&mut self, node: $node) -> &mut $info {
                 let node = &mut self.nodes[node.i];
                 if let NodeInfo::$node(info) = node { info }
