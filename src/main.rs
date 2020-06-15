@@ -66,9 +66,6 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         return Err(CompileError::Assemble)
     }
 
-    //TODO investigate extra build folder with exe files?
-    //TODO change nasm and link to run with cwd=build for extra files
-
     let result = Command::new("link")
         .current_dir(asm_path.parent().unwrap())
         .arg("/subsystem:console")
