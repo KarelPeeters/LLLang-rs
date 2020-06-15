@@ -50,7 +50,9 @@ impl AsmBuilder<'_> {
         self.append_ln(instr);
     }
 
-    /// Put the given value in eax, without clobbering any other registers
+    /// ```
+    /// eax = value
+    /// ```
     fn append_value_to_eax(&mut self, value: &Value) {
         match value {
             Value::Undef(_) => {
@@ -77,6 +79,9 @@ impl AsmBuilder<'_> {
         }
     }
 
+    /// ```
+    /// ebx = addr
+    /// ```
     fn append_address_to_ebx(&mut self, addr: &Value){
         match addr {
             //func as address isn't meaningful
@@ -98,6 +103,15 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("mov ebx, [esp+{}]", self.stack_size - instr_pos));
             },
         }
+    }
+
+    /// ```
+    /// eax = eax / ebx
+    /// edx = eax % ebx
+    /// ```
+    fn append_div(&mut self) {
+        self.append_instr("xor edx, edx");
+        self.append_instr("idiv ebx");
     }
 
     pub fn append_block(&mut self, block: Block) {
@@ -139,7 +153,12 @@ impl AsmBuilder<'_> {
                     match kind {
                         BinaryOp::Add => self.append_instr("add eax, ebx"),
                         BinaryOp::Sub => self.append_instr("sub eax, ebx"),
-                        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => todo!("mul, div, mod in x86"),
+                        BinaryOp::Mul => self.append_instr("imul eax, ebx"),
+                        BinaryOp::Div => self.append_div(),
+                        BinaryOp::Mod => {
+                            self.append_div();
+                            self.append_instr("mov eax, edx");
+                        }
                         BinaryOp::Eq => {
                             self.append_instr("cmp eax, ebx");
                             self.append_instr("sete al");
