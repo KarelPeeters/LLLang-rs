@@ -78,6 +78,13 @@ impl<'a> Lower<'a> {
                 let inner = self.parse_type(inner)?;
                 Ok(self.prog.define_type_ptr(inner))
             },
+            ast::TypeKind::Func { params, ret } => {
+                let params = params.iter()
+                    .map(|p| self.parse_type(p))
+                    .collect::<Result<_>>()?;
+                let ret = self.parse_type(ret)?;
+                Ok(self.prog.define_type_func(ir::FunctionType { params, ret, }))
+            }
         }
     }
 

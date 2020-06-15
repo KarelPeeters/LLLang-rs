@@ -238,10 +238,12 @@ const EXPR_START_TOKENS: &[TT] = &[
     TT::Return,
     TT::Ampersand,
     TT::Star,
+    TT::Minus,
     TT::IntLit,
     TT::True,
     TT::False,
     TT::Id,
+    TT::OpenB,
 ];
 
 struct BinOpInfo {
@@ -276,7 +278,7 @@ impl UnOpInfo {
     }
 }
 
-const UNARY_OPERATOR_INFO: &[UnOpInfo] = &[
+const PREFIX_UNARY_OPERATOR_INFO: &[UnOpInfo] = &[
     UnOpInfo::new(TT::Ampersand, UnaryOp::Ref),
     UnOpInfo::new(TT::Star, UnaryOp::Deref),
     UnOpInfo::new(TT::Minus, UnaryOp::Neg),
@@ -358,9 +360,11 @@ impl<'a> Parser<'a> {
     ) -> Result<(Span, Vec<A>)> {
         let mut result = Vec::new();
         let start_pos = self.peek().span.start;
+        let mut end_pos = start_pos;
 
         while self.accept(end)?.is_none() {
             result.push(item(self)?);
+            end_pos = self.last_popped_end;
 
             if self.accept(end)?.is_some() { break }
 
@@ -369,7 +373,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end_pos = self.last_popped_end;
         Ok((Span::new(start_pos, end_pos), result))
     }
 }
@@ -532,60 +535,63 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        let expr = if let Some(token) = self.accept(TT::Return)? {
-            //return
-            let value = if self.at(TT::Semi) {
-                None
-            } else {
-                Some(Box::new(self.expression()?))
-            };
-
-            Ok(ast::Expression {
-                span: Span::new(token.span.start, self.last_popped_end),
-                kind: ast::ExpressionKind::Return { value },
-            })
-        } else {
-            //basic unary
+        //prefix
+        let mut prefix_ops = Vec::new();
+        loop {
             let token = self.peek();
-            let info = UNARY_OPERATOR_INFO.iter()
+            let info = PREFIX_UNARY_OPERATOR_INFO.iter()
                 .find(|i| i.token == token.ty);
             if let Some(info) = info {
                 let token = self.pop()?;
-                let inner = Box::new(self.unary()?);
-                Ok(ast::Expression {
-                    span: Span::new(token.span.start, inner.span.end),
-                    kind: ast::ExpressionKind::Unary {
-                        kind: info.op,
-                        inner,
-                    },
-                })
+                prefix_ops.push((token.span.start, info.op));
             } else {
-                //fallback
-                self.atomic()
+                break
             }
-        }?;
-
-        //TODO this needs to be a loop for repeated calling
-        if self.accept(TT::OpenB)?.is_some() {
-            //function call
-            let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;
-            let span = Span::new(expr.span.start, self.last_popped_end);
-            Ok(ast::Expression {
-                span,
-                kind: ast::ExpressionKind::Call {
-                    target: Box::new(expr),
-                    args,
-                },
-            })
-        } else {
-            Ok(expr)
         }
+
+        //inner expression
+        let mut curr = self.atomic()?;
+
+        //postfix, apply immediately from left to right
+        loop {
+            let token = self.peek();
+
+            match token.ty {
+                TT::OpenB => {
+                    //call
+                    self.pop()?;
+                    let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;
+                    let span = Span::new(curr.span.start, self.last_popped_end);
+                    curr = ast::Expression {
+                        span,
+                        kind: ast::ExpressionKind::Call {
+                            target: Box::new(curr),
+                            args,
+                        },
+                    }
+                }
+                _ => break
+            }
+        }
+
+        //apply prefixes from right to left
+        for (pos, op) in prefix_ops {
+            curr = ast::Expression {
+                span: Span::new(pos, curr.span.end),
+                kind: ast::ExpressionKind::Unary {
+                    kind: op,
+                    inner: Box::new(curr),
+                },
+            }
+        }
+
+        Ok(curr)
     }
 
     fn atomic(&mut self) -> Result<ast::Expression> {
-        let token = self.peek();
+        let start_pos = self.peek().span.start;
 
-        match token.ty {
+        match self.peek().ty {
             TT::IntLit | TT::True | TT::False => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
@@ -602,7 +608,28 @@ impl<'a> Parser<'a> {
                     },
                 })
             }
-            _ => Err(Self::unexpected_token(token, EXPR_START_TOKENS, "expression"))
+            TT::OpenB => {
+                self.pop()?;
+                let expr = self.expression()?;
+                self.expect(TT::CloseB, "closing parenthesis")?;
+                Ok(expr)
+            }
+            TT::Return => {
+                //TODO think about whether this is the right spot to parse a return
+                self.pop()?;
+
+                let value = if self.peek().ty == TT::Semi {
+                    None
+                } else {
+                    Some(Box::new(self.expression()?))
+                };
+
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::Return { value },
+                })
+            }
+            _ => Err(Self::unexpected_token(self.peek(), EXPR_START_TOKENS, "expression"))
         }
     }
 
@@ -612,19 +639,38 @@ impl<'a> Parser<'a> {
     }
 
     fn type_decl(&mut self) -> Result<ast::Type> {
-        let amper = self.accept(TT::Ampersand)?;
-        if let Some(amper) = amper {
-            let inner = self.type_decl()?;
-            Ok(ast::Type {
-                span: Span::new(amper.span.start, inner.span.end),
-                kind: ast::TypeKind::Ref(Box::new(inner)),
-            })
-        } else {
-            let token = self.expect(TT::Id, "type declaration")?;
-            Ok(ast::Type {
-                span: token.span,
-                kind: ast::TypeKind::Simple(token.string),
-            })
+        let start_pos = self.peek().span.start;
+        match self.peek().ty {
+            TT::Ampersand => {
+                self.pop()?;
+                let inner = self.type_decl()?;
+                Ok(ast::Type {
+                    span: Span::new(start_pos, inner.span.end),
+                    kind: ast::TypeKind::Ref(Box::new(inner)),
+                })
+            },
+            TT::Id => {
+                let token = self.pop()?;
+                Ok(ast::Type {
+                    span: token.span,
+                    kind: ast::TypeKind::Simple(token.string),
+                })
+            },
+            TT::OpenB => {
+                self.pop()?;
+                let (_, params) = self.list(TT::CloseB, Some(TT::Comma), Self::type_decl)?;
+                self.expect(TT::Arrow, "return type separator")?;
+                let ret = self.type_decl()?;
+
+                Ok(ast::Type {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::TypeKind::Func {
+                        params,
+                        ret: Box::new(ret),
+                    },
+                })
+            }
+            _ => Err(Self::unexpected_token(self.peek(), &[TT::Ampersand, TT::Id, TT::OpenB], "type declaration")),
         }
     }
 }

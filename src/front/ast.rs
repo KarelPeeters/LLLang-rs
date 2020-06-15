@@ -10,6 +10,10 @@ pub struct Type {
 pub enum TypeKind {
     Simple(String),
     Ref(Box<Type>),
+    Func {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    }
 }
 
 #[derive(Debug)]
