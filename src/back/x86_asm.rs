@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value};
+use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, BinaryOp};
 
 const HEADER: &str = r"global _main
 extern  _ExitProcess@4
@@ -15,6 +15,17 @@ fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
         TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
         TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
         TypeInfo::Void => 0
+    }
+}
+
+fn binop_to_instr(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "add",
+        BinaryOp::Sub => "sub",
+        //TODO these are more complicated, we need to mess with multiple registers here
+        BinaryOp::Mul => todo!("mul in x86"),
+        BinaryOp::Div => todo!("div in x86"),
+        BinaryOp::Mod => todo!("mod in x86"),
     }
 }
 
@@ -50,6 +61,7 @@ impl AsmBuilder<'_> {
         self.append_ln(instr);
     }
 
+    /// Put the given value in eax, without clobbering any other registers
     fn append_value_to_eax(&mut self, value: &Value) {
         match value {
             Value::Undef(_) => {
@@ -128,7 +140,14 @@ impl AsmBuilder<'_> {
                     self.append_instr("call eax");
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
                 }
-                InstructionInfo::Binary { .. } => todo!("binop in x86"),
+                InstructionInfo::Binary { kind, left, right } => {
+                    self.append_instr(";binop");
+                    self.append_value_to_eax(right);
+                    self.append_instr("mov ebx, eax");
+                    self.append_value_to_eax(left);
+                    self.append_instr(&format!("{} eax, ebx", binop_to_instr(*kind)));
+                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+                },
             }
         }
 

@@ -195,7 +195,7 @@ impl TypeInfo {
             None
         }
     }
-    
+
     pub fn unwrap_ptr(&self) -> Option<Type> {
         if let TypeInfo::Pointer { inner } = self {
             Some(*inner)
@@ -260,7 +260,7 @@ pub enum InstructionInfo {
     Binary { kind: BinaryOp, left: Value, right: Value },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum BinaryOp {
     Add,
     Sub,
