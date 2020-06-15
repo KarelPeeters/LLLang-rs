@@ -30,15 +30,14 @@ fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
     let source = read_to_string(ll_path)?;
 
     println!("----Parser-----");
-    let ast = front::parser::parse(&source)
-        .expect("failed to parse, unexpected");
+    let ast = front::parser::parse(&source)?;
     let ast_file = ll_path.with_extension("ast");
     File::create(&ast_file)?
         .write_fmt(format_args!("{:#?}", ast))?;
 
     println!("----Lower------");
     let ir_program = front::lower::lower(&ast)
-        .expect("failed to lower");
+        .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file)?
         .write_fmt(format_args!("{}", ir_program))?;

@@ -3,8 +3,9 @@ use std::marker::PhantomData;
 use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
+use crate::front::ast::UnaryOp;
 use crate::mid::ir;
-use crate::mid::ir::FunctionType;
+use crate::mid::ir::{BinaryOp, FunctionType};
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -48,6 +49,15 @@ impl Scope<'_> {
     }
 }
 
+fn binary_op_map_kind(ast_kind: ast::BinaryOp) -> ir::BinaryOp {
+    match ast_kind {
+        ast::BinaryOp::Add => ir::BinaryOp::Add,
+        ast::BinaryOp::Sub => ir::BinaryOp::Sub,
+        ast::BinaryOp::Mul => ir::BinaryOp::Mul,
+        ast::BinaryOp::Div => ir::BinaryOp::Div,
+        ast::BinaryOp::Mod => ir::BinaryOp::Mod,
+    }
+}
 
 #[derive(Debug, Copy, Clone)]
 enum LRValue {
@@ -107,7 +117,7 @@ impl<'a> Lower<'a> {
         match value {
             LRValue::Left(value) => {
                 let ty = self.prog.type_of_value(value);
-                self.prog.get_type(ty).as_ptr().expect("lvalue should have pointer type")
+                self.prog.get_type(ty).unwrap_ptr().expect("lvalue should have pointer type")
             },
             LRValue::Right(value) => {
                 self.prog.type_of_value(value)
@@ -180,36 +190,82 @@ impl<'a> Lower<'a> {
                 self.check_type_match(expr, expect_ty, self.type_of_lrvalue(var))?;
                 Ok(var)
             }
-            ast::ExpressionKind::Ref { inner } => {
-                let expect_ty_inner = expect_ty
-                    .map(|ty| {
-                        self.prog
-                            .get_type(ty)
-                            .as_ptr()
-                            .ok_or(Error::ExpectPointerType { actual: self.prog.format_type(ty).to_string() })
-                    }).transpose()?;
+            ast::ExpressionKind::Binary { kind, left, right } => {
+                //for now this is just the same, this will change as more operators get added
+                let expect_ty = expect_ty;
 
-                let inner = self.append_expr(scope, inner, expect_ty_inner)?;
-                match inner {
-                    //ref turns an lvalue into an rvalue
-                    LRValue::Left(inner) => Ok(LRValue::Right(inner)),
-                    LRValue::Right(_) => Err(Error::ReferenceOfLValue(expr.span)),
+                let left = self.append_expr_loaded(scope, left, expect_ty)?;
+                //use the left type for both inference and correctness checking
+                let expect_ty = self.prog.type_of_value(left);
+                let right = self.append_expr_loaded(scope, right, Some(expect_ty))?;
+
+                let instr = self.append_instr(ir::InstructionInfo::Binary {
+                    kind: binary_op_map_kind(*kind),
+                    left,
+                    right,
+                });
+                Ok(LRValue::Right(ir::Value::Instr(instr)))
+            }
+            ast::ExpressionKind::Unary { kind, inner } => {
+                match kind {
+                    UnaryOp::Ref => {
+                        //error if expect_ty is not a pointer, otherwise unwrap it
+                        let expect_ty_inner = expect_ty
+                            .map(|ty| {
+                                self.prog
+                                    .get_type(ty)
+                                    .unwrap_ptr()
+                                    .ok_or_else(|| Error::ExpectPointerType {
+                                        expression: expr,
+                                        actual: self.prog.format_type(ty).to_string(),
+                                    })
+                            }).transpose()?;
+
+                        let inner = self.append_expr(scope, inner, expect_ty_inner)?;
+                        match inner {
+                            //ref turns an lvalue into an rvalue
+                            LRValue::Left(inner) => Ok(LRValue::Right(inner)),
+                            LRValue::Right(_) => Err(Error::ReferenceOfLValue(expr.span)),
+                        }
+                    },
+                    UnaryOp::Deref => {
+                        let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
+
+                        //load to get the value and wrap as lvalue again
+                        self.append_expr_loaded(scope, inner, expect_ty_inner)
+                            .map(LRValue::Left)
+                    },
+                    UnaryOp::Neg => {
+                        let inner = self.append_expr_loaded(scope, inner, expect_ty)?;
+
+                        //check that it's an integer type
+                        let ty = self.prog.type_of_value(inner);
+                        if self.prog.get_type(ty).unwrap_int().is_none() {
+                            return Err(Error::ExpectIntegerType {
+                                expression: expr,
+                                actual: self.prog.format_type(ty).to_string(),
+                            })
+                        }
+
+                        let instr = self.append_instr(ir::InstructionInfo::Binary {
+                            kind: BinaryOp::Sub,
+                            left: ir::Value::Const(ir::Const::new(ty, 0)),
+                            right: inner,
+                        });
+                        Ok(LRValue::Right(ir::Value::Instr(instr)))
+                    },
                 }
-            }
-            ast::ExpressionKind::DeRef { inner } => {
-                let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
-
-                //load to get the value and wrap as lvalue again
-                self.append_expr_loaded(scope, inner, expect_ty_inner)
-                    .map(LRValue::Left)
-            }
+            },
             ast::ExpressionKind::Call { target, args } => {
                 let target = self.append_expr_loaded(scope, target, None)?;
 
                 //check that the target is a function
                 let target_ty = self.prog.type_of_value(target);
                 let target_ty = self.prog.get_type(target_ty).as_func()
-                    .ok_or_else(|| Error::ExpectFunctionType { actual: self.prog.format_type(target_ty).to_string() })?;
+                    .ok_or_else(|| Error::ExpectFunctionType {
+                        expression: expr,
+                        actual: self.prog.format_type(target_ty).to_string(),
+                    })?;
 
 
                 //check return type and arg count
@@ -458,11 +514,17 @@ pub enum LowerError<'a> {
         expected: TypeString,
         actual: TypeString,
     },
+    ExpectIntegerType {
+        expression: &'a ast::Expression,
+        actual: TypeString,
+    },
     ExpectPointerType {
-        actual: TypeString
+        expression: &'a ast::Expression,
+        actual: TypeString,
     },
     ExpectFunctionType {
-        actual: TypeString
+        expression: &'a ast::Expression,
+        actual: TypeString,
     },
 
     //literals

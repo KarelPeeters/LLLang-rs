@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
 
+
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
         $(
@@ -187,7 +188,15 @@ pub struct FunctionType {
 }
 
 impl TypeInfo {
-    pub fn as_ptr(&self) -> Option<Type> {
+    pub fn unwrap_int(&self) -> Option<u32> {
+        if let TypeInfo::Integer { bits } = self {
+            Some(*bits)
+        } else {
+            None
+        }
+    }
+    
+    pub fn unwrap_ptr(&self) -> Option<Type> {
         if let TypeInfo::Pointer { inner } = self {
             Some(*inner)
         } else {
@@ -248,13 +257,23 @@ pub enum InstructionInfo {
     Load { addr: Value },
     Store { addr: Value, value: Value },
     Call { target: Value, args: Vec<Value> },
+    Binary { kind: BinaryOp, left: Value, right: Value },
+}
+
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 impl InstructionInfo {
     fn ty(&self, prog: &Program) -> Type {
         match self {
             InstructionInfo::Load { addr } => {
-                prog.get_type(prog.type_of_value(*addr)).as_ptr()
+                prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
                     .expect("load addr should have a pointer type")
             },
             InstructionInfo::Store { .. } => {
@@ -264,6 +283,9 @@ impl InstructionInfo {
                 prog.get_type(prog.type_of_value(*target)).as_func()
                     .expect("call target should have a function type")
                     .ret
+            }
+            InstructionInfo::Binary { left, .. } => {
+                prog.type_of_value(*left)
             }
         }
     }
@@ -306,8 +328,8 @@ pub struct Const {
 }
 
 impl Const {
-    pub fn new(ty: Type, value: i32) -> Self {
-        Self { ty, value }
+    pub const fn new(ty: Type, value: i32) -> Self {
+        Const { ty, value }
     }
 }
 

@@ -128,6 +128,7 @@ impl AsmBuilder<'_> {
                     self.append_instr("call eax");
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
                 }
+                InstructionInfo::Binary { .. } => todo!("binop in x86"),
             }
         }
 

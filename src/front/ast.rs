@@ -100,13 +100,30 @@ pub enum ExpressionKind {
     Literal { value: String },
     Identifier { id: Identifier },
 
-    Ref { inner: Box<Expression> },
-    DeRef { inner: Box<Expression> },
-
     Call {
         target: Box<Expression>,
         args: Vec<Expression>,
     },
 
+    Binary {
+        kind: BinaryOp,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Unary {
+        kind: UnaryOp,
+        inner: Box<Expression>,
+    },
+
     Return { value: Option<Box<Expression>> },
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum BinaryOp {
+    Add, Sub, Mul, Div, Mod,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum UnaryOp {
+    Ref, Deref, Neg,
 }

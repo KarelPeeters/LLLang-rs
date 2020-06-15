@@ -3,6 +3,7 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::{ast, Pos, Span};
+use crate::front::ast::{BinaryOp, UnaryOp};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -35,6 +36,10 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("=", TT::Eq),
     ("&", TT::Ampersand),
     ("*", TT::Star),
+    ("+", TT::Plus),
+    ("-", TT::Minus),
+    ("/", TT::Slash),
+    ("%", TT::Percent),
     ("(", TT::OpenB),
     (")", TT::CloseB),
     ("{", TT::OpenC),
@@ -65,6 +70,11 @@ pub enum TokenType {
     Eq,
     Ampersand,
     Star,
+
+    Plus,
+    Minus,
+    Slash,
+    Percent,
 
     OpenB,
     CloseB,
@@ -232,6 +242,44 @@ const EXPR_START_TOKENS: &[TT] = &[
     TT::True,
     TT::False,
     TT::Id,
+];
+
+struct BinOpInfo {
+    level: u8,
+    token: TT,
+    bind_left: bool,
+    op: BinaryOp,
+}
+
+impl BinOpInfo {
+    const fn new(level: u8, token: TokenType, bind_left: bool, op: BinaryOp) -> Self {
+        Self { level, token, bind_left, op }
+    }
+}
+
+const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
+    BinOpInfo::new(5, TT::Plus, true, BinaryOp::Add),
+    BinOpInfo::new(5, TT::Minus, true, BinaryOp::Sub),
+    BinOpInfo::new(6, TT::Slash, true, BinaryOp::Div),
+    BinOpInfo::new(6, TT::Star, true, BinaryOp::Mul),
+    BinOpInfo::new(6, TT::Percent, true, BinaryOp::Mod),
+];
+
+struct UnOpInfo {
+    token: TT,
+    op: UnaryOp,
+}
+
+impl UnOpInfo {
+    const fn new(token: TokenType, op: UnaryOp) -> Self {
+        UnOpInfo { token, op }
+    }
+}
+
+const UNARY_OPERATOR_INFO: &[UnOpInfo] = &[
+    UnOpInfo::new(TT::Ampersand, UnaryOp::Ref),
+    UnOpInfo::new(TT::Star, UnaryOp::Deref),
+    UnOpInfo::new(TT::Minus, UnaryOp::Neg),
 ];
 
 #[allow(dead_code)]
@@ -449,49 +497,75 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
-        let token = self.peek();
+        self.precedence_climb_binop(0)
+    }
 
-        match token.ty {
-            TT::Return => {
-                let token = self.pop()?;
+    fn precedence_climb_binop(&mut self, lower_level: u8) -> Result<ast::Expression> {
+        let mut curr = self.unary()?;
 
-                //TODO maybe replace this with a more general try_expression?
-                let value = if self.at(TT::Semi) {
-                    None
-                } else {
-                    Some(Box::new(self.expression()?))
-                };
+        loop {
+            let token = self.peek();
+            let info = BINARY_OPERATOR_INFO.iter()
+                .find(|i| i.token == token.ty);
 
-                Ok(ast::Expression {
-                    span: Span::new(token.span.start, self.last_popped_end),
-                    kind: ast::ExpressionKind::Return { value },
-                })
+            if let Some(info) = info {
+                if info.level < lower_level { break }
+                self.pop()?;
+
+                let next_lower_level = info.level + (info.bind_left as u8);
+                let right = self.precedence_climb_binop(next_lower_level)?;
+
+                curr = ast::Expression {
+                    span: Span::new(curr.span.start, right.span.end),
+                    kind: ast::ExpressionKind::Binary {
+                        kind: info.op,
+                        left: Box::new(curr),
+                        right: Box::new(right),
+                    },
+                }
+            } else {
+                break
             }
-            _ => self.unary()
         }
+
+        Ok(curr)
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        let token = self.peek();
+        let expr = if let Some(token) = self.accept(TT::Return)? {
+            //return
+            let value = if self.at(TT::Semi) {
+                None
+            } else {
+                Some(Box::new(self.expression()?))
+            };
 
-        let expr = match token.ty {
-            TT::Ampersand => {
-                //reference
+            Ok(ast::Expression {
+                span: Span::new(token.span.start, self.last_popped_end),
+                kind: ast::ExpressionKind::Return { value },
+            })
+        } else {
+            //basic unary
+            let token = self.peek();
+            let info = UNARY_OPERATOR_INFO.iter()
+                .find(|i| i.token == token.ty);
+            if let Some(info) = info {
                 let token = self.pop()?;
                 let inner = Box::new(self.unary()?);
-                let span = Span::new(token.span.start, inner.span.end);
-                Ok(ast::Expression { span, kind: ast::ExpressionKind::Ref { inner } })
-            },
-            TT::Star => {
-                //dereference
-                let token = self.pop()?;
-                let inner = Box::new(self.unary()?);
-                let span = Span::new(token.span.start, inner.span.end);
-                Ok(ast::Expression { span, kind: ast::ExpressionKind::DeRef { inner } })
-            },
-            _ => self.atomic(),
+                Ok(ast::Expression {
+                    span: Span::new(token.span.start, inner.span.end),
+                    kind: ast::ExpressionKind::Unary {
+                        kind: info.op,
+                        inner,
+                    },
+                })
+            } else {
+                //fallback
+                self.atomic()
+            }
         }?;
 
+        //TODO this needs to be a loop for repeated calling
         if self.accept(TT::OpenB)?.is_some() {
             //function call
             let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;

@@ -42,7 +42,8 @@ impl Emulator {
                     let value = self.eval(*value);
                     self.memory.insert(*addr, value);
                 }
-                InstructionInfo::Call { .. } => todo!("call in emulator")
+                InstructionInfo::Call { .. } => todo!("call in emulator"),
+                InstructionInfo::Binary { .. } => todo!("binop in emulator"),
             }
         }
 
