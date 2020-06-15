@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
 
-
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
         $(
@@ -267,6 +266,8 @@ pub enum BinaryOp {
     Mul,
     Div,
     Mod,
+    Eq,
+    Neq,
 }
 
 impl InstructionInfo {
@@ -284,8 +285,14 @@ impl InstructionInfo {
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::Binary { left, .. } => {
-                prog.type_of_value(*left)
+            InstructionInfo::Binary { kind, left, .. } => {
+                match kind {
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
+                    BinaryOp::Mod =>
+                        prog.type_of_value(*left),
+                    BinaryOp::Eq | BinaryOp::Neq =>
+                        prog.ty_bool,
+                }
             }
         }
     }

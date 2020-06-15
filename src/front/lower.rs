@@ -3,9 +3,7 @@ use std::marker::PhantomData;
 use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
-use crate::front::ast::UnaryOp;
 use crate::mid::ir;
-use crate::mid::ir::{BinaryOp, FunctionType};
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -56,6 +54,8 @@ fn binary_op_map_kind(ast_kind: ast::BinaryOp) -> ir::BinaryOp {
         ast::BinaryOp::Mul => ir::BinaryOp::Mul,
         ast::BinaryOp::Div => ir::BinaryOp::Div,
         ast::BinaryOp::Mod => ir::BinaryOp::Mod,
+        ast::BinaryOp::Eq => ir::BinaryOp::Eq,
+        ast::BinaryOp::Neq => ir::BinaryOp::Neq,
     }
 }
 
@@ -145,6 +145,16 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    fn check_integer_type(&self, expr: &'a ast::Expression, actual: ir::Type) -> Result<'a, ()> {
+        match self.prog.get_type(actual).unwrap_int() {
+            Some(_) => Ok(()),
+            None => Err(Error::ExpectIntegerType {
+                expression: expr,
+                actual: self.prog.format_type(actual).to_string(),
+            })
+        }
+    }
+
     fn start_new_block(&mut self) {
         self.curr_block = self.prog.define_block(ir::BlockInfo {
             instructions: vec![],
@@ -198,24 +208,34 @@ impl<'a> Lower<'a> {
                 Ok(var)
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                //for now this is just the same, this will change as more operators get added
-                let expect_ty = expect_ty;
+                let expect_ty = match kind {
+                    ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul |
+                    ast::BinaryOp::Div | ast::BinaryOp::Mod => {
+                        expect_ty
+                    },
+                    ast::BinaryOp::Eq | ast::BinaryOp::Neq => {
+                        self.check_type_match(expr, expect_ty, self.prog.type_bool())?;
+                        None
+                    }
+                };
 
-                let left = self.append_expr_loaded(scope, left, expect_ty)?;
+                let ir_left = self.append_expr_loaded(scope, left, expect_ty)?;
+                self.check_integer_type(left, self.prog.type_of_value(ir_left))?;
+
                 //use the left type for both inference and correctness checking
-                let expect_ty = self.prog.type_of_value(left);
-                let right = self.append_expr_loaded(scope, right, Some(expect_ty))?;
+                let expect_ty = self.prog.type_of_value(ir_left);
+                let ir_right = self.append_expr_loaded(scope, right, Some(expect_ty))?;
 
                 let instr = self.append_instr(ir::InstructionInfo::Binary {
                     kind: binary_op_map_kind(*kind),
-                    left,
-                    right,
+                    left: ir_left,
+                    right: ir_right,
                 });
                 Ok(LRValue::Right(ir::Value::Instr(instr)))
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
-                    UnaryOp::Ref => {
+                    ast::UnaryOp::Ref => {
                         //error if expect_ty is not a pointer, otherwise unwrap it
                         let expect_ty_inner = expect_ty
                             .map(|ty| {
@@ -235,27 +255,20 @@ impl<'a> Lower<'a> {
                             LRValue::Right(_) => Err(Error::ReferenceOfLValue(expr.span)),
                         }
                     },
-                    UnaryOp::Deref => {
+                    ast::UnaryOp::Deref => {
                         let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
 
                         //load to get the value and wrap as lvalue again
                         self.append_expr_loaded(scope, inner, expect_ty_inner)
                             .map(LRValue::Left)
                     },
-                    UnaryOp::Neg => {
+                    ast::UnaryOp::Neg => {
                         let inner = self.append_expr_loaded(scope, inner, expect_ty)?;
-
-                        //check that it's an integer type
                         let ty = self.prog.type_of_value(inner);
-                        if self.prog.get_type(ty).unwrap_int().is_none() {
-                            return Err(Error::ExpectIntegerType {
-                                expression: expr,
-                                actual: self.prog.format_type(ty).to_string(),
-                            })
-                        }
+                        self.check_integer_type(expr, ty)?;
 
                         let instr = self.append_instr(ir::InstructionInfo::Binary {
-                            kind: BinaryOp::Sub,
+                            kind: ir::BinaryOp::Sub,
                             left: ir::Value::Const(ir::Const::new(ty, 0)),
                             right: inner,
                         });
@@ -396,7 +409,7 @@ impl<'a> Lower<'a> {
                     let param_tys = func.params.iter()
                         .map(|param| self.parse_type(&param.ty))
                         .collect::<Result<_>>()?;
-                    let func_ty = FunctionType { params: param_tys, ret: ret_ty };
+                    let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
 
                     let ir_func = ir::FunctionInfo::new(func_ty, tmp_entry, &mut self.prog);
                     let ir_func = self.prog.define_func(ir_func);
@@ -495,6 +508,33 @@ impl<'a> Lower<'a> {
                     self.prog.get_block_mut(cond_end_block).terminator = branch;
                     self.prog.get_block_mut(then_end_block).terminator = jump_end;
                     self.prog.get_block_mut(else_end_block).terminator = jump_end;
+                }
+                ast::StatementKind::While(while_stmt) => {
+                    let start_block = self.curr_block;
+
+                    //condition
+                    self.start_new_block();
+                    let cond_start_block = self.curr_block;
+                    let cond = self.append_expr_loaded(scope, &while_stmt.cond, Some(self.prog.type_bool()))?;
+                    let cond_end_block = self.curr_block;
+
+                    //body
+                    self.start_new_block();
+                    let body_start_block = self.curr_block;
+                    self.append_block(scope, &while_stmt.body)?;
+                    let body_end_block = self.curr_block;
+
+                    //end
+                    self.start_new_block();
+                    let end_block = self.curr_block;
+
+                    //connect everything
+                    let branch = ir::Terminator::Branch { cond, targets: [body_start_block, end_block] };
+                    let jump_cond = ir::Terminator::Jump { target: cond_start_block };
+
+                    self.prog.get_block_mut(start_block).terminator = jump_cond;
+                    self.prog.get_block_mut(cond_end_block).terminator = branch;
+                    self.prog.get_block_mut(body_end_block).terminator = jump_cond;
                 }
                 ast::StatementKind::Block(block) => {
                     self.append_block(scope, block)?;

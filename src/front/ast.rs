@@ -66,6 +66,7 @@ pub enum StatementKind {
     Assignment(Assignment),
     Expression(Box<Expression>),
     If(IfStatement),
+    While(WhileStatement),
     Block(Block),
 }
 
@@ -91,6 +92,13 @@ pub struct IfStatement {
     pub cond: Box<Expression>,
     pub then_block: Block,
     pub else_block: Option<Block>,
+}
+
+#[derive(Debug)]
+pub struct WhileStatement {
+    pub span: Span,
+    pub cond: Box<Expression>,
+    pub body: Block,
 }
 
 #[derive(Debug)]
@@ -124,7 +132,13 @@ pub enum ExpressionKind {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Mod,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Neq,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

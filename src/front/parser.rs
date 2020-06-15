@@ -30,6 +30,9 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("mut", TT::Mut),
     ("if", TT::If),
     ("else", TT::Else),
+    ("while", TT::While),
+    ("==", TT::DoubleEq),
+    ("!=", TT::NotEq),
     (";", TT::Semi),
     (":", TT::Colon),
     (",", TT::Comma),
@@ -63,6 +66,10 @@ pub enum TokenType {
     Mut,
     If,
     Else,
+    While,
+
+    NotEq,
+    DoubleEq,
 
     Semi,
     Colon,
@@ -260,6 +267,8 @@ impl BinOpInfo {
 }
 
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
+    BinOpInfo::new(3, TT::DoubleEq, true, BinaryOp::Eq),
+    BinOpInfo::new(3, TT::NotEq, true, BinaryOp::Neq),
     BinOpInfo::new(5, TT::Plus, true, BinaryOp::Add),
     BinOpInfo::new(5, TT::Minus, true, BinaryOp::Sub),
     BinOpInfo::new(6, TT::Slash, true, BinaryOp::Div),
@@ -453,9 +462,21 @@ impl<'a> Parser<'a> {
                     else_block,
                 }), false)
             },
+            TT::While => {
+                self.pop()?;
+
+                let cond = self.expression()?;
+                let body = self.block()?;
+
+                (ast::StatementKind::While(ast::WhileStatement {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    cond: Box::new(cond),
+                    body,
+                }), false)
+            },
             TT::OpenC => {
                 (ast::StatementKind::Block(self.block()?), false)
-            }
+            },
             _ => {
                 let left = self.expression()?;
 
@@ -473,7 +494,7 @@ impl<'a> Parser<'a> {
                 };
 
                 (kind, true)
-            }
+            },
         };
 
         if need_semi {

@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, BinaryOp};
+use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value};
 
 const HEADER: &str = r"global _main
 extern  _ExitProcess@4
@@ -22,6 +22,7 @@ fn binop_to_instr(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::Add => "add",
         BinaryOp::Sub => "sub",
+        BinaryOp::Eq | BinaryOp::Neq => todo!("== and != in x86"),
         //TODO these are more complicated, we need to mess with multiple registers here
         BinaryOp::Mul => todo!("mul in x86"),
         BinaryOp::Div => todo!("div in x86"),
@@ -145,7 +146,22 @@ impl AsmBuilder<'_> {
                     self.append_value_to_eax(right);
                     self.append_instr("mov ebx, eax");
                     self.append_value_to_eax(left);
-                    self.append_instr(&format!("{} eax, ebx", binop_to_instr(*kind)));
+
+                    //eax = op(eax, ebx)
+                    match kind {
+                        BinaryOp::Add => self.append_instr("add eax, ebx"),
+                        BinaryOp::Sub => self.append_instr("sub eax, ebx"),
+                        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => todo!("mul, div, mod in x86"),
+                        BinaryOp::Eq => {
+                            self.append_instr("cmp eax, ebx");
+                            self.append_instr("sete al");
+                        },
+                        BinaryOp::Neq => {
+                            self.append_instr("cmp eax, ebx");
+                            self.append_instr("setne al");
+                        },
+                    }
+
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
                 },
             }

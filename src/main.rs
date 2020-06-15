@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![deny(unused_must_use)]
 
 use std::fs::{File, read_to_string};
 use std::io::Write;
