@@ -160,12 +160,16 @@ impl AsmBuilder<'_> {
                             self.append_instr("mov eax, edx");
                         }
                         BinaryOp::Eq => {
+                            self.append_instr("xor ecx, ecx");
                             self.append_instr("cmp eax, ebx");
-                            self.append_instr("sete al");
+                            self.append_instr("sete cl");
+                            self.append_instr("mov eax, ecx");
                         },
                         BinaryOp::Neq => {
+                            self.append_instr("xor ecx, ecx");
                             self.append_instr("cmp eax, ebx");
-                            self.append_instr("setne al");
+                            self.append_instr("setne cl");
+                            self.append_instr("mov eax, ecx");
                         },
                     }
 
