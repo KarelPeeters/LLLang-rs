@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value};
+use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter};
 
 const HEADER: &str = r"global _main
 extern  _ExitProcess@4
@@ -22,6 +22,7 @@ struct AsmBuilder<'p> {
     prog: &'p Program,
     string: String,
     stack_size: i32,
+    param_stack_positions: IndexMap<Parameter, i32>,
     slot_stack_positions: IndexMap<StackSlot, i32>,
     instr_stack_positions: IndexMap<Instruction, i32>,
     //TODO make these match the indices in the IR debug format
@@ -65,8 +66,9 @@ impl AsmBuilder<'_> {
                 let func_number = self.func_number(*func);
                 self.append_instr(&format!("mov eax, func_{}", func_number));
             }
-            Value::Param(_param) => {
-                todo!("parameters in x86");
+            Value::Param(param) => {
+                let param_pos = *self.param_stack_positions.get(param).unwrap();
+                self.append_instr(&format!("mov eax, [esp+{}]", self.stack_size + param_pos));
             }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
@@ -92,7 +94,8 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("mov ebx, {}", cst.value));
             },
             Value::Param(_param) => {
-                todo!("parameters in x86")
+                //TODO is this true?
+                panic!("Parameters don't have an address")
             }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
@@ -137,11 +140,30 @@ impl AsmBuilder<'_> {
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
                 },
                 InstructionInfo::Call { target, args } => {
-                    assert!(args.is_empty(), "todo: parameters in x86");
                     self.append_instr(";call");
+
+                    //temporarily increase stack size for parameters
+                    let arg_size: i32 = args.iter().map(|&arg|
+                        type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(arg)))).sum();
+                    self.stack_size += arg_size;
+                    self.append_instr(&format!("sub esp, {}", arg_size));
+
+                    //write arguments to stack
+                    let mut curr_pos = 0;
+                    for arg in args {
+                        self.append_value_to_eax(arg);
+                        self.append_instr(&format!("mov [esp+{}], eax", curr_pos));
+                        curr_pos += type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(*arg)));
+                    }
+
+                    //actual call
                     self.append_value_to_eax(target);
                     self.append_instr("call eax");
                     self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+
+                    //restore stack
+                    self.stack_size -= arg_size;
+                    self.append_instr(&format!("add esp, {}", arg_size));
                 }
                 InstructionInfo::Binary { kind, left, right } => {
                     self.append_instr(";binop");
@@ -208,10 +230,22 @@ impl AsmBuilder<'_> {
 
     fn append_func(&mut self, func: Function) {
         let func_info = self.prog.get_func(func);
+        self.param_stack_positions.clear();
+        self.slot_stack_positions.clear();
+        self.instr_stack_positions.clear();
+
+        //determine the stack position for each parameter
+        //start at 4 to leave place for return address
+        let mut curr_param_pos = 4;
+        for &param in &func_info.params {
+            self.param_stack_positions.insert(param, curr_param_pos);
+            let size = type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
+            curr_param_pos += size
+        }
 
         //determine the stack position for each slot and value-returning instruction
-        //start at 8 to leave place for return address TODO why 8?
-        let mut stack_size = 8;
+        //start at 4 to leave place for return address
+        let mut stack_size = 4;
 
         for &slot in &func_info.slots {
             let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
@@ -264,6 +298,7 @@ pub fn lower(prog: &Program) -> String {
         prog,
         string: Default::default(),
         stack_size: Default::default(),
+        param_stack_positions: Default::default(),
         slot_stack_positions: Default::default(),
         instr_stack_positions: Default::default(),
         block_numbers: Default::default(),

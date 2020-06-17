@@ -87,7 +87,7 @@ fn run_exe(exe_path: &Path) -> std::io::Result<()> {
     println!("----Running----");
     let result = Command::new(exe_path).status()?;
 
-    println!("Exit code: {}", result);
+    println!("{}", result);
     Ok(())
 }
 
