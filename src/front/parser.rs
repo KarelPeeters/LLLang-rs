@@ -19,7 +19,9 @@ pub enum ParseError {
         description: &'static str,
         allowed: Vec<TokenType>,
     },
-    Eof,
+    Eof {
+        expected: &'static str,
+    },
 }
 
 const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
@@ -146,16 +148,21 @@ impl<'a> Tokenizer<'a> {
         self.left = &self.left[count..];
     }
 
-    fn skip_past(&mut self, pattern: &str, allow_eof: bool) -> Result<()> {
-        let index = match self.left.find(pattern) {
-            Some(i) => i,
+    fn skip_past(&mut self, pattern: &'static str, allow_eof: bool) -> Result<()> {
+        match self.left.find(pattern) {
+            Some(i) => {
+                //skip up to and including the pattern
+                self.skip_fixed(i + pattern.len());
+                Ok(())
+            },
             None => {
-                return if allow_eof { Ok(()) } else { Err(ParseError::Eof) }
-            }
-        };
+                if !allow_eof { return Err(ParseError::Eof { expected: pattern }) }
 
-        self.skip_fixed(index + pattern.len());
-        Ok(())
+                //skip to the end
+                self.skip_fixed(self.left.len());
+                Ok(())
+            }
+        }
     }
 
     fn skip_whitespace_and_comments(&mut self) -> Result<()> {
