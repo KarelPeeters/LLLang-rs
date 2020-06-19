@@ -57,6 +57,7 @@ gen_node_and_program_accessors![
     [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
+    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut],
 ];
 
 //TODO think about debug printing Node, right now it's kind of crappy with PhantomData
@@ -170,6 +171,7 @@ impl Program {
             Value::Param(param) => self.get_param(param).ty,
             Value::Slot(slot) => self.get_slot(slot).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
+            Value::Extern(ext) => self.get_ext(ext).ty,
         }
     }
 }
@@ -218,6 +220,7 @@ impl TypeInfo {
 pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
+    pub global_name: Option<String>,
     pub entry: Block,
     pub params: Vec<Parameter>,
     pub slots: Vec<StackSlot>,
@@ -226,7 +229,14 @@ pub struct FunctionInfo {
 impl FunctionInfo {
     pub fn new(func_ty: FunctionType, entry: Block, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
-        Self { ty, func_ty, entry, params: Vec::new(), slots: Vec::new() }
+        Self {
+            ty,
+            func_ty,
+            global_name: None,
+            entry,
+            params: Vec::new(),
+            slots: Vec::new(),
+        }
     }
 }
 
@@ -328,6 +338,7 @@ pub enum Value {
     Param(Parameter),
     Slot(StackSlot),
     Instr(Instruction),
+    Extern(Extern),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -340,6 +351,12 @@ impl Const {
     pub const fn new(ty: Type, value: i32) -> Self {
         Const { ty, value }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternInfo {
+    pub name: String,
+    pub ty: Type,
 }
 
 //Visitors

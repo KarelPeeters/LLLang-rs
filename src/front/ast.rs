@@ -35,10 +35,11 @@ pub enum Item {
 #[derive(Debug)]
 pub struct Function {
     pub span: Span,
+    pub ext: bool,
     pub id: Identifier,
     pub ret_ty: Option<Type>,
     pub params: Vec<Parameter>,
-    pub body: Block,
+    pub body: Option<Block>,
 }
 
 #[derive(Debug)]

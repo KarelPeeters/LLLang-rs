@@ -25,6 +25,7 @@ pub enum ParseError {
 }
 
 const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
+    ("extern", TT::Extern),
     ("fun", TT::Fun),
     ("->", TT::Arrow),
     ("return", TT::Return),
@@ -51,6 +52,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("}", TT::CloseC),
     ("true", TT::True),
     ("false", TT::False),
+    ("null", TT::Null),
 ];
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -60,7 +62,9 @@ pub enum TokenType {
 
     True,
     False,
+    Null,
 
+    Extern,
     Fun,
     Arrow,
     Return,
@@ -213,8 +217,9 @@ impl<'a> Tokenizer<'a> {
         }
 
         //identifier
-        if chars.peek().unwrap().is_ascii_alphabetic() {
-            let string: String = chars.take_while(|&c| c.is_ascii_alphanumeric() || c == '_').collect();
+        let c = *chars.peek().unwrap();
+        if c.is_ascii_alphabetic() || c == '_' {
+            let string: String = chars.take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '@').collect();
             self.skip_fixed(string.len());
             let end_pos = self.pos;
             return Ok(Token {
@@ -403,13 +408,16 @@ impl<'a> Parser<'a> {
         let token = self.peek();
 
         match token.ty {
-            TT::Fun => self.function().map(ast::Item::Function),
+            TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
             _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
         }
     }
 
     fn function(&mut self) -> Result<ast::Function> {
-        let start_pos = self.expect(TT::Fun, "function declaration")?.span.start;
+        let start_pos = self.peek().span.start;
+
+        let ext = self.accept(TT::Extern)?.is_some();
+        self.expect(TT::Fun, "function declaration")?;
         let id = self.identifier()?;
 
         self.expect(TT::OpenB, "start of parameters")?;
@@ -421,10 +429,15 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let body = self.block()?;
+        let body = if self.at(TT::OpenC) {
+            Some(self.block()?)
+        } else {
+            self.expect(TT::Semi, "end of function declaration")?;
+            None
+        };
 
-        let span = Span::new(start_pos, body.span.end);
-        Ok(ast::Function { span, id, ret_ty, params, body, })
+        let span = Span::new(start_pos, self.last_popped_end);
+        Ok(ast::Function { span, ext, id, ret_ty, params, body })
     }
 
     fn parameter(&mut self) -> Result<ast::Parameter> {
@@ -620,7 +633,7 @@ impl<'a> Parser<'a> {
         let start_pos = self.peek().span.start;
 
         match self.peek().ty {
-            TT::IntLit | TT::True | TT::False => {
+            TT::IntLit | TT::True | TT::False | TT::Null => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
                     span: token.span,

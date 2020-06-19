@@ -2,26 +2,28 @@ use indexmap::map::IndexMap;
 
 use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter};
 
-const HEADER: &str = r"global _main
-extern  _ExitProcess@4
-
-section .text";
-
+//TODO rethink what this means around alignment
 fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
     match ty {
         TypeInfo::Integer { bits: 32 } => 4,
-        //TODO maybe this can be made smaller, what is alignment anyway?
         TypeInfo::Integer { bits: 1 } => 4,
+        TypeInfo::Integer { bits: 8 } => 4,
         TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
         TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
-        TypeInfo::Void => 0
+        //TODO change this back to 0, but then we need to check the type whenever we store
+        TypeInfo::Void => 4
     }
 }
 
 struct AsmBuilder<'p> {
     prog: &'p Program,
-    string: String,
-    stack_size: i32,
+
+    text: String,
+    header: String,
+
+    local_stack_size: i32,
+    param_size: i32,
+
     param_stack_positions: IndexMap<Parameter, i32>,
     slot_stack_positions: IndexMap<StackSlot, i32>,
     instr_stack_positions: IndexMap<Instruction, i32>,
@@ -42,19 +44,17 @@ impl AsmBuilder<'_> {
     }
 
     fn append_ln(&mut self, line: &str) {
-        self.string.push_str(line);
-        self.string.push('\n');
+        self.text.push_str(line);
+        self.text.push('\n');
     }
 
     fn append_instr(&mut self, instr: &str) {
-        self.string.push_str("    ");
+        self.text.push_str("    ");
         self.append_ln(instr);
     }
 
-    /// ```
-    /// reg = value
-    /// ```
-    fn append_value_to_reg(&mut self, reg: &str, value: &Value) {
+    /// `reg = value`
+    fn append_value_to_reg(&mut self, reg: &str, value: &Value, stack_offset: i32) {
         match value {
             Value::Undef(_) => {
                 self.append_instr(&format!(";mov {}, undef", reg)) //easy
@@ -68,16 +68,21 @@ impl AsmBuilder<'_> {
             }
             Value::Param(param) => {
                 let param_pos = *self.param_stack_positions.get(param).unwrap();
-                self.append_instr(&format!("mov {}, [esp+{}]", reg, self.stack_size + param_pos));
+                self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + param_pos));
             }
             Value::Slot(slot) => {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
-                self.append_instr(&format!("lea {}, [esp+{}]", reg, self.stack_size - slot_pos));
+                self.append_instr(&format!("lea {}, [esp+{}]", reg, stack_offset + slot_pos));
             },
             Value::Instr(instr) => {
                 let instr_pos = *self.instr_stack_positions.get(instr).unwrap();
-                self.append_instr(&format!("mov {}, [esp+{}]", reg, self.stack_size - instr_pos));
+                self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + instr_pos));
             },
+            Value::Extern(ext) => {
+                let name = &self.prog.get_ext(*ext).name;
+                self.append_instr(&format!("mov {}, {}", reg, name));
+                self.header.push_str(&format!("extern {}\n", name))
+            }
         }
     }
 
@@ -102,46 +107,34 @@ impl AsmBuilder<'_> {
             match self.prog.get_instr(instr) {
                 InstructionInfo::Store { addr, value } => {
                     self.append_instr(";store");
-                    self.append_value_to_reg("eax", value);
-                    self.append_value_to_reg("ebx", addr);
+                    self.append_value_to_reg("eax", value, 0);
+                    self.append_value_to_reg("ebx", addr, 0);
                     self.append_instr("mov [ebx], eax");
                 },
                 InstructionInfo::Load { addr } => {
                     self.append_instr(";load");
-                    self.append_value_to_reg("ebx", addr);
+                    self.append_value_to_reg("ebx", addr, 0);
                     self.append_instr("mov eax, [ebx]");
-                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+                    self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 },
                 InstructionInfo::Call { target, args } => {
                     self.append_instr(";call");
 
-                    //temporarily increase stack size for parameters
-                    let arg_size: i32 = args.iter().map(|&arg|
-                        type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(arg)))).sum();
-                    self.stack_size += arg_size;
-                    self.append_instr(&format!("sub esp, {}", arg_size));
-
-                    //write arguments to stack
-                    let mut curr_pos = 0;
-                    for arg in args {
-                        self.append_value_to_reg("eax", arg);
-                        self.append_instr(&format!("mov [esp+{}], eax", curr_pos));
-                        curr_pos += type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(*arg)));
+                    let mut stack_offset = 0;
+                    for arg in args.iter().rev() {
+                        self.append_value_to_reg("eax", arg, stack_offset);
+                        self.append_instr("push eax");
+                        stack_offset += 4;
                     }
 
-                    //actual call
-                    self.append_value_to_reg("eax", target);
+                    self.append_value_to_reg("eax", target, stack_offset);
                     self.append_instr("call eax");
-                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
-
-                    //restore stack
-                    self.stack_size -= arg_size;
-                    self.append_instr(&format!("add esp, {}", arg_size));
+                    self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
                 InstructionInfo::Binary { kind, left, right } => {
                     self.append_instr(";binop");
-                    self.append_value_to_reg("eax", left);
-                    self.append_value_to_reg("ebx", right);
+                    self.append_value_to_reg("eax", left, 0);
+                    self.append_value_to_reg("ebx", right, 0);
 
                     //eax = op(eax, ebx)
                     match kind {
@@ -167,7 +160,7 @@ impl AsmBuilder<'_> {
                         },
                     }
 
-                    self.append_instr(&format!("mov [esp+{}], eax", self.stack_size - instr_pos));
+                    self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 },
             }
         }
@@ -182,17 +175,16 @@ impl AsmBuilder<'_> {
                 let true_block_number = self.block_number(*true_block);
                 let false_block_number = self.block_number(*false_block);
 
-                self.append_value_to_reg("eax", cond);
+                self.append_value_to_reg("eax", cond, 0);
 
                 self.append_instr("test eax, eax");
                 self.append_instr(&format!("jnz block_{}", true_block_number));
                 self.append_instr(&format!("jmp block_{}", false_block_number));
             },
             Terminator::Return { value } => {
-                self.append_value_to_reg("eax", value);
-                //shrink stack
-                self.append_instr(&format!("add esp, {}", self.stack_size));
-                self.append_instr("ret");
+                self.append_value_to_reg("eax", value, 0);
+                self.append_instr(&format!("add esp, {}", self.local_stack_size));
+                self.append_instr(&format!("ret {}", self.param_size));
             }
             Terminator::Unreachable => {
                 self.append_instr("hlt");
@@ -206,19 +198,10 @@ impl AsmBuilder<'_> {
         self.slot_stack_positions.clear();
         self.instr_stack_positions.clear();
 
-        //determine the stack position for each parameter
-        //start at 4 to leave place for return address
-        let mut curr_param_pos = 4;
-        for &param in &func_info.params {
-            self.param_stack_positions.insert(param, curr_param_pos);
-            let size = type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
-            curr_param_pos += size
-        }
-
         //determine the stack position for each slot and value-returning instruction
-        //start at 4 to leave place for return address
-        let mut stack_size = 4;
+        let mut stack_size = 0;
 
+        //TODO for stdcall we don't actually need to allocate slots, they already have an address on the stack
         for &slot in &func_info.slots {
             let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
             let size = type_size_in_bytes(ty);
@@ -235,22 +218,36 @@ impl AsmBuilder<'_> {
             }
         });
 
-        self.stack_size = stack_size;
+        //the local stack size is the stack size excluding the parameters and the isp
+        self.local_stack_size = stack_size;
+
+        //space for isp
+        stack_size += 4;
+
+        let mut param_size = 0;
+
+        //determine the stack position for each parameter
+        for &param in func_info.params.iter() {
+            self.param_stack_positions.insert(param, stack_size);
+            let size = type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
+            stack_size += size;
+            param_size += size;
+        }
+
+        self.param_size = param_size;
 
         let func_number = self.func_number(func);
         self.append_ln(&format!("func_{}:", func_number));
 
         //grow stack
-        self.append_instr(&format!("sub esp, {}", stack_size));
+        self.append_instr(&format!("sub esp, {}", self.local_stack_size));
 
         self.prog.visit_blocks(func, |block| {
             self.append_block(block);
         });
     }
 
-    pub fn lower(&mut self) {
-        self.append_ln(HEADER);
-
+    pub fn lower(mut self) -> String {
         //call main function
         let main_func_number = self.func_number(self.prog.main);
         self.append_ln("_main:");
@@ -258,24 +255,30 @@ impl AsmBuilder<'_> {
         self.append_instr("push eax");
         self.append_instr("call _ExitProcess@4");
 
+        //hardcode dependency TODO eventually remove this
+        self.header.push_str("extern _ExitProcess@4\n");
+
         //write out all of the functions
         self.prog.visit_funcs(|func| {
             self.append_func(func)
         });
+
+        //format everything together
+        format!("global _main\n{}\nsection .text\n{}", self.header, self.text)
     }
 }
 
 pub fn lower(prog: &Program) -> String {
-    let mut asm = AsmBuilder {
+    AsmBuilder {
         prog,
-        string: Default::default(),
-        stack_size: Default::default(),
+        text: Default::default(),
+        header: Default::default(),
+        local_stack_size: Default::default(),
+        param_size: Default::default(),
         param_stack_positions: Default::default(),
         slot_stack_positions: Default::default(),
         instr_stack_positions: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
-    };
-    asm.lower();
-    asm.string
+    }.lower()
 }

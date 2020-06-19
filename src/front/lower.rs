@@ -72,6 +72,7 @@ impl<'a> Lower<'a> {
                 "int" => Ok(self.prog.define_type_int(32)),
                 "bool" => Ok(self.prog.type_bool()),
                 "void" => Ok(self.prog.type_void()),
+                "byte" => Ok(self.prog.define_type_int(8)),
                 _ => Err(Error::InvalidType(ty)),
             },
             ast::TypeKind::Ref(inner) => {
@@ -89,10 +90,32 @@ impl<'a> Lower<'a> {
     }
 
     fn parse_literal(&mut self, span: Span, lit: &str, expect_ty: Option<ir::Type>) -> Result<'static, ir::Const> {
+        if lit == "null" {
+            let void_ptr_ty = self.prog.define_type_ptr(self.prog.type_void());
+            let null_ptr_const = ir::Const::new(void_ptr_ty, 0);
+
+            return if let Some(ty) = expect_ty {
+                if ty != void_ptr_ty {
+                    Err(Error::InvalidLiteral {
+                        span,
+                        lit: lit.to_owned(),
+                        ty: self.prog.format_type(ty).to_string(),
+                    })
+                } else {
+                    Ok(null_ptr_const)
+                }
+            } else {
+                Ok(null_ptr_const)
+            }
+        }
+
+
         if let Some(ty) = expect_ty {
             let value = match self.prog.get_type(ty) {
                 ir::TypeInfo::Integer { bits: 1 } =>
                     lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()),
+                ir::TypeInfo::Integer { bits: 8 } =>
+                    lit.parse::<i8>().map(|v| v as i32).map_err(|_| ()),
                 ir::TypeInfo::Integer { bits: 32 } =>
                     lit.parse::<i32>().map_err(|_| ()),
                 _ => {
@@ -382,7 +405,8 @@ impl<'a> Lower<'a> {
             scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
         }
 
-        self.append_block(&mut scope, &func.body)?;
+        let body = func.body.as_ref().expect("can only generate code for functions with body");
+        self.append_block(&mut scope, body)?;
 
         if self.prog.get_func(self.curr_func).entry == self.curr_block {
             //TODO this return check has lots of false negatives
@@ -411,23 +435,64 @@ impl<'a> Lower<'a> {
                         .collect::<Result<_>>()?;
                     let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
 
-                    let ir_func = ir::FunctionInfo::new(func_ty, tmp_entry, &mut self.prog);
-                    let ir_func = self.prog.define_func(ir_func);
+                    let value = match (func.ext, &func.body) {
+                        (true, None) => {
+                            //external function, leave this for the backend to figure out
+                            let func_ty = self.prog.define_type_func(func_ty);
+                            let ir_ext = ir::ExternInfo { name: func.id.string.clone(), ty: func_ty };
+                            let ir_ext = self.prog.define_ext(ir_ext);
+                            ir::Value::Extern(ir_ext)
+                        }
+                        (false, None) => {
+                            //functions need bodies
+                            return Err(Error::MissingFunctionBody(func))
+                        }
+                        (ext, Some(_)) => {
+                            //standard function, maybe marked extern
+                            let mut ir_func = ir::FunctionInfo::new(func_ty, tmp_entry, &mut self.prog);
+                            if ext {
+                                ir_func.global_name = Some(func.id.string.clone());
+                            }
+                            let ir_func = self.prog.define_func(ir_func);
 
-                    scope.declare_variable(&func.id, LRValue::Right(ir::Value::Func(ir_func)))?;
-                    assert!(self.functions.insert(&func.id.string, ir_func).is_none());
+                            if self.functions.insert(&func.id.string, ir_func).is_some() {
+                                return Err(Error::IdentifierDeclaredTwice(&func.id));
+                            }
+                            if &func.id.string == "main" {
+                                let type_int = self.prog.define_type_int(32);
+                                let main_func_ty = self.prog.define_type_func(ir::FunctionType {
+                                    params: Vec::new(),
+                                    ret: type_int,
+                                });
 
-                    if &func.id.string == "main" {
-                        main = Some(ir_func);
-                    }
+                                let func_ty = self.prog.get_func(ir_func).ty;
+
+                                if func_ty != main_func_ty {
+                                    return Err(Error::MainFunctionWrongType {
+                                        expected: self.prog.format_type(main_func_ty).to_string(),
+                                        actual: self.prog.format_type(func_ty).to_string(),
+                                    })
+                                }
+
+                                main = Some(ir_func);
+                            }
+
+                            ir::Value::Func(ir_func)
+                        }
+                    };
+
+                    scope.declare_variable(&func.id, LRValue::Right(value))?;
                 },
             }
         }
 
+        //actually generate code for functions
         for item in &prog.items {
             match item {
                 ast::Item::Function(func) => {
-                    self.append_func(&scope, func)?;
+                    if func.body.is_some() {
+                        self.append_func(&scope, func)?;
+                    }
                 },
             }
         }
@@ -595,7 +660,12 @@ pub enum LowerError<'a> {
 
     //other
     NoMainFunction,
+    MainFunctionWrongType {
+        expected: TypeString,
+        actual: TypeString,
+    },
     MissingReturn(&'a ast::Function),
+    MissingFunctionBody(&'a ast::Function),
     WrongArgCount {
         call: &'a ast::Expression,
         expected: usize,
