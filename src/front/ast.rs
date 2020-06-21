@@ -29,7 +29,8 @@ pub struct Program {
 
 #[derive(Debug)]
 pub enum Item {
-    Function(Function)
+    Function(Function),
+    Const(Declaration),
 }
 
 #[derive(Debug)]
@@ -110,7 +111,11 @@ pub struct Expression {
 
 #[derive(Debug)]
 pub enum ExpressionKind {
-    Literal { value: String },
+    IntLit { value: String },
+    BoolLit { value: bool },
+    StringLit { value: String },
+    Null,
+    
     Identifier { id: Identifier },
 
     Call {

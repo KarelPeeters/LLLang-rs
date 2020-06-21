@@ -30,6 +30,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
     ("->", TT::Arrow),
     ("return", TT::Return),
     ("let", TT::Let),
+    ("const", TT::Const),
     ("mut", TT::Mut),
     ("if", TT::If),
     ("else", TT::Else),
@@ -59,6 +60,7 @@ const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
 pub enum TokenType {
     Id,
     IntLit,
+    StringLit,
 
     True,
     False,
@@ -69,6 +71,7 @@ pub enum TokenType {
     Arrow,
     Return,
     Let,
+    Const,
     Mut,
     If,
     Else,
@@ -202,10 +205,13 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
+        //TODO all this stuff can be rewritten to directly index into `left` instead of messing with
+        // iterators, that would properly be more readable
         let mut chars = self.left.chars().peekable();
+        let peek = *chars.peek().unwrap();
 
         //number
-        if chars.peek().unwrap().is_ascii_digit() {
+        if peek.is_ascii_digit() {
             let string: String = chars.take_while(|&c| c.is_ascii_digit()).collect();
             self.skip_fixed(string.len());
             let end_pos = self.pos;
@@ -217,8 +223,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         //identifier
-        let c = *chars.peek().unwrap();
-        if c.is_ascii_alphabetic() || c == '_' {
+        if peek.is_ascii_alphabetic() || peek == '_' {
             let string: String = chars.take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '@').collect();
             self.skip_fixed(string.len());
             let end_pos = self.pos;
@@ -227,6 +232,22 @@ impl<'a> Tokenizer<'a> {
                 string,
                 span: Span::new(start_pos, end_pos),
             });
+        }
+
+        //string literal
+        if peek == '"' {
+            let closing_index = 1 + self.left[1..].find('"')
+                .ok_or(ParseError::Eof { expected: "\"" })?;
+
+            let content = self.left[1..closing_index].to_owned();
+            self.skip_fixed(2 + content.len());
+
+            let end_pos = self.pos;
+            return Ok(Token {
+                ty: TT::StringLit,
+                string: content,
+                span: Span::new(start_pos, end_pos),
+            })
         }
 
         Err(ParseError::Char {
@@ -409,6 +430,11 @@ impl<'a> Parser<'a> {
 
         match token.ty {
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
+            TT::Const => {
+                let item = self.variable_declaration(TT::Const).map(ast::Item::Const);
+                self.expect(TT::Semi, "end of const declaration")?;
+                item
+            },
             _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
         }
     }
@@ -463,7 +489,7 @@ impl<'a> Parser<'a> {
         let (kind, need_semi) = match token.ty {
             TT::Let => {
                 //declaration
-                let decl = self.variable_declaration()?;
+                let decl = self.variable_declaration(TT::Let)?;
                 (ast::StatementKind::Declaration(decl), true)
             },
             TT::If => {
@@ -525,8 +551,8 @@ impl<'a> Parser<'a> {
         Ok(ast::Statement { span, kind })
     }
 
-    fn variable_declaration(&mut self) -> Result<ast::Declaration> {
-        let start_pos = self.expect(TT::Let, "variable declaration")?.span.start;
+    fn variable_declaration(&mut self, ty: TT) -> Result<ast::Declaration> {
+        let start_pos = self.expect(ty, "variable declaration")?.span.start;
         let mutable = self.accept(TT::Mut)?.is_some();
         let id = self.identifier()?;
 
@@ -633,13 +659,36 @@ impl<'a> Parser<'a> {
         let start_pos = self.peek().span.start;
 
         match self.peek().ty {
-            TT::IntLit | TT::True | TT::False | TT::Null => {
+            TT::IntLit => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
                     span: token.span,
-                    kind: ast::ExpressionKind::Literal { value: token.string },
+                    kind: ast::ExpressionKind::IntLit { value: token.string },
                 })
-            }
+            },
+            TT::True | TT::False => {
+                let token = self.pop()?;
+                Ok(ast::Expression {
+                    span: token.span,
+                    kind: ast::ExpressionKind::BoolLit { value: token.string.parse().expect("TTs should parse correctly") },
+                })
+            },
+            TT::Null => {
+                let token = self.pop()?;
+                Ok(ast::Expression {
+                    span: token.span,
+                    kind: ast::ExpressionKind::Null,
+                })
+            },
+            TT::StringLit => {
+                let token = self.pop()?;
+                Ok(ast::Expression {
+                    span: token.span,
+                    kind: ast::ExpressionKind::StringLit {
+                        value: token.string
+                    }
+                })
+            },
             TT::Id => {
                 let token = self.pop()?;
                 Ok(ast::Expression {

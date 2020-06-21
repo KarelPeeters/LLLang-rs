@@ -58,6 +58,7 @@ gen_node_and_program_accessors![
     [Block, BlockInfo, define_block, get_block, get_block_mut],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
     [Extern, ExternInfo, define_ext, get_ext, get_ext_mut],
+    [Data, DataInfo, define_data, get_data, get_data_mut],
 ];
 
 //TODO think about debug printing Node, right now it's kind of crappy with PhantomData
@@ -172,6 +173,7 @@ impl Program {
             Value::Slot(slot) => self.get_slot(slot).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
             Value::Extern(ext) => self.get_ext(ext).ty,
+            Value::Data(data) => self.get_data(data).ty,
         }
     }
 }
@@ -330,6 +332,7 @@ impl Terminator {
     }
 }
 
+//TODO undef, func, param, slot, extern and data can all be "marked" const I think
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
     Undef(Type),
@@ -339,6 +342,13 @@ pub enum Value {
     Slot(StackSlot),
     Instr(Instruction),
     Extern(Extern),
+    Data(Data),
+}
+
+#[derive(Debug)]
+pub struct DataInfo {
+    pub ty: Type,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter};
+use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter, Data};
 
 //TODO rethink what this means around alignment
 fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
@@ -30,6 +30,7 @@ struct AsmBuilder<'p> {
     //TODO make these match the indices in the IR debug format
     block_numbers: IndexMap<Block, usize>,
     func_numbers: IndexMap<Function, usize>,
+    data_numbers: IndexMap<Data, usize>,
 }
 
 impl AsmBuilder<'_> {
@@ -41,6 +42,11 @@ impl AsmBuilder<'_> {
     fn func_number(&mut self, func: Function) -> usize {
         let next_num = self.func_numbers.len();
         *self.func_numbers.entry(func).or_insert(next_num)
+    }
+
+    fn data_number(&mut self, data: Data) -> usize {
+        let next_num = self.data_numbers.len();
+        *self.data_numbers.entry(data).or_insert(next_num)
     }
 
     fn append_ln(&mut self, line: &str) {
@@ -82,6 +88,10 @@ impl AsmBuilder<'_> {
                 let name = &self.prog.get_ext(*ext).name;
                 self.append_instr(&format!("mov {}, {}", reg, name));
                 self.header.push_str(&format!("extern {}\n", name))
+            }
+            Value::Data(data) => {
+                let data_number = self.data_number(*data);
+                self.append_instr(&format!("mov {}, data_{}", reg, data_number));
             }
         }
     }
@@ -263,6 +273,18 @@ impl AsmBuilder<'_> {
             self.append_func(func)
         });
 
+        //write out all of the data
+        //TODO maybe write this to the data section instead of the text section
+        for (&data, &data_num) in &self.data_numbers {
+            self.text.push_str(&format!("data_{}:\n  db ", data_num));
+
+            let data_info = self.prog.get_data(data);
+            for b in &data_info.bytes {
+                self.text.push_str(&format!("{}, ", b));
+            }
+            self.text.push('\n');
+        }
+
         //format everything together
         format!("global _main\n{}\nsection .text\n{}", self.header, self.text)
     }
@@ -280,5 +302,6 @@ pub fn lower(prog: &Program) -> String {
         instr_stack_positions: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
+        data_numbers: Default::default(),
     }.lower()
 }

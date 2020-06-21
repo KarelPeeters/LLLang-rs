@@ -89,60 +89,6 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn parse_literal(&mut self, span: Span, lit: &str, expect_ty: Option<ir::Type>) -> Result<'static, ir::Const> {
-        if lit == "null" {
-            let void_ptr_ty = self.prog.define_type_ptr(self.prog.type_void());
-            let null_ptr_const = ir::Const::new(void_ptr_ty, 0);
-
-            return if let Some(ty) = expect_ty {
-                if ty != void_ptr_ty {
-                    Err(Error::InvalidLiteral {
-                        span,
-                        lit: lit.to_owned(),
-                        ty: self.prog.format_type(ty).to_string(),
-                    })
-                } else {
-                    Ok(null_ptr_const)
-                }
-            } else {
-                Ok(null_ptr_const)
-            }
-        }
-
-
-        if let Some(ty) = expect_ty {
-            let value = match self.prog.get_type(ty) {
-                ir::TypeInfo::Integer { bits: 1 } =>
-                    lit.parse::<bool>().map(|b| b as i32).map_err(|_| ()),
-                ir::TypeInfo::Integer { bits: 8 } =>
-                    lit.parse::<i8>().map(|v| v as i32).map_err(|_| ()),
-                ir::TypeInfo::Integer { bits: 32 } =>
-                    lit.parse::<i32>().map_err(|_| ()),
-                _ => {
-                    return Err(Error::InvalidLiteralType {
-                        span,
-                        ty: self.prog.format_type(ty).to_string(),
-                    })
-                }
-            };
-
-            match value {
-                Ok(value) => Ok(ir::Const::new(ty, value)),
-                Err(()) => Err(Error::InvalidLiteral {
-                    span,
-                    lit: lit.to_owned(),
-                    ty: self.prog.format_type(ty).to_string(),
-                }),
-            }
-        } else {
-            match lit {
-                "true" => Ok(ir::Const::new(self.prog.type_bool(), true as i32)),
-                "false" => Ok(ir::Const::new(self.prog.type_bool(), false as i32)),
-                _ => Err(Error::CannotInferType(span)),
-            }
-        }
-    }
-
     fn type_of_lrvalue(&self, value: LRValue) -> ir::Type {
         match value {
             LRValue::Left(value) => {
@@ -221,9 +167,41 @@ impl<'a> Lower<'a> {
                        expect_ty: Option<ir::Type>,
     ) -> Result<'a, LRValue> {
         let result_value = match &expr.kind {
-            ast::ExpressionKind::Literal { value } => {
-                let value = self.parse_literal(expr.span, &value, expect_ty)?;
-                Ok(LRValue::Right(ir::Value::Const(value)))
+            ast::ExpressionKind::Null => {
+                // flexible, null can take on any pointer type
+                let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
+                self.prog.get_type(ty).unwrap_ptr()
+                    .ok_or(Error::ExpectPointerType {
+                        expression: expr,
+                        actual: self.prog.format_type(ty).to_string(),
+                    })?;
+
+                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty, value: 0 })))
+            }
+            ast::ExpressionKind::BoolLit { value } => {
+                let ty_bool = self.prog.type_bool();
+                self.check_type_match(expr, expect_ty, ty_bool)?;
+                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty: ty_bool, value: *value as i32 })))
+            }
+            ast::ExpressionKind::IntLit { value } => {
+                let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
+                self.prog.get_type(ty).unwrap_int()
+                    .ok_or(Error::ExpectIntegerType {
+                        expression: expr,
+                        actual: self.prog.format_type(ty).to_string(),
+                    })?;
+
+                let value = value.parse::<i32>()
+                    .map_err(|_| Error::InvalidLiteral {
+                        span: expr.span,
+                        lit: value.clone(),
+                        ty: self.prog.format_type(ty).to_string(),
+                    })?;
+
+                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty, value })))
+            }
+            ast::ExpressionKind::StringLit { .. } => {
+                panic!("string literals only supported in consts for now")
             }
             ast::ExpressionKind::Identifier { id } => {
                 let var = scope.find_variable(id)?;
@@ -459,21 +437,6 @@ impl<'a> Lower<'a> {
                                 return Err(Error::IdentifierDeclaredTwice(&func.id));
                             }
                             if &func.id.string == "main" {
-                                let type_int = self.prog.define_type_int(32);
-                                let main_func_ty = self.prog.define_type_func(ir::FunctionType {
-                                    params: Vec::new(),
-                                    ret: type_int,
-                                });
-
-                                let func_ty = self.prog.get_func(ir_func).ty;
-
-                                if func_ty != main_func_ty {
-                                    return Err(Error::MainFunctionWrongType {
-                                        expected: self.prog.format_type(main_func_ty).to_string(),
-                                        actual: self.prog.format_type(func_ty).to_string(),
-                                    })
-                                }
-
                                 main = Some(ir_func);
                             }
 
@@ -483,6 +446,28 @@ impl<'a> Lower<'a> {
 
                     scope.declare_variable(&func.id, LRValue::Right(value))?;
                 },
+                ast::Item::Const(decl) => {
+                    let ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
+                    let init = decl.init.as_ref().expect("consts need initialized for now");
+
+                    match &init.kind {
+                        ast::ExpressionKind::StringLit { value } => {
+                            let ty_byte = self.prog.define_type_int(8);
+                            let ty_byte_ptr = self.prog.define_type_ptr(ty_byte);
+                            self.check_type_match(&init, ty, ty_byte_ptr)?;
+
+                            let data = self.prog.define_data(ir::DataInfo {
+                                ty: ty_byte_ptr,
+                                bytes: value.clone().into_bytes()
+                            });
+
+                            scope.declare_variable(&decl.id, LRValue::Right(ir::Value::Data(data)))?;
+                        },
+                        kind => {
+                            panic!("This kind of const initializer is not supported for now: {:?}", kind)
+                        }
+                    }
+                }
             }
         }
 
@@ -494,6 +479,7 @@ impl<'a> Lower<'a> {
                         self.append_func(&scope, func)?;
                     }
                 },
+                ast::Item::Const(_) => {}
             }
         }
 
