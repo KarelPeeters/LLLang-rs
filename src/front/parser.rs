@@ -24,81 +24,64 @@ pub enum ParseError {
     },
 }
 
-const TRIVIAL_TOKEN_LIST: &[(&str, TT)] = &[
-    ("extern", TT::Extern),
-    ("fun", TT::Fun),
-    ("->", TT::Arrow),
-    ("return", TT::Return),
-    ("let", TT::Let),
-    ("const", TT::Const),
-    ("mut", TT::Mut),
-    ("if", TT::If),
-    ("else", TT::Else),
-    ("while", TT::While),
-    ("==", TT::DoubleEq),
-    ("!=", TT::NotEq),
-    (";", TT::Semi),
-    (":", TT::Colon),
-    (",", TT::Comma),
-    ("=", TT::Eq),
-    ("&", TT::Ampersand),
-    ("*", TT::Star),
-    ("+", TT::Plus),
-    ("-", TT::Minus),
-    ("/", TT::Slash),
-    ("%", TT::Percent),
-    ("(", TT::OpenB),
-    (")", TT::CloseB),
-    ("{", TT::OpenC),
-    ("}", TT::CloseC),
-    ("true", TT::True),
-    ("false", TT::False),
-    ("null", TT::Null),
-];
+macro_rules! declare_tokens {
+    ($($token:ident$(($string:literal))?,)*) => {
+        #[derive(Eq, PartialEq, Copy, Clone, Debug)]
+        pub enum TokenType {
+            $($token,)*
+        }
 
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
-pub enum TokenType {
+        const TRIVIAL_TOKEN_LIST: &[(&'static str, TokenType)] = &[
+            $($(($string, TokenType::$token),)?)*
+        ];
+    };
+}
+
+declare_tokens![
     Id,
     IntLit,
     StringLit,
 
-    True,
-    False,
-    Null,
+    True("true"),
+    False("false"),
+    Null("null"),
 
-    Extern,
-    Fun,
-    Arrow,
-    Return,
-    Let,
-    Const,
-    Mut,
-    If,
-    Else,
-    While,
+    Extern("extern"),
+    Fun("fun"),
+    Return("return"),
+    Let("let"),
+    Const("const"),
+    Mut("mut"),
+    If("if"),
+    Else("else"),
+    While("while"),
 
-    NotEq,
-    DoubleEq,
+    Arrow("->"),
 
-    Semi,
-    Colon,
-    Comma,
-    Eq,
-    Ampersand,
-    Star,
+    NotEq("!="),
+    DoubleEq("=="),
 
-    Plus,
-    Minus,
-    Slash,
-    Percent,
+    Plus("+"),
+    Minus("-"),
+    Slash("/"),
+    Percent("%"),
 
-    OpenB,
-    CloseB,
-    OpenC,
-    CloseC,
+    Semi(";"),
+    Colon(":"),
+    Comma(","),
+    Eq("="),
+    Ampersand("&"),
+    Star("*"),
+
+    OpenB("("),
+    CloseB(")"),
+    OpenC("{"),
+    CloseC("}"),
+    OpenS("["),
+    CloseS("]"),
 
     Eof,
-}
+];
 
 #[derive(Debug)]
 pub struct Token {
