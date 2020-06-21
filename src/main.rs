@@ -68,6 +68,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
 
     let result = Command::new("link")
         .current_dir(asm_path.parent().unwrap())
+        .arg("/nologo")
         .arg("/subsystem:console")
         .arg("/nodefaultlib")
         .arg("/entry:main")
@@ -83,7 +84,6 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
 }
 
 fn run_exe(exe_path: &Path) -> std::io::Result<()> {
-    println!("{:?}", exe_path);
     println!("----Running----");
     let result = Command::new(exe_path).status()?;
 
