@@ -498,6 +498,22 @@ impl<'a> Lower<'a> {
         }
 
         if let Some(main) = main {
+            //typecheck
+            let type_int = self.prog.define_type_int(32);
+            let main_func_ty = self.prog.define_type_func(ir::FunctionType {
+                params: Vec::new(),
+                ret: type_int,
+            });
+
+            let func_ty = self.prog.get_func(main).ty;
+
+            if func_ty != main_func_ty {
+                return Err(Error::MainFunctionWrongType {
+                    expected: self.prog.format_type(main_func_ty).to_string(),
+                    actual: self.prog.format_type(func_ty).to_string(),
+                })
+            }
+
             self.prog.main = main;
         } else {
             return Err(Error::NoMainFunction)
