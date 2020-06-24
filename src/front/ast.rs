@@ -134,6 +134,8 @@ pub enum ExpressionKind {
     },
 
     Return { value: Option<Box<Expression>> },
+    Continue,
+    Break,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

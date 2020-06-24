@@ -8,6 +8,11 @@ use crate::mid::ir;
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
+struct LoopInfo {
+    cond: ir::Block,
+    end: ir::Block,
+}
+
 struct Lower<'a> {
     prog: ir::Program,
     functions: IndexMap<&'a str, ir::Function>,
@@ -15,6 +20,8 @@ struct Lower<'a> {
     //TODO replace this global state with parameters
     curr_func: ir::Function,
     curr_block: ir::Block,
+
+    curr_loops: Vec<LoopInfo>,
 
     ph: PhantomData<&'a ()>,
 }
@@ -334,7 +341,11 @@ impl<'a> Lower<'a> {
                 //  or even more ideally we'd have proper typechecking in lower!
                 let ty = expect_ty.unwrap_or(self.prog.type_void());
                 Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
-            }
+            },
+            ast::ExpressionKind::Continue =>
+                self.append_break_or_continue(expr, expect_ty, |info| info.cond),
+            ast::ExpressionKind::Break =>
+                self.append_break_or_continue(expr, expect_ty, |info| info.end),
         }?;
 
         //check that the returned value's type is indeed expect_ty
@@ -346,10 +357,28 @@ impl<'a> Lower<'a> {
         Ok(result_value)
     }
 
-    fn append_expr_loaded(&mut self,
-                              scope: &mut Scope,
-                              expr: &'a ast::Expression,
-                              expect_ty: Option<ir::Type>,
+    fn append_break_or_continue<F: FnOnce(&LoopInfo) -> ir::Block>(
+        &mut self,
+        expr: &'a ast::Expression,
+        expect_ty: Option<ir::Type>,
+        target: F,
+    ) -> Result<'a, LRValue> {
+        let loop_info = self.curr_loops.last()
+            .ok_or(Error::NotInLoop { expr })?;
+
+        let jump_cond = ir::Terminator::Jump { target: target(loop_info) };
+        self.prog.get_block_mut(self.curr_block).terminator = jump_cond;
+
+        self.start_new_block();
+        let ty = expect_ty.unwrap_or(self.prog.type_void());
+        Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
+    }
+
+    fn append_expr_loaded(
+        &mut self,
+        scope: &mut Scope,
+        expr: &'a ast::Expression,
+        expect_ty: Option<ir::Type>,
     ) -> Result<'a, ir::Value> {
         let value = self.append_expr(scope, expr, expect_ty)?;
         Ok(self.append_load(value))
@@ -585,15 +614,23 @@ impl<'a> Lower<'a> {
                     let cond = self.append_expr_loaded(scope, &while_stmt.cond, Some(self.prog.type_bool()))?;
                     let cond_end_block = self.curr_block;
 
+                    //end
+                    self.start_new_block();
+                    let end_block = self.curr_block;
+
+                    let info = LoopInfo {
+                        cond: cond_start_block,
+                        end: end_block,
+                    };
+                    self.curr_loops.push(info);
+
                     //body
                     self.start_new_block();
                     let body_start_block = self.curr_block;
                     self.append_block(scope, &while_stmt.body)?;
                     let body_end_block = self.curr_block;
 
-                    //end
-                    self.start_new_block();
-                    let end_block = self.curr_block;
+                    self.curr_loops.pop().unwrap();
 
                     //connect everything
                     let branch = ir::Terminator::Branch { cond, targets: [body_start_block, end_block] };
@@ -602,6 +639,9 @@ impl<'a> Lower<'a> {
                     self.prog.get_block_mut(start_block).terminator = jump_cond;
                     self.prog.get_block_mut(cond_end_block).terminator = branch;
                     self.prog.get_block_mut(body_end_block).terminator = jump_cond;
+
+                    //continue withing code to end
+                    self.curr_block = end_block;
                 }
                 ast::StatementKind::Block(block) => {
                     self.append_block(scope, block)?;
@@ -672,6 +712,9 @@ pub enum LowerError<'a> {
         call: &'a ast::Expression,
         expected: usize,
         actual: usize,
+    },
+    NotInLoop {
+        expr: &'a ast::Expression,
     }
 }
 
@@ -681,8 +724,9 @@ pub fn lower(prog: &ast::Program) -> Result<ir::Program> {
         functions: Default::default(),
         curr_func: ir_prog.main,
         curr_block: ir_prog.get_func(ir_prog.main).entry,
+        curr_loops: Default::default(),
         prog: ir_prog,
-        ph: PhantomData
+        ph: PhantomData,
     };
     lower.lower(prog)
 }

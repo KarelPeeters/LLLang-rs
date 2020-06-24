@@ -55,6 +55,8 @@ declare_tokens![
     If("if"),
     Else("else"),
     While("while"),
+    Break("break"),
+    Continue("continue"),
 
     Arrow("->"),
 
@@ -700,6 +702,18 @@ impl<'a> Parser<'a> {
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::Return { value },
+                })
+            }
+            TT::Continue => {
+                Ok(ast::Expression {
+                    span: self.pop()?.span,
+                    kind: ast::ExpressionKind::Continue,
+                })
+            }
+            TT::Break => {
+                Ok(ast::Expression {
+                    span: self.pop()?.span,
+                    kind: ast::ExpressionKind::Break,
                 })
             }
             _ => Err(Self::unexpected_token(self.peek(), EXPR_START_TOKENS, "expression"))
