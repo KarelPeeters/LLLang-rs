@@ -1,17 +1,120 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter, Data};
+use crate::mid::ir::{BinaryOp, Block, Data, Function, Instruction, InstructionInfo, Parameter, Program, StackSlot, Terminator, Type, TypeInfo, Value};
 
-//TODO rethink what this means around alignment
-fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
-    match ty {
-        TypeInfo::Integer { bits: 32 } => 4,
-        TypeInfo::Integer { bits: 1 } => 4,
-        TypeInfo::Integer { bits: 8 } => 4,
-        TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
-        TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
-        //TODO change this back to 0, but then we need to check the type whenever we store
-        TypeInfo::Void => 4
+const STACK_ALIGNMENT: i32 = 4;
+
+struct Layout {
+    size: i32,
+    alignment: i32,
+}
+
+impl Layout {
+    pub fn new(size: i32, alignment: i32) -> Self {
+        assert!(alignment >= 1);
+        assert!(size >= 0);
+        Layout { size, alignment }
+    }
+}
+
+fn type_layout(prog: &Program, ty: Type) -> Layout {
+    match prog.get_type(ty) {
+        TypeInfo::Integer { bits } => {
+            //bool is one byte
+            if *bits == 1 {
+                return Layout::new(1, 1)
+            }
+
+            assert_eq!(bits % 8, 0, "only integers with size multiple of 8 supported for now");
+            let bytes = bits / 8;
+            Layout::new(bytes, bytes)
+        }
+        TypeInfo::Void => {
+            //void doesn't actually occupy space
+            Layout::new(0, 1)
+        },
+        TypeInfo::Pointer { .. } | TypeInfo::Func(_) => {
+            //32 bit, pointers have size 4
+            Layout::new(4, 4)
+        },
+        TypeInfo::Array { inner, length } => {
+            let inner_layout = type_layout(prog, *inner);
+            Layout::new(inner_layout.size * length, inner_layout.alignment)
+        }
+    }
+}
+
+fn type_layout_of_value(prog: &Program, value: Value) -> Layout {
+    type_layout(prog, prog.type_of_value(value))
+}
+
+struct StackLayout<'p> {
+    prog: &'p Program,
+    next_index: i32,
+}
+
+impl StackLayout<'_> {
+    fn allocate(&mut self, layout: Layout) -> i32 {
+        let Layout { size, alignment } = layout;
+
+        if alignment > STACK_ALIGNMENT {
+            panic!("Cannot allocate items with alignment > STACK_ALIGNMENT on the stack")
+        }
+
+        let index = (self.next_index + alignment - 1) / alignment * alignment;
+        self.next_index = index + size;
+
+        index
+    }
+
+    fn allocate_value(&mut self, value: Value) -> i32 {
+        self.allocate(type_layout(self.prog, self.prog.type_of_value(value)))
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum RegSize {
+    Byte,
+    Word,
+    DWord,
+}
+
+impl RegSize {
+    fn from_bytes(bytes: i32) -> Option<Self> {
+        match bytes {
+            0 => None,
+            1 => Some(RegSize::Byte),
+            2 => Some(RegSize::Word),
+            4 => Some(RegSize::DWord),
+            _ => panic!("Invalid register size {}", bytes),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Reg {
+    A,
+    C,
+    D,
+    B,
+}
+
+impl Reg {
+    fn name_for_size(self, size: RegSize) -> &'static str {
+        let i = match size {
+            RegSize::Byte => 0,
+            RegSize::Word => 1,
+            RegSize::DWord => 2,
+        };
+
+        let arr = match self {
+            Reg::A => ["al", "ax", "eax"],
+            Reg::C => ["cl", "cx", "ecx"],
+            Reg::D => ["dl", "dx", "edx"],
+            Reg::B => ["bl", "bx", "ebx"],
+        };
+
+        arr[i]
     }
 }
 
@@ -112,14 +215,18 @@ impl AsmBuilder<'_> {
         let block = self.prog.get_block(block);
 
         //write out instructions
+        //TODO fix all of them to actually store the correct size
         for &instr in &block.instructions {
             let instr_pos = *self.instr_stack_positions.get(&instr).unwrap();
             match self.prog.get_instr(instr) {
                 InstructionInfo::Store { addr, value } => {
                     self.append_instr(";store");
-                    self.append_value_to_reg("eax", value, 0);
-                    self.append_value_to_reg("ebx", addr, 0);
-                    self.append_instr("mov [ebx], eax");
+                    let layout = type_layout(self.prog, self.prog.type_of_value(*value));
+                    if let Some(size) = RegSize::from_bytes(layout.size) {
+                        self.append_value_to_reg(Reg::A.name_for_size(size), value, 0);
+                        self.append_value_to_reg("ebx", addr, 0);
+                        self.append_instr("mov [ebx], eax");
+                    }
                 },
                 InstructionInfo::Load { addr } => {
                     self.append_instr(";load");
@@ -209,42 +316,36 @@ impl AsmBuilder<'_> {
         self.instr_stack_positions.clear();
 
         //determine the stack position for each slot and value-returning instruction
-        let mut stack_size = 0;
+        let mut stack_layout = StackLayout { prog: self.prog, next_index: 0 };
 
         //TODO for stdcall we don't actually need to allocate slots, they already have an address on the stack
         for &slot in &func_info.slots {
-            let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
-            let size = type_size_in_bytes(ty);
-
-            self.slot_stack_positions.insert(slot, stack_size);
-            stack_size += size;
+            let ty = self.prog.get_slot(slot).inner_ty;
+            let layout = type_layout(self.prog, ty);
+            self.slot_stack_positions.insert(slot, stack_layout.allocate(layout));
         }
 
         self.prog.visit_blocks(func, |block| {
             for &instr in &self.prog.get_block(block).instructions {
-                let ty = self.prog.get_type(self.prog.type_of_value(Value::Instr(instr)));
-                self.instr_stack_positions.insert(instr, stack_size);
-                stack_size += type_size_in_bytes(ty);
+                let instr_pos = stack_layout.allocate_value(Value::Instr(instr));
+                self.instr_stack_positions.insert(instr, instr_pos);
             }
         });
 
         //the local stack size is the stack size excluding the parameters and the isp
-        self.local_stack_size = stack_size;
+        self.local_stack_size = stack_layout.allocate(Layout::new(0, STACK_ALIGNMENT));
 
-        //space for isp
-        stack_size += 4;
-
-        let mut param_size = 0;
+        //allocate space for ISP
+        stack_layout.allocate(Layout::new(4, STACK_ALIGNMENT));
 
         //determine the stack position for each parameter
         for &param in func_info.params.iter() {
-            self.param_stack_positions.insert(param, stack_size);
-            let size = type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
-            stack_size += size;
-            param_size += size;
+            let param_pos = stack_layout.allocate_value(Value::Param(param));
+            self.param_stack_positions.insert(param, param_pos);
         }
 
-        self.param_size = param_size;
+        let params_end_pos = stack_layout.allocate(Layout::new(0, 4));
+        self.param_size = params_end_pos - self.local_stack_size - 4;
 
         let func_number = self.func_number(func);
         self.append_ln(&format!("func_{}:", func_number));
@@ -262,6 +363,7 @@ impl AsmBuilder<'_> {
         let main_func_number = self.func_number(self.prog.main);
         self.append_ln("_main:");
         self.append_instr(&format!("call func_{}", main_func_number));
+        //TODO think abour how parameter alignment is supposed to work
         self.append_instr("push eax");
         self.append_instr("call _ExitProcess@4");
 

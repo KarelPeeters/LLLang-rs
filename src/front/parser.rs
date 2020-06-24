@@ -414,9 +414,9 @@ impl<'a> Parser<'a> {
         match token.ty {
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => {
-                let item = self.variable_declaration(TT::Const).map(ast::Item::Const);
+                let decl = self.variable_declaration(TT::Const)?;
                 self.expect(TT::Semi, "end of const declaration")?;
-                item
+                Ok(ast::Item::Const(decl))
             },
             _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
         }
@@ -741,6 +741,18 @@ impl<'a> Parser<'a> {
                         params,
                         ret: Box::new(ret),
                     },
+                })
+            }
+            TT::OpenS => {
+                self.pop()?;
+                let inner = Box::new(self.type_decl()?);
+                self.expect(TT::Semi, "array type separator")?;
+                let length = self.expect(TT::IntLit, "array size")?;
+                self.expect(TT::CloseS, "end of array type")?;
+
+                Ok(ast::Type {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::TypeKind::Array { inner, length_span: length.span, length: length.string },
                 })
             }
             _ => Err(Self::unexpected_token(self.peek(), &[TT::Ampersand, TT::Id, TT::OpenB], "type declaration")),

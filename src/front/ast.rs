@@ -13,6 +13,11 @@ pub enum TypeKind {
     Func {
         params: Vec<Type>,
         ret: Box<Type>,
+    },
+    Array {
+        inner: Box<Type>,
+        length_span: Span,
+        length: String,
     }
 }
 

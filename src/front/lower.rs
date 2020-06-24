@@ -86,6 +86,16 @@ impl<'a> Lower<'a> {
                 let ret = self.parse_type(ret)?;
                 Ok(self.prog.define_type_func(ir::FunctionType { params, ret, }))
             }
+            ast::TypeKind::Array { inner, length_span, length } => {
+                let inner = self.parse_type(inner)?;
+                let length = length.parse::<i32>()
+                    .map_err(|_| Error::InvalidIntLiteral {
+                        span: *length_span,
+                        lit: length.clone(),
+                    })?;
+
+                Ok(self.prog.define_type_array(inner, length))
+            }
         }
     }
 
@@ -192,10 +202,9 @@ impl<'a> Lower<'a> {
                     })?;
 
                 let value = value.parse::<i32>()
-                    .map_err(|_| Error::InvalidLiteral {
+                    .map_err(|_| Error::InvalidIntLiteral {
                         span: expr.span,
                         lit: value.clone(),
-                        ty: self.prog.format_type(ty).to_string(),
                     })?;
 
                 Ok(LRValue::Right(ir::Value::Const(ir::Const { ty, value })))
@@ -642,14 +651,9 @@ pub enum LowerError<'a> {
     },
 
     //literals
-    InvalidLiteralType {
-        span: Span,
-        ty: TypeString,
-    },
-    InvalidLiteral {
+    InvalidIntLiteral {
         span: Span,
         lit: String,
-        ty: TypeString,
     },
 
     //lrvalue

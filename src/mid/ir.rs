@@ -140,7 +140,7 @@ impl Program {
         self.types.push(info)
     }
 
-    pub fn define_type_int(&mut self, bits: u32) -> Type {
+    pub fn define_type_int(&mut self, bits: i32) -> Type {
         self.define_type(TypeInfo::Integer { bits })
     }
 
@@ -150,6 +150,10 @@ impl Program {
 
     pub fn define_type_func(&mut self, func_ty: FunctionType) -> Type {
         self.types.push(TypeInfo::Func(func_ty))
+    }
+
+    pub fn define_type_array(&mut self, inner: Type, length: i32) -> Type {
+        self.types.push(TypeInfo::Array { inner, length })
     }
 
     pub fn type_bool(&self) -> Type {
@@ -181,8 +185,9 @@ impl Program {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeInfo {
     Void,
-    Integer { bits: u32 },
+    Integer { bits: i32 },
     Pointer { inner: Type },
+    Array { inner: Type, length: i32 },
     Func(FunctionType),
 }
 
@@ -193,7 +198,7 @@ pub struct FunctionType {
 }
 
 impl TypeInfo {
-    pub fn unwrap_int(&self) -> Option<u32> {
+    pub fn unwrap_int(&self) -> Option<i32> {
         if let TypeInfo::Integer { bits } = self {
             Some(*bits)
         } else {
@@ -332,6 +337,16 @@ impl Terminator {
     }
 }
 
+//TODO maybe just don't model arrays in IR?
+//  just convert everything to pointer math
+
+//TODO how to model arrays in IR?
+//  maybe just don't create a dedicated array value?
+//  that's annoying, now you have to allocate, store and then load the entire array
+//  it simplifies the backend a bit though
+//     does it really? we still need to implement load and store for arrays anyway
+
+
 //TODO undef, func, param, slot, extern and data can all be "marked" const I think
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
@@ -439,6 +454,9 @@ impl Program {
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
                         write!(f, "*{}", self.prog.format_type(*inner)),
+                    TypeInfo::Array { inner, length } => {
+                        write!(f, "[{}; {}]", self.prog.format_type(*inner), length)
+                    }
                     TypeInfo::Func(func_ty) => {
                         write!(f, "(")?;
                         for (i, &param_ty) in func_ty.params.iter().enumerate() {
