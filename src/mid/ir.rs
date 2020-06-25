@@ -123,13 +123,8 @@ impl Program {
         };
 
         let ty_int = prog.define_type_int(32);
-        let block = prog.define_block(BlockInfo {
-            instructions: vec![],
-            terminator: Terminator::Unreachable,
-        });
-
         let func_ty = FunctionType { params: Vec::new(), ret: ty_int };
-        let func = FunctionInfo::new(func_ty, block, &mut prog);
+        let func = FunctionInfo::new(func_ty, &mut prog);
         let func = prog.define_func(func);
         prog.main = func;
 
@@ -229,8 +224,14 @@ pub struct FunctionInfo {
 }
 
 impl FunctionInfo {
-    pub fn new(func_ty: FunctionType, entry: Block, prog: &mut Program) -> Self {
+    /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
+    pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
+        let entry = prog.define_block(BlockInfo {
+            instructions: vec![],
+            terminator: Terminator::Unreachable,
+        });
+
         Self {
             ty,
             func_ty,
@@ -438,7 +439,7 @@ impl Program {
                     TypeInfo::Integer { bits } =>
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
-                        write!(f, "*{}", self.prog.format_type(*inner)),
+                        write!(f, "&{}", self.prog.format_type(*inner)),
                     TypeInfo::Func(func_ty) => {
                         write!(f, "(")?;
                         for (i, &param_ty) in func_ty.params.iter().enumerate() {

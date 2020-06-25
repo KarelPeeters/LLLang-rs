@@ -1,9 +1,10 @@
-use std::marker::PhantomData;
+use std::collections::HashSet;
 
 use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
+use crate::mid::ir::FunctionType;
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -13,20 +14,20 @@ struct LoopInfo {
     end: ir::Block,
 }
 
-struct Lower<'a> {
-    prog: ir::Program,
-    functions: IndexMap<&'a str, ir::Function>,
+struct Lower<'m, 'a> {
+    prog: &'m mut ir::Program,
+
+    module_skeleton: &'m ModuleSkeleton<'m>,
+    modules: &'m IndexMap<&'a str, ModuleSkeleton<'m>>,
 
     //TODO replace this global state with parameters
     curr_func: ir::Function,
     curr_block: ir::Block,
 
     curr_loops: Vec<LoopInfo>,
-
-    ph: PhantomData<&'a ()>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
     variables: IndexMap<String, LRValue>,
@@ -72,26 +73,34 @@ enum LRValue {
     Right(ir::Value),
 }
 
-impl<'a> Lower<'a> {
-    fn parse_type(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
+//utility functions on ir::Program
+trait ProgramExt {
+    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type>;
+    fn type_of_lrvalue(&self, value: LRValue) -> ir::Type;
+    fn check_type_match<'a>(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()>;
+    fn check_integer_type<'a>(&self, expr: &'a ast::Expression, actual: ir::Type) -> Result<'a, ()>;
+}
+
+impl ProgramExt for ir::Program {
+    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
         match &ty.kind {
             ast::TypeKind::Simple(string) => match string.as_ref() {
-                "int" => Ok(self.prog.define_type_int(32)),
-                "bool" => Ok(self.prog.type_bool()),
-                "void" => Ok(self.prog.type_void()),
-                "byte" => Ok(self.prog.define_type_int(8)),
+                "int" => Ok(self.define_type_int(32)),
+                "bool" => Ok(self.type_bool()),
+                "void" => Ok(self.type_void()),
+                "byte" => Ok(self.define_type_int(8)),
                 _ => Err(Error::InvalidType(ty)),
             },
             ast::TypeKind::Ref(inner) => {
                 let inner = self.parse_type(inner)?;
-                Ok(self.prog.define_type_ptr(inner))
+                Ok(self.define_type_ptr(inner))
             },
             ast::TypeKind::Func { params, ret } => {
                 let params = params.iter()
                     .map(|p| self.parse_type(p))
                     .collect::<Result<_>>()?;
                 let ret = self.parse_type(ret)?;
-                Ok(self.prog.define_type_func(ir::FunctionType { params, ret, }))
+                Ok(self.define_type_func(ir::FunctionType { params, ret }))
             }
         }
     }
@@ -99,38 +108,40 @@ impl<'a> Lower<'a> {
     fn type_of_lrvalue(&self, value: LRValue) -> ir::Type {
         match value {
             LRValue::Left(value) => {
-                let ty = self.prog.type_of_value(value);
-                self.prog.get_type(ty).unwrap_ptr().expect("lvalue should have pointer type")
+                let ty = self.type_of_value(value);
+                self.get_type(ty).unwrap_ptr().expect("lvalue should have pointer type")
             },
             LRValue::Right(value) => {
-                self.prog.type_of_value(value)
+                self.type_of_value(value)
             },
         }
     }
 
-    fn check_type_match(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()> {
+    fn check_type_match<'a>(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()> {
         if let Some(expected) = expected {
             if expected != actual {
                 return Err(Error::TypeMismatch {
                     expression: expr,
-                    expected: self.prog.format_type(expected).to_string(),
-                    actual: self.prog.format_type(actual).to_string(),
+                    expected: self.format_type(expected).to_string(),
+                    actual: self.format_type(actual).to_string(),
                 })
             }
         }
         Ok(())
     }
 
-    fn check_integer_type(&self, expr: &'a ast::Expression, actual: ir::Type) -> Result<'a, ()> {
-        match self.prog.get_type(actual).unwrap_int() {
+    fn check_integer_type<'a>(&self, expr: &'a ast::Expression, actual: ir::Type) -> Result<'a, ()> {
+        match self.get_type(actual).unwrap_int() {
             Some(_) => Ok(()),
             None => Err(Error::ExpectIntegerType {
                 expression: expr,
-                actual: self.prog.format_type(actual).to_string(),
+                actual: self.format_type(actual).to_string(),
             })
         }
     }
+}
 
+impl<'m, 'a> Lower<'m, 'a> {
     fn start_new_block(&mut self) {
         self.curr_block = self.prog.define_block(ir::BlockInfo {
             instructions: vec![],
@@ -187,7 +198,7 @@ impl<'a> Lower<'a> {
             }
             ast::ExpressionKind::BoolLit { value } => {
                 let ty_bool = self.prog.type_bool();
-                self.check_type_match(expr, expect_ty, ty_bool)?;
+                self.prog.check_type_match(expr, expect_ty, ty_bool)?;
                 Ok(LRValue::Right(ir::Value::Const(ir::Const { ty: ty_bool, value: *value as i32 })))
             }
             ast::ExpressionKind::IntLit { value } => {
@@ -211,9 +222,24 @@ impl<'a> Lower<'a> {
                 panic!("string literals only supported in consts for now")
             }
             ast::ExpressionKind::Identifier { id } => {
-                let var = scope.find_variable(id)?;
-                self.check_type_match(expr, expect_ty, self.type_of_lrvalue(var))?;
-                Ok(var)
+                let value = scope.find_variable(id)?;
+                self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
+                Ok(value)
+            }
+            ast::ExpressionKind::ModuleIdentifier { module, id } => {
+                //find the module
+                let module_skeleton: &ModuleSkeleton = self.modules.get(&*module.string)
+                    .ok_or(Error::ModuleNotFound { module })?;
+
+                //check that it's actually used
+                if !self.module_skeleton.used_modules.contains(&*module.string) {
+                    return Err(Error::ModuleNotUsed { module })
+                }
+
+                //find the value itself
+                let value = module_skeleton.scope.find_variable(id)?;
+                self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
+                Ok(value)
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
                 let expect_ty = match kind {
@@ -222,13 +248,13 @@ impl<'a> Lower<'a> {
                         expect_ty
                     },
                     ast::BinaryOp::Eq | ast::BinaryOp::Neq => {
-                        self.check_type_match(expr, expect_ty, self.prog.type_bool())?;
+                        self.prog.check_type_match(expr, expect_ty, self.prog.type_bool())?;
                         None
                     }
                 };
 
                 let ir_left = self.append_expr_loaded(scope, left, expect_ty)?;
-                self.check_integer_type(left, self.prog.type_of_value(ir_left))?;
+                self.prog.check_integer_type(left, self.prog.type_of_value(ir_left))?;
 
                 //use the left type for both inference and correctness checking
                 let expect_ty = self.prog.type_of_value(ir_left);
@@ -273,7 +299,7 @@ impl<'a> Lower<'a> {
                     ast::UnaryOp::Neg => {
                         let inner = self.append_expr_loaded(scope, inner, expect_ty)?;
                         let ty = self.prog.type_of_value(inner);
-                        self.check_integer_type(expr, ty)?;
+                        self.prog.check_integer_type(expr, ty)?;
 
                         let instr = self.append_instr(ir::InstructionInfo::Binary {
                             kind: ir::BinaryOp::Sub,
@@ -297,10 +323,12 @@ impl<'a> Lower<'a> {
 
 
                 //check return type and arg count
-                self.check_type_match(expr, expect_ty, target_ty.ret)?;
+                self.prog.check_type_match(expr, expect_ty, target_ty.ret)?;
                 if target_ty.params.len() != args.len() {
                     return Err(Error::WrongArgCount {
-                        call: expr, expected: target_ty.params.len(), actual: args.len(),
+                        call: expr,
+                        expected: target_ty.params.len(),
+                        actual: args.len(),
                     })
                 }
 
@@ -328,7 +356,7 @@ impl<'a> Lower<'a> {
                 } else {
                     //check that function return type is indeed void
                     let void = self.prog.type_void();
-                    self.check_type_match(expr, Some(ret_ty), void)?;
+                    self.prog.check_type_match(expr, Some(ret_ty), void)?;
                     ir::Value::Undef(void)
                 };
 
@@ -350,8 +378,8 @@ impl<'a> Lower<'a> {
 
         //check that the returned value's type is indeed expect_ty
         if cfg!(debug_assertions) {
-            let ty = self.type_of_lrvalue(result_value);
-            self.check_type_match(expr, expect_ty, ty).expect("bug in lower")
+            let ty = self.prog.type_of_lrvalue(result_value);
+            self.prog.check_type_match(expr, expect_ty, ty).expect("bug in lower")
         }
 
         Ok(result_value)
@@ -384,159 +412,6 @@ impl<'a> Lower<'a> {
         Ok(self.append_load(value))
     }
 
-    fn append_func(&mut self, scope: &Scope, func: &'a ast::Function) -> Result<'a, ()> {
-        let ir_func = *self.functions.get(&*func.id.string).unwrap();
-        self.curr_func = ir_func;
-
-        self.start_new_block();
-        self.prog.get_func_mut(ir_func).entry = self.curr_block;
-
-        let mut scope = scope.nest();
-
-        for param in &func.params {
-            let ty = self.parse_type(&param.ty)?;
-            let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
-
-            //allocate slots for parameters so their address can be taken
-            let slot = self.define_slot(ty);
-            self.append_instr(ir::InstructionInfo::Store {
-                addr: ir::Value::Slot(slot),
-                value: ir::Value::Param(ir_param),
-            });
-
-            //push slot and param to function
-            let curr_func = self.prog.get_func_mut(self.curr_func);
-            curr_func.params.push(ir_param);
-            curr_func.slots.push(slot);
-
-            scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
-        }
-
-        let body = func.body.as_ref().expect("can only generate code for functions with body");
-        self.append_block(&mut scope, body)?;
-
-        if self.prog.get_func(self.curr_func).entry == self.curr_block {
-            //TODO this return check has lots of false negatives
-            return Err(Error::MissingReturn(func))
-        }
-
-        Ok(())
-    }
-
-    fn lower(mut self, prog: &'a ast::Program) -> Result<ir::Program> {
-        let mut scope = Scope::default();
-
-        //temporary entry block, will be overwritten later
-        let tmp_entry = self.prog.get_func(self.prog.main).entry;
-
-        //parse all function headers and create ir equivalents
-        let mut main = None;
-        for item in &prog.items {
-            match item {
-                ast::Item::Function(func) => {
-                    let ret_ty = func.ret_ty.as_ref()
-                        .map_or(Ok(self.prog.type_void()), |t| self.parse_type(t))?;
-
-                    let param_tys = func.params.iter()
-                        .map(|param| self.parse_type(&param.ty))
-                        .collect::<Result<_>>()?;
-                    let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
-
-                    let value = match (func.ext, &func.body) {
-                        (true, None) => {
-                            //external function, leave this for the backend to figure out
-                            let func_ty = self.prog.define_type_func(func_ty);
-                            let ir_ext = ir::ExternInfo { name: func.id.string.clone(), ty: func_ty };
-                            let ir_ext = self.prog.define_ext(ir_ext);
-                            ir::Value::Extern(ir_ext)
-                        }
-                        (false, None) => {
-                            //functions need bodies
-                            return Err(Error::MissingFunctionBody(func))
-                        }
-                        (ext, Some(_)) => {
-                            //standard function, maybe marked extern
-                            let mut ir_func = ir::FunctionInfo::new(func_ty, tmp_entry, &mut self.prog);
-                            if ext {
-                                ir_func.global_name = Some(func.id.string.clone());
-                            }
-                            let ir_func = self.prog.define_func(ir_func);
-
-                            if self.functions.insert(&func.id.string, ir_func).is_some() {
-                                return Err(Error::IdentifierDeclaredTwice(&func.id));
-                            }
-                            if &func.id.string == "main" {
-                                main = Some(ir_func);
-                            }
-
-                            ir::Value::Func(ir_func)
-                        }
-                    };
-
-                    scope.declare_variable(&func.id, LRValue::Right(value))?;
-                },
-                ast::Item::Const(decl) => {
-                    let ty = decl.ty.as_ref().map(|ty| self.parse_type(ty)).transpose()?;
-                    let init = decl.init.as_ref().expect("consts need initialized for now");
-
-                    match &init.kind {
-                        ast::ExpressionKind::StringLit { value } => {
-                            let ty_byte = self.prog.define_type_int(8);
-                            let ty_byte_ptr = self.prog.define_type_ptr(ty_byte);
-                            self.check_type_match(&init, ty, ty_byte_ptr)?;
-
-                            let data = self.prog.define_data(ir::DataInfo {
-                                ty: ty_byte_ptr,
-                                bytes: value.clone().into_bytes()
-                            });
-
-                            scope.declare_variable(&decl.id, LRValue::Right(ir::Value::Data(data)))?;
-                        },
-                        kind => {
-                            panic!("This kind of const initializer is not supported for now: {:?}", kind)
-                        }
-                    }
-                }
-            }
-        }
-
-        //actually generate code for functions
-        for item in &prog.items {
-            match item {
-                ast::Item::Function(func) => {
-                    if func.body.is_some() {
-                        self.append_func(&scope, func)?;
-                    }
-                },
-                ast::Item::Const(_) => {}
-            }
-        }
-
-        if let Some(main) = main {
-            //typecheck
-            let type_int = self.prog.define_type_int(32);
-            let main_func_ty = self.prog.define_type_func(ir::FunctionType {
-                params: Vec::new(),
-                ret: type_int,
-            });
-
-            let func_ty = self.prog.get_func(main).ty;
-
-            if func_ty != main_func_ty {
-                return Err(Error::MainFunctionWrongType {
-                    expected: self.prog.format_type(main_func_ty).to_string(),
-                    actual: self.prog.format_type(func_ty).to_string(),
-                })
-            }
-
-            self.prog.main = main;
-        } else {
-            return Err(Error::NoMainFunction)
-        }
-
-        Ok(self.prog)
-    }
-
     fn append_block(&mut self, scope: &Scope, block: &'a ast::Block) -> Result<'a, ()> {
         let scope = &mut scope.nest();
 
@@ -545,7 +420,7 @@ impl<'a> Lower<'a> {
                 ast::StatementKind::Declaration(decl) => {
                     assert!(!decl.mutable, "everything is mutable for now");
                     let expect_ty = decl.ty.as_ref()
-                        .map(|ty| self.parse_type(ty))
+                        .map(|ty| self.prog.parse_type(ty))
                         .transpose()?;
 
                     let value = decl.init.as_ref()
@@ -569,7 +444,7 @@ impl<'a> Lower<'a> {
                 }
                 ast::StatementKind::Assignment(assign) => {
                     let addr = self.append_expr(scope, &assign.left, None)?;
-                    let ty = self.type_of_lrvalue(addr);
+                    let ty = self.prog.type_of_lrvalue(addr);
 
                     let value = self.append_expr_loaded(scope, &assign.right, Some(ty))?;
                     self.append_store(assign.span, addr, value)?;
@@ -654,6 +529,44 @@ impl<'a> Lower<'a> {
 
         Ok(())
     }
+
+    fn append_func(&mut self, ast_func: &'a ast::Function, ir_func: ir::Function) -> Result<'a, ()> {
+        self.curr_func = ir_func;
+
+        self.start_new_block();
+        self.prog.get_func_mut(ir_func).entry = self.curr_block;
+
+        let mut scope = self.module_skeleton.scope.nest();
+
+        for param in &ast_func.params {
+            let ty = self.prog.parse_type(&param.ty)?;
+            let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
+
+            //allocate slots for parameters so their address can be taken
+            let slot = self.define_slot(ty);
+            self.append_instr(ir::InstructionInfo::Store {
+                addr: ir::Value::Slot(slot),
+                value: ir::Value::Param(ir_param),
+            });
+
+            //push slot and param to function
+            let curr_func = self.prog.get_func_mut(self.curr_func);
+            curr_func.params.push(ir_param);
+            curr_func.slots.push(slot);
+
+            scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
+        }
+
+        let body = ast_func.body.as_ref().expect("can only generate code for functions with body");
+        self.append_block(&mut scope, body)?;
+
+        if self.prog.get_func(self.curr_func).entry == self.curr_block {
+            //TODO this return check has lots of false negatives
+            return Err(Error::MissingReturn(ast_func))
+        }
+
+        Ok(())
+    }
 }
 
 type TypeString = String;
@@ -700,12 +613,14 @@ pub enum LowerError<'a> {
     UndeclaredIdentifier(&'a ast::Identifier),
     IdentifierDeclaredTwice(&'a ast::Identifier),
 
-    //other
+    //main
     NoMainFunction,
     MainFunctionWrongType {
         expected: TypeString,
         actual: TypeString,
     },
+
+    //functions
     MissingReturn(&'a ast::Function),
     MissingFunctionBody(&'a ast::Function),
     WrongArgCount {
@@ -713,20 +628,150 @@ pub enum LowerError<'a> {
         expected: usize,
         actual: usize,
     },
+
+    //modules
+    ModuleNotFound {
+        module: &'a ast::Identifier,
+    },
+    ModuleNotUsed {
+        module: &'a ast::Identifier,
+    },
+
+    //other
     NotInLoop {
         expr: &'a ast::Expression,
     }
 }
 
-pub fn lower(prog: &ast::Program) -> Result<ir::Program> {
-    let ir_prog = ir::Program::new();
-    let lower = Lower {
-        functions: Default::default(),
-        curr_func: ir_prog.main,
-        curr_block: ir_prog.get_func(ir_prog.main).entry,
-        curr_loops: Default::default(),
-        prog: ir_prog,
-        ph: PhantomData,
-    };
-    lower.lower(prog)
+#[derive(Debug, Default)]
+struct ModuleSkeleton<'a> {
+    scope: Scope<'static>,
+    used_modules: HashSet<&'a str>,
+    functions_to_lower: Vec<(&'a ast::Function, ir::Function)>,
+}
+
+fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is_root: bool) -> Result<'a, ModuleSkeleton<'a>> {
+    let mut skeleton = ModuleSkeleton::default();
+
+    for item in &module.items {
+        match item {
+            ast::Item::UseDecl(decl) => {
+                skeleton.used_modules.insert(&decl.name.string);
+            }
+            ast::Item::Function(ast_func) => {
+                let ret_ty = ast_func.ret_ty.as_ref()
+                    .map_or(Ok(prog.type_void()), |t| prog.parse_type(t))?;
+
+                let param_tys = ast_func.params.iter()
+                    .map(|param| prog.parse_type(&param.ty))
+                    .collect::<Result<_>>()?;
+                let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
+
+                let value = match (ast_func.ext, &ast_func.body) {
+                    (true, None) => {
+                        //external function, leave this for the backend to figure out
+                        let func_ty = prog.define_type_func(func_ty);
+                        let ir_ext = ir::ExternInfo { name: ast_func.id.string.clone(), ty: func_ty };
+                        let ir_ext = prog.define_ext(ir_ext);
+                        ir::Value::Extern(ir_ext)
+                    }
+                    (false, None) => {
+                        //functions need bodies
+                        return Err(Error::MissingFunctionBody(ast_func))
+                    }
+                    (ext, Some(_)) => {
+                        //standard function, maybe marked extern
+                        let mut ir_func = ir::FunctionInfo::new(func_ty, prog);
+                        if ext {
+                            ir_func.global_name = Some(ast_func.id.string.clone());
+                        }
+                        let ir_func = prog.define_func(ir_func);
+                        let func_value = ir::Value::Func(ir_func);
+                        skeleton.functions_to_lower.push((ast_func, ir_func));
+
+                        //check if this is the main function
+                        if is_root && ast_func.id.string == "main" {
+                            //typecheck
+                            let int_ty = prog.define_type_int(32);
+                            let expected_main_ty = FunctionType { params: Vec::new(), ret: int_ty };
+                            let expected_main_ty = prog.define_type_func(expected_main_ty);
+                            let actual_func_ty = prog.type_of_value(func_value);
+
+                            if expected_main_ty != actual_func_ty {
+                                return Err(Error::MainFunctionWrongType {
+                                    expected: prog.format_type(expected_main_ty).to_string(),
+                                    actual: prog.format_type(actual_func_ty).to_string(),
+                                })
+                            }
+
+                            prog.main = ir_func;
+                        }
+                        func_value
+                    }
+                };
+
+                skeleton.scope.declare_variable(&ast_func.id, LRValue::Right(value))?;
+            }
+            ast::Item::Const(decl) => {
+                let ty = decl.ty.as_ref().map(|ty| prog.parse_type(ty)).transpose()?;
+                let init = decl.init.as_ref().expect("consts need initialized for now");
+
+                match &init.kind {
+                    ast::ExpressionKind::StringLit { value } => {
+                        let ty_byte = prog.define_type_int(8);
+                        let ty_byte_ptr = prog.define_type_ptr(ty_byte);
+                        prog.check_type_match(&init, ty, ty_byte_ptr)?;
+
+                        let data = prog.define_data(ir::DataInfo {
+                            ty: ty_byte_ptr,
+                            bytes: value.clone().into_bytes(),
+                        });
+
+                        skeleton.scope.declare_variable(&decl.id, LRValue::Right(ir::Value::Data(data)))?;
+                    },
+                    kind => {
+                        panic!("This kind of const initializer is not supported for now: {:?}", kind)
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(skeleton)
+}
+
+pub fn lower(ast_prog: &ast::Program) -> Result<ir::Program> {
+    let mut prog = ir::Program::new();
+
+    //keep these as placeholders
+    let tmp_func = prog.main;
+    let tmp_block = prog.get_func(prog.main).entry;
+
+    //build skeletons
+    let mut modules: IndexMap<&str, ModuleSkeleton> = IndexMap::new();
+
+    for (module_name, ast_module) in &ast_prog.modules {
+        let is_root = module_name == "";
+        let module_info = build_module_skeleton(&mut prog, ast_module, is_root)?;
+
+        modules.insert(module_name, module_info);
+    }
+
+    //actually generate code
+    for (_, module_skeleton) in &modules {
+        let mut lower = Lower {
+            prog: &mut prog,
+            module_skeleton,
+            modules: &modules,
+            curr_func: tmp_func,
+            curr_block: tmp_block,
+            curr_loops: Vec::new(),
+        };
+
+        for (ast_func, ir_func) in &module_skeleton.functions_to_lower {
+            lower.append_func(ast_func, *ir_func)?;
+        }
+    }
+
+    Ok(prog)
 }

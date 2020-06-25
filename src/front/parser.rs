@@ -2,8 +2,8 @@ use std::mem::swap;
 
 use TokenType as TT;
 
-use crate::front::{ast, Pos, Span};
-use crate::front::ast::{BinaryOp, UnaryOp};
+use crate::front::{ast, FileId, Pos, Span};
+use crate::front::ast::{BinaryOp, UnaryOp, UseDecl};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -47,6 +47,7 @@ declare_tokens![
     Null("null"),
 
     Extern("extern"),
+    Use("use"),
     Fun("fun"),
     Return("return"),
     Let("let"),
@@ -68,6 +69,7 @@ declare_tokens![
     Slash("/"),
     Percent("%"),
 
+    DoubleColon("::"),
     Semi(";"),
     Colon(":"),
     Comma(","),
@@ -104,6 +106,7 @@ impl Token {
 
 struct Tokenizer<'a> {
     left: &'a str,
+    file: FileId,
     pos: Pos,
 
     curr: Token,
@@ -111,9 +114,10 @@ struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
-    fn new(left: &'a str) -> Self {
-        let pos = Pos { line: 1, col: 1 };
+    fn new(file: FileId, left: &'a str) -> Self {
+        let pos = Pos { file, line: 1, col: 1 };
         let mut result = Self {
+            file,
             left,
             pos,
             curr: Token::eof_token(pos),
@@ -405,9 +409,9 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn program(&mut self) -> Result<ast::Program> {
+    fn module(&mut self) -> Result<ast::Module> {
         let (_, items) = self.list(TT::Eof, None, Self::item)?;
-        Ok(ast::Program { items })
+        Ok(ast::Module { items })
     }
 
     fn item(&mut self) -> Result<ast::Item> {
@@ -417,9 +421,20 @@ impl<'a> Parser<'a> {
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => {
                 let item = self.variable_declaration(TT::Const).map(ast::Item::Const);
-                self.expect(TT::Semi, "end of const declaration")?;
+                self.expect(TT::Semi, "end of item")?;
                 item
             },
+            TT::Use => {
+                let start = token.span.start;
+                self.pop()?;
+                let name = self.identifier()?;
+                self.expect(TT::Semi, "end of item")?;
+
+                Ok(ast::Item::UseDecl(UseDecl {
+                    span: Span::new(start, name.span.end),
+                    name,
+                }))
+            }
             _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
         }
     }
@@ -676,11 +691,20 @@ impl<'a> Parser<'a> {
             },
             TT::Id => {
                 let token = self.pop()?;
+                let left = ast::Identifier { span: token.span, string: token.string };
+
+                let kind = if self.accept(TT::DoubleColon)?.is_some() {
+                    let right_token = self.expect(TT::Id, "child identifier")?;
+                    let right = ast::Identifier { span: token.span, string: right_token.string };
+
+                    ast::ExpressionKind::ModuleIdentifier { module: left, id: right }
+                } else {
+                    ast::ExpressionKind::Identifier { id: left }
+                };
+
                 Ok(ast::Expression {
-                    span: token.span,
-                    kind: ast::ExpressionKind::Identifier {
-                        id: ast::Identifier { span: token.span, string: token.string }
-                    },
+                    span: Span::new(token.span.start, self.last_popped_end),
+                    kind,
                 })
             }
             TT::OpenB => {
@@ -762,10 +786,10 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(input: &str) -> Result<ast::Program> {
+pub fn parse_module(file: FileId, input: &str) -> Result<ast::Module> {
     let mut parser = Parser {
-        tokenizer: Tokenizer::new(input),
-        last_popped_end: Pos { line: 1, col: 1 },
+        tokenizer: Tokenizer::new(file, input),
+        last_popped_end: Pos { file, line: 1, col: 1 },
     };
-    parser.program()
+    parser.module()
 }

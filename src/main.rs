@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![deny(unused_must_use)]
 
-use std::fs::{File, read_to_string};
+use std::fs::{File, read_to_string, read_dir};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,6 +10,9 @@ use clap::Clap;
 use derive_more::From;
 
 use crate::front::parser::ParseError;
+use std::ffi::{OsStr, OsString};
+use crate::front::FileId;
+use indexmap::map::IndexMap;
 
 mod front;
 mod back;
@@ -19,6 +22,7 @@ mod util;
 #[derive(Debug, From)]
 enum CompileError {
     IO(std::io::Error),
+    InvalidFileName(OsString),
     Parse(ParseError),
     Lower,
     Assemble,
@@ -27,11 +31,41 @@ enum CompileError {
 
 type Result<T> = std::result::Result<T, CompileError>;
 
-fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
-    let source = read_to_string(ll_path)?;
+/// Parse the main file and all of the lib files into a single program
+fn parse_all(ll_path: &Path) -> Result<front::ast::Program> {
+    let mut modules = IndexMap::new();
 
+    //parse main file
+    let main_src = read_to_string(ll_path)?;
+    let main_module = front::parser::parse_module(FileId { id: 0 }, &main_src)?;
+    modules.insert("".to_owned(), main_module);
+
+    //parse lib files
+    let mut next_id = 1;
+    //TODO this is brittle, ship the lib files with the exe instead
+    for entry in read_dir("lib")? {
+        let path = entry?.path();
+
+        if path.extension() == Some(OsStr::new("ll")) {
+            let module_name = path.file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| CompileError::InvalidFileName(path.as_os_str().to_owned()))?;
+
+            let id = FileId { id: next_id };
+            next_id += 1;
+
+            let module_src = read_to_string(&path);
+            let module = front::parser::parse_module(id, &module_src?)?;
+            modules.insert(module_name.to_owned(), module);
+        }
+    }
+
+    Ok(front::ast::Program { modules })
+}
+
+fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
     println!("----Parser-----");
-    let ast = front::parser::parse(&source)?;
+    let ast = parse_all(ll_path)?;
     let ast_file = ll_path.with_extension("ast");
     File::create(&ast_file)?
         .write_fmt(format_args!("{:#?}", ast))?;

@@ -1,4 +1,5 @@
 use crate::front::Span;
+use indexmap::map::IndexMap;
 
 #[derive(Debug)]
 pub struct Type {
@@ -24,13 +25,25 @@ pub struct Identifier {
 
 #[derive(Debug)]
 pub struct Program {
+    pub modules: IndexMap<String, Module>
+}
+
+#[derive(Debug)]
+pub struct Module {
     pub items: Vec<Item>
 }
 
 #[derive(Debug)]
 pub enum Item {
+    UseDecl(UseDecl),
     Function(Function),
     Const(Declaration),
+}
+
+#[derive(Debug)]
+pub struct UseDecl {
+    pub span: Span,
+    pub name: Identifier,
 }
 
 #[derive(Debug)]
@@ -117,6 +130,7 @@ pub enum ExpressionKind {
     Null,
     
     Identifier { id: Identifier },
+    ModuleIdentifier { module: Identifier, id: Identifier },
 
     Call {
         target: Box<Expression>,
