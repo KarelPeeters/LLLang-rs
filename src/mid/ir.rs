@@ -43,7 +43,7 @@ macro_rules! gen_node_and_program_accessors {
         }
 
         impl Arenas {
-            fn total_node_count(&self) -> usize {
+            pub fn total_node_count(&self) -> usize {
                 0 $(+ self.$mul.len())*
             }
         }

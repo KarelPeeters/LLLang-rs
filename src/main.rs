@@ -71,10 +71,16 @@ fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
         .write_fmt(format_args!("{:#?}", ast))?;
 
     println!("----Lower------");
-    let ir_program = front::lower::lower(&ast)
+    let mut ir_program = front::lower::lower(&ast)
         .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file)?
+        .write_fmt(format_args!("{}", ir_program))?;
+
+    println!("----Optimize---");
+    mid::opt::gc::gc(&mut ir_program);
+    let ir_opt_file = ll_path.with_extension("ir_opt");
+    File::create(&ir_opt_file)?
         .write_fmt(format_args!("{}", ir_program))?;
 
     println!("----Backend----");
