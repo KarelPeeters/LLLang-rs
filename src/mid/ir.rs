@@ -1,50 +1,48 @@
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
+use std::hash::Hash;
 
 use crate::util::arena::{Arena, ArenaSet, Idx};
 
 macro_rules! gen_node_and_program_accessors {
-    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident],)*) => {
+    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
         $(
-        pub type $node = Node<$info>;
+        pub type $node = Idx<$info>;
 
-        impl Debug for Node<$info> {
+        impl Debug for $node {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{:?} {}", self.i, stringify!($node))
+                write!(f, "<{}> {}", self.i, stringify!($node))
             }
         }
         )*
 
-        #[derive(Debug)]
-        enum NodeInfo {
+        #[derive(Debug, Default)]
+        pub struct Arenas {
             $(
-            $node($info),
+            pub $mul: Arena<$info>,
             )*
+        }
+
+        impl Arenas {
+            fn total_node_count(&self) -> usize {
+                0 $(+ self.$mul.len())*
+            }
         }
 
         impl Program {
         $(
             pub fn $def(&mut self, info: $info) -> $node {
-                Node {
-                    i: self.nodes.push(NodeInfo::$node(info)),
-                    ph: PhantomData,
-                }
+                self.nodes.$mul.push(info)
             }
 
             #[allow(dead_code)]
             pub fn $get(&self, node: $node) -> &$info {
-                let node = &self.nodes[node.i];
-                if let NodeInfo::$node(info) = node { info }
-                else { panic!("Expected {:?}, got {:?}", std::any::type_name::<$info>(), node ) }
+                &self.nodes.$mul[node]
             }
 
             #[allow(dead_code)]
             pub fn $get_mut(&mut self, node: $node) -> &mut $info {
-                let node = &mut self.nodes[node.i];
-                if let NodeInfo::$node(info) = node { info }
-                else { panic!("Expected {:?}, got {:?}", std::any::type_name::<$info>(), node ) }
+                &mut self.nodes.$mul[node]
             }
         )*
         }
@@ -52,51 +50,27 @@ macro_rules! gen_node_and_program_accessors {
 }
 
 gen_node_and_program_accessors![
-    [Function, FunctionInfo, define_func, get_func, get_func_mut],
-    [Parameter, ParameterInfo, define_param, get_param, get_param_mut],
-    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut],
-    [Block, BlockInfo, define_block, get_block, get_block_mut],
-    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut],
-    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut],
-    [Data, DataInfo, define_data, get_data, get_data_mut],
+    [Function, FunctionInfo, define_func, get_func, get_func_mut, funcs],
+    [Parameter, ParameterInfo, define_param, get_param, get_param_mut, params],
+    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slots],
+    [Block, BlockInfo, define_block, get_block, get_block_mut, blocks],
+    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instrs],
+    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, exts],
+    [Data, DataInfo, define_data, get_data, get_data_mut, datas],
 ];
 
-//TODO think about debug printing Node, right now it's kind of crappy with PhantomData
-//  also improve NodeType printing
-
-pub struct Node<T> {
-    i: Idx<NodeInfo>,
-    ph: PhantomData<T>,
-}
-
-impl<T> Clone for Node<T> {
-    fn clone(&self) -> Self {
-        Self { i: self.i, ph: PhantomData }
-    }
-}
-
-impl<T> Copy for Node<T> {}
-
-impl<T> PartialEq for Node<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.i == other.i
-    }
-}
-
-impl<T> Eq for Node<T> {}
-
-impl<T> Hash for Node<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.i.hash(state)
-    }
-}
-
 pub type Type = Idx<TypeInfo>;
+
+impl Debug for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}> Type", self.i)
+    }
+}
 
 #[derive(Debug)]
 pub struct Program {
     //all values that may be used multiple times are stored as nodes
-    nodes: Arena<NodeInfo>,
+    pub nodes: Arenas,
     //the types are stored separately in a set for interning
     types: ArenaSet<TypeInfo>,
 
@@ -119,7 +93,7 @@ impl Program {
             types,
             ty_bool,
             ty_void,
-            main: Node { i: Idx::sentinel(), ph: PhantomData },
+            main: Idx::sentinel(),
         };
 
         let ty_int = prog.define_type_int(32);
@@ -401,25 +375,6 @@ impl Program {
             Ok(())
         }).unwrap();
     }
-
-    /// Visit all the functions in this program
-    pub fn try_visit_funcs<E, F: FnMut(Function) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
-        for (node, node_info) in &self.nodes {
-            if let NodeInfo::Function(_) = node_info {
-                f(Node { i: node, ph: PhantomData })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Visit all the functions in this program
-    pub fn visit_funcs<F: FnMut(Function)>(&self, mut f: F) {
-        for (node, node_info) in &self.nodes {
-            if let NodeInfo::Function(_) = node_info {
-                f(Node { i: node, ph: PhantomData });
-            }
-        }
-    }
 }
 
 //Formatting related stuff
@@ -459,7 +414,7 @@ impl Program {
 
 impl Display for Program {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Program {{")?;
+        writeln!(f, "Program (nodes: {}) {{", self.nodes.total_node_count())?;
         writeln!(f, "  main: {:?}", self.main)?;
 
         writeln!(f, "  types:")?;
@@ -467,8 +422,7 @@ impl Display for Program {
             writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?
         }
 
-        self.try_visit_funcs(|func| {
-            let func_info = self.get_func(func);
+        for (func, func_info) in &self.nodes.funcs {
             writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
             writeln!(f, "    params:")?;
             for &param in &func_info.params {
@@ -497,9 +451,7 @@ impl Display for Program {
                 Ok(())
             })?;
             writeln!(f, "  }}")?;
-
-            Ok(())
-        })?;
+        };
 
         writeln!(f, "}}")?;
         Ok(())

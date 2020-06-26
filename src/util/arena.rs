@@ -5,9 +5,9 @@ use std::ops::{Index, IndexMut};
 
 use indexmap::map::IndexMap;
 
-#[derive(Eq)]
 pub struct Idx<T> {
-    i: usize,
+    //TODO make this private again once newtyped Idx is implemented
+    pub i: usize,
     ph: PhantomData<T>,
 }
 
@@ -19,12 +19,6 @@ impl<T> Idx<T> {
     // a fake index that will never be part of an actual arena
     pub fn sentinel() -> Idx<T> {
         Self::new(usize::MAX)
-    }
-}
-
-impl<T> Debug for Idx<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("<{}>", self.i))
     }
 }
 
@@ -42,6 +36,8 @@ impl<T> PartialEq for Idx<T> {
         self.i == other.i
     }
 }
+
+impl<T> Eq for Idx<T> {}
 
 impl<T> Hash for Idx<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -68,6 +64,10 @@ impl<T> Arena<T> {
     pub fn pop(&mut self, index: Idx<T>) -> T {
         self.map.remove(&index.i)
             .unwrap_or_else(|| panic!("Value at {:?} not found", index.i))
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item=(Idx<T>, &T)> {

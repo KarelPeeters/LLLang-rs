@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter, Data};
+use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter, Data, FunctionInfo};
 
 //TODO rethink what this means around alignment
 fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
@@ -202,8 +202,7 @@ impl AsmBuilder<'_> {
         }
     }
 
-    fn append_func(&mut self, func: Function) {
-        let func_info = self.prog.get_func(func);
+    fn append_func(&mut self, func: Function, func_info: &FunctionInfo) {
         self.param_stack_positions.clear();
         self.slot_stack_positions.clear();
         self.instr_stack_positions.clear();
@@ -269,9 +268,9 @@ impl AsmBuilder<'_> {
         self.header.push_str("extern _ExitProcess@4\n");
 
         //write out all of the functions
-        self.prog.visit_funcs(|func| {
-            self.append_func(func)
-        });
+        for (func, func_info) in &self.prog.nodes.funcs {
+            self.append_func(func, func_info)
+        };
 
         //write out all of the data
         //TODO maybe write this to the data section instead of the text section
