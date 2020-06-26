@@ -2,24 +2,43 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use crate::util::arena::{Arena, ArenaSet, Idx};
+use crate::util::arena::{Arena, ArenaSet, Idx, IndexType};
+
+macro_rules! new_index_type {
+    ($name:ident, $value:ident) => {
+        #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+        pub struct $name {
+            idx: Idx<$value>
+        }
+
+        impl IndexType for $name {
+            type T = $value;
+            fn idx(&self) -> Idx<Self::T> {
+                self.idx
+            }
+            fn new(idx: Idx<Self::T>) -> Self {
+                Self { idx }
+            }
+        }
+
+        impl Debug for $name {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{:?} {}", self.idx(), stringify!($name))
+            }
+        }
+    }
+}
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
         $(
-        pub type $node = Idx<$info>;
-
-        impl Debug for $node {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "<{}> {}", self.i, stringify!($node))
-            }
-        }
+        new_index_type!($node, $info);
         )*
 
         #[derive(Debug, Default)]
         pub struct Arenas {
             $(
-            pub $mul: Arena<$info>,
+            pub $mul: Arena<$node, $info>,
             )*
         }
 
@@ -59,20 +78,14 @@ gen_node_and_program_accessors![
     [Data, DataInfo, define_data, get_data, get_data_mut, datas],
 ];
 
-pub type Type = Idx<TypeInfo>;
-
-impl Debug for Type {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}> Type", self.i)
-    }
-}
+new_index_type!(Type, TypeInfo);
 
 #[derive(Debug)]
 pub struct Program {
     //all values that may be used multiple times are stored as nodes
     pub nodes: Arenas,
     //the types are stored separately in a set for interning
-    types: ArenaSet<TypeInfo>,
+    types: ArenaSet<Type, TypeInfo>,
 
     //predefined types
     ty_bool: Type,
@@ -93,7 +106,7 @@ impl Program {
             types,
             ty_bool,
             ty_void,
-            main: Idx::sentinel(),
+            main: Function::sentinel(),
         };
 
         let ty_int = prog.define_type_int(32);
