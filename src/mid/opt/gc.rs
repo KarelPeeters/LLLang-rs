@@ -67,9 +67,9 @@ fn collect_used(prog: &Program) -> Visited {
                 }
             }
 
-            for succ in terminator.successors() {
-                todo.add_block(*succ);
-            }
+            terminator.for_each_successor(|succ| {
+                todo.add_block(succ);
+            });
         }
     }
 

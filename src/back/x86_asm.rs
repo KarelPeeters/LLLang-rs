@@ -178,19 +178,22 @@ impl AsmBuilder<'_> {
         self.append_instr(";terminator");
         match &block.terminator {
             Terminator::Jump { target} => {
-                let block_number = self.block_number(*target);
+                assert!(target.args.is_empty(), "TODO: block args");
+                let block_number = self.block_number(target.block);
                 self.append_instr(&format!("jmp block_{}", block_number));
             },
-            Terminator::Branch { cond, targets: [true_block, false_block] } => {
-                let true_block_number = self.block_number(*true_block);
-                let false_block_number = self.block_number(*false_block);
+            Terminator::Branch { cond, targets: [true_target, false_target] } => {
+                assert!(true_target.args.is_empty(), "TODO: block args");
+                assert!(false_target.args.is_empty(), "TODO: block args");
+                let true_block_number = self.block_number(true_target.block);
+                let false_block_number = self.block_number(false_target.block);
 
                 self.append_value_to_reg("eax", cond, 0);
 
                 self.append_instr("test eax, eax");
                 self.append_instr(&format!("jnz block_{}", true_block_number));
                 self.append_instr(&format!("jmp block_{}", false_block_number));
-            },
+            }
             Terminator::Return { value } => {
                 self.append_value_to_reg("eax", value, 0);
                 self.append_instr(&format!("add esp, {}", self.local_stack_size));

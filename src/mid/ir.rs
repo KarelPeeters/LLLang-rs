@@ -300,22 +300,31 @@ impl InstructionInfo {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Terminator {
-    Jump { target: Block },
+    Jump { target: Target },
     //TODO figure out a way to get named fields here
-    Branch { cond: Value, targets: [Block; 2] },
+    Branch { cond: Value, targets: [Target; 2] },
     Return { value: Value },
     Unreachable,
 }
 
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub block: Block,
+    pub args: Vec<Value>,
+}
+
 impl Terminator {
-    pub fn successors(&self) -> &[Block] {
+    pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
         match self {
-            Terminator::Jump { target } => std::slice::from_ref(target),
-            Terminator::Branch { targets, .. } => targets,
-            Terminator::Return { .. } => &[],
-            Terminator::Unreachable => &[],
+            Terminator::Jump { target } => f(target.block),
+            Terminator::Branch { targets, .. } => {
+                f(targets[0].block);
+                f(targets[1].block);
+            },
+            Terminator::Return { .. } => {},
+            Terminator::Unreachable => {},
         }
     }
 }
@@ -374,7 +383,8 @@ impl Program {
             f(block)?;
 
             let block_info = self.get_block(block);
-            blocks_left.extend(block_info.terminator.successors());
+            block_info.terminator.for_each_successor(
+                |succ| blocks_left.push_back(succ));
         }
 
         Ok(())

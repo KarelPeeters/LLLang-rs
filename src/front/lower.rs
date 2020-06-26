@@ -4,7 +4,6 @@ use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
-use crate::mid::ir::FunctionType;
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -138,6 +137,20 @@ impl ProgramExt for ir::Program {
                 actual: self.format_type(actual).to_string(),
             })
         }
+    }
+}
+
+fn new_target(block: ir::Block) -> ir::Target {
+    ir::Target { block, args: Vec::new() }
+}
+
+fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) -> ir::Terminator {
+    ir::Terminator::Branch {
+        cond,
+        targets: [
+            new_target(true_block),
+            new_target(false_block)
+        ],
     }
 }
 
@@ -394,7 +407,7 @@ impl<'m, 'a> Lower<'m, 'a> {
         let loop_info = self.curr_loops.last()
             .ok_or(Error::NotInLoop { expr })?;
 
-        let jump_cond = ir::Terminator::Jump { target: target(loop_info) };
+        let jump_cond = ir::Terminator::Jump { target: new_target(target(loop_info)) };
         self.prog.get_block_mut(self.curr_block).terminator = jump_cond;
 
         self.start_new_block();
@@ -473,11 +486,11 @@ impl<'m, 'a> Lower<'m, 'a> {
                     let end_block = self.curr_block;
 
                     //connect everything
-                    let branch = ir::Terminator::Branch { cond, targets: [then_start_block, else_start_block] };
-                    let jump_end = ir::Terminator::Jump { target: end_block };
+                    let branch = new_branch(cond, then_start_block, else_start_block);
+                    let jump_end = ir::Terminator::Jump { target: new_target(end_block) };
 
                     self.prog.get_block_mut(cond_end_block).terminator = branch;
-                    self.prog.get_block_mut(then_end_block).terminator = jump_end;
+                    self.prog.get_block_mut(then_end_block).terminator = jump_end.clone();
                     self.prog.get_block_mut(else_end_block).terminator = jump_end;
                 }
                 ast::StatementKind::While(while_stmt) => {
@@ -508,10 +521,10 @@ impl<'m, 'a> Lower<'m, 'a> {
                     self.curr_loops.pop().unwrap();
 
                     //connect everything
-                    let branch = ir::Terminator::Branch { cond, targets: [body_start_block, end_block] };
-                    let jump_cond = ir::Terminator::Jump { target: cond_start_block };
+                    let branch = new_branch(cond, body_start_block, end_block);
+                    let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
 
-                    self.prog.get_block_mut(start_block).terminator = jump_cond;
+                    self.prog.get_block_mut(start_block).terminator = jump_cond.clone();
                     self.prog.get_block_mut(cond_end_block).terminator = branch;
                     self.prog.get_block_mut(body_end_block).terminator = jump_cond;
 
@@ -693,7 +706,7 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                         if is_root && ast_func.id.string == "main" {
                             //typecheck
                             let int_ty = prog.define_type_int(32);
-                            let expected_main_ty = FunctionType { params: Vec::new(), ret: int_ty };
+                            let expected_main_ty = ir::FunctionType { params: Vec::new(), ret: int_ty };
                             let expected_main_ty = prog.define_type_func(expected_main_ty);
                             let actual_func_ty = prog.type_of_value(func_value);
 

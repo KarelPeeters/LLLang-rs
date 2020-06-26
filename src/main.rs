@@ -79,6 +79,7 @@ fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
 
     println!("----Optimize---");
     mid::opt::gc::gc(&mut ir_program);
+    mid::opt::gc::gc(&mut ir_program);
     let ir_opt_file = ll_path.with_extension("ir_opt");
     File::create(&ir_opt_file)?
         .write_fmt(format_args!("{}", ir_program))?;
