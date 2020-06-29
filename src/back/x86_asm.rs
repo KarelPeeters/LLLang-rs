@@ -80,6 +80,9 @@ impl AsmBuilder<'_> {
                 let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
                 self.append_instr(&format!("lea {}, [esp+{}]", reg, stack_offset + slot_pos));
             },
+            Value::Phi(_) => {
+                todo!("phi not implemented in x86")
+            }
             Value::Instr(instr) => {
                 let instr_pos = *self.instr_stack_positions.get(instr).unwrap();
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + instr_pos));
@@ -178,13 +181,13 @@ impl AsmBuilder<'_> {
         self.append_instr(";terminator");
         match &block.terminator {
             Terminator::Jump { target} => {
-                assert!(target.args.is_empty(), "TODO: block args");
+                assert!(target.phi_values.is_empty(), "TODO: block args");
                 let block_number = self.block_number(target.block);
                 self.append_instr(&format!("jmp block_{}", block_number));
             },
             Terminator::Branch { cond, targets: [true_target, false_target] } => {
-                assert!(true_target.args.is_empty(), "TODO: block args");
-                assert!(false_target.args.is_empty(), "TODO: block args");
+                assert!(true_target.phi_values.is_empty(), "TODO: block args");
+                assert!(false_target.phi_values.is_empty(), "TODO: block args");
                 let true_block_number = self.block_number(true_target.block);
                 let false_block_number = self.block_number(false_target.block);
 

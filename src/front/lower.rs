@@ -141,7 +141,7 @@ impl ProgramExt for ir::Program {
 }
 
 fn new_target(block: ir::Block) -> ir::Target {
-    ir::Target { block, args: Vec::new() }
+    ir::Target { block, phi_values: Vec::new() }
 }
 
 fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) -> ir::Terminator {
@@ -157,7 +157,8 @@ fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) ->
 impl<'m, 'a> Lower<'m, 'a> {
     fn start_new_block(&mut self) {
         self.curr_block = self.prog.define_block(ir::BlockInfo {
-            instructions: vec![],
+            phis: Vec::new(),
+            instructions: Vec::new(),
             terminator: ir::Terminator::Unreachable,
         });
     }

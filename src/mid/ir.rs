@@ -73,6 +73,7 @@ gen_node_and_program_accessors![
     [Parameter, ParameterInfo, define_param, get_param, get_param_mut, params],
     [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slots],
     [Block, BlockInfo, define_block, get_block, get_block_mut, blocks],
+    [Phi, PhiInfo, define_phi, get_phi, get_phi_mut, phis],
     [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instrs],
     [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, exts],
     [Data, DataInfo, define_data, get_data, get_data_mut, datas],
@@ -82,6 +83,7 @@ new_index_type!(Type, TypeInfo);
 
 #[derive(Debug)]
 pub struct Program {
+    //TODO we've lost distinct indices! is there an easy way to get that back?
     //all values that may be used multiple times are stored as nodes
     pub nodes: Arenas,
     //the types are stored separately in a set for interning
@@ -153,6 +155,7 @@ impl Program {
             Value::Func(func) => self.get_func(func).ty,
             Value::Param(param) => self.get_param(param).ty,
             Value::Slot(slot) => self.get_slot(slot).ty,
+            Value::Phi(phi) => self.get_phi(phi).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
             Value::Extern(ext) => self.get_ext(ext).ty,
             Value::Data(data) => self.get_data(data).ty,
@@ -215,7 +218,8 @@ impl FunctionInfo {
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
         let entry = prog.define_block(BlockInfo {
-            instructions: vec![],
+            phis: Vec::new(),
+            instructions: Vec::new(),
             terminator: Terminator::Unreachable,
         });
 
@@ -249,8 +253,14 @@ impl StackSlotInfo {
 
 #[derive(Debug)]
 pub struct BlockInfo {
+    pub phis: Vec<Phi>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
+}
+
+#[derive(Debug)]
+pub struct PhiInfo {
+    pub ty: Type,
 }
 
 #[derive(Debug)]
@@ -312,20 +322,36 @@ pub enum Terminator {
 #[derive(Debug, Clone)]
 pub struct Target {
     pub block: Block,
-    pub args: Vec<Value>,
+    pub phi_values: Vec<Value>,
 }
 
 impl Terminator {
-    pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
+    pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
         match self {
-            Terminator::Jump { target } => f(target.block),
+            Terminator::Jump { target } => f(target),
             Terminator::Branch { targets, .. } => {
-                f(targets[0].block);
-                f(targets[1].block);
+                f(&mut targets[0]);
+                f(&mut targets[1]);
             },
             Terminator::Return { .. } => {},
             Terminator::Unreachable => {},
         }
+    }
+
+    pub fn for_each_target<F: FnMut(&Target)>(&self, mut f: F) {
+        match self {
+            Terminator::Jump { target } => f(target),
+            Terminator::Branch { targets, .. } => {
+                f(&targets[0]);
+                f(&targets[1]);
+            },
+            Terminator::Return { .. } => {},
+            Terminator::Unreachable => {},
+        }
+    }
+
+    pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
+        self.for_each_target(|target| f(target.block))
     }
 }
 
@@ -337,6 +363,7 @@ pub enum Value {
     Func(Function),
     Param(Parameter),
     Slot(StackSlot),
+    Phi(Phi),
     Instr(Instruction),
     Extern(Extern),
     Data(Data),
@@ -447,15 +474,19 @@ impl Display for Program {
 
         for (func, func_info) in &self.nodes.funcs {
             writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
-            writeln!(f, "    params:")?;
-            for &param in &func_info.params {
-                let param_info = self.get_param(param);
-                writeln!(f, "      {:?}: {}", param, self.format_type(param_info.ty))?;
+            if !func_info.params.is_empty() {
+                writeln!(f, "    params:")?;
+                for &param in &func_info.params {
+                    let param_info = self.get_param(param);
+                    writeln!(f, "      {:?}: {}", param, self.format_type(param_info.ty))?;
+                }
             }
-            writeln!(f, "    slots:")?;
-            for &slot in &func_info.slots {
-                let slot_info = self.get_slot(slot);
-                writeln!(f, "      {:?}: {}", slot, self.format_type(slot_info.ty))?;
+            if !func_info.slots.is_empty() {
+                writeln!(f, "    slots:")?;
+                for &slot in &func_info.slots {
+                    let slot_info = self.get_slot(slot);
+                    writeln!(f, "      {:?}: {}", slot, self.format_type(slot_info.ty))?;
+                }
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
@@ -463,12 +494,20 @@ impl Display for Program {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
 
+                if !block_info.phis.is_empty() {
+                    writeln!(f, "      phis:")?;
+                    for &phi in &block_info.phis {
+                        let phi_info = self.get_phi(phi);
+                        writeln!(f, "        {:?}: {}", phi, self.format_type(phi_info.ty))?;
+                    }
+                }
+
                 for &instr in &block_info.instructions {
                     let instr_info = self.get_instr(instr);
                     writeln!(f, "      {:?}: {:?}", instr, instr_info)?;
                 }
 
-                writeln!(f, "      term: {:?}", block_info.terminator)?;
+                writeln!(f, "      {:?}", block_info.terminator)?;
                 writeln!(f, "    }}")?;
 
                 Ok(())

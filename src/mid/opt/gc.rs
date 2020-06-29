@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::mid::ir::{Block, BlockInfo, Function, InstructionInfo, Program, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, InstructionInfo, Program, Value, FunctionInfo};
 
 #[derive(Default)]
 struct Visited {
@@ -19,7 +19,7 @@ impl Visited {
                     self.funcs.push_back(func)
                 },
                 Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
-                Value::Instr(_) | Value::Extern(_) | Value::Data(_) => {
+                Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
                     //there are only tracked as values
                 }
             }
@@ -38,10 +38,23 @@ fn collect_used(prog: &Program) -> Visited {
     todo.add_value(Value::Func(prog.main));
 
     while let Some(func) = todo.funcs.pop_front() {
-        todo.add_block(prog.get_func(func).entry);
+        let FunctionInfo { ty: _, func_ty: _, global_name: _, entry, params, slots }
+            = prog.get_func(func);
+
+        todo.add_block(*entry);
+        for &param in params {
+            todo.add_value(Value::Param(param));
+        }
+        for &slot in slots {
+            todo.add_value(Value::Slot(slot));
+        }
 
         while let Some(block) = todo.blocks.pop_front() {
-            let BlockInfo { instructions, terminator } = prog.get_block(block);
+            let BlockInfo { phis, instructions, terminator } = prog.get_block(block);
+
+            for &phi in phis {
+                todo.add_value(Value::Phi(phi));
+            }
 
             for instr in instructions {
                 todo.add_value(Value::Instr(*instr));
@@ -85,11 +98,12 @@ pub fn gc(prog: &mut Program) {
     prog.nodes.params.retain(|n, _| visited.used_values.contains(&Value::Param(n)));
     prog.nodes.slots.retain(|n, _| visited.used_values.contains(&Value::Slot(n)));
     prog.nodes.blocks.retain(|n, _| visited.used_blocks.contains(&n));
+    prog.nodes.phis.retain(|n, _| visited.used_values.contains(&Value::Phi(n)));
     prog.nodes.instrs.retain(|n, _| visited.used_values.contains(&Value::Instr(n)));
     prog.nodes.exts.retain(|n, _| visited.used_values.contains(&Value::Extern(n)));
     prog.nodes.datas.retain(|n, _| visited.used_values.contains(&Value::Data(n)));
 
     let after_count = prog.nodes.total_node_count();
 
-    println!("GC removed {}/{} nodes", before_count - after_count, before_count);
+    println!("gc removed {}/{} nodes", before_count - after_count, before_count);
 }
