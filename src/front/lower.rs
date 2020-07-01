@@ -787,5 +787,10 @@ pub fn lower(ast_prog: &ast::Program) -> Result<ir::Program> {
         }
     }
 
+    //check that we have a main function
+    if prog.main == tmp_func {
+        return Err(Error::NoMainFunction);
+    }
+
     Ok(prog)
 }
