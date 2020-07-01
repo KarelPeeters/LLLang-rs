@@ -114,7 +114,7 @@ struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
-    fn new(file: FileId, left: &'a str) -> Self {
+    fn new(file: FileId, left: &'a str) -> Result<Self> {
         let pos = Pos { file, line: 1, col: 1 };
         let mut result = Self {
             file,
@@ -123,10 +123,9 @@ impl<'a> Tokenizer<'a> {
             curr: Token::eof_token(pos),
             next: Token::eof_token(pos),
         };
-        //TODO make this not crash here, but later when actually starting to parse
-        result.advance().unwrap();
-        result.advance().unwrap();
-        result
+        result.advance()?;
+        result.advance()?;
+        Ok(result)
     }
 
     /// self.left should only be advanced trough this function to ensure self.pos is updated
@@ -789,7 +788,7 @@ impl<'a> Parser<'a> {
 
 pub fn parse_module(file: FileId, input: &str) -> Result<ast::Module> {
     let mut parser = Parser {
-        tokenizer: Tokenizer::new(file, input),
+        tokenizer: Tokenizer::new(file, input)?,
         last_popped_end: Pos { file, line: 1, col: 1 },
     };
     parser.module()
