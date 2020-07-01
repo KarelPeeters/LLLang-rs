@@ -89,12 +89,10 @@ impl UseInfo {
         }
     }
 
-    pub(crate) fn get(&self, value: Value) -> Option<&Vec<Usage>> {
-        self.usages.get(&value)
-    }
-
     //TODO figure out a way to make all of this a lot more typesafe
-    pub(crate) fn replace_usages(&self, prog: &mut Program, old: Value, new: Value) {
+    pub fn replace_usages(&self, prog: &mut Program, old: Value, new: Value) {
+        debug_assert_ne!(old, new);
+
         fn repl(field: &mut Value, old: Value, new: Value) {
             debug_assert!(maybe_repl(field, old, new))
         }
@@ -108,73 +106,81 @@ impl UseInfo {
             }
         }
 
-        if let Some(usages) = self.get(old) {
-            for usage in usages {
-                match usage {
-                    Usage::Main => {
-                        if let Value::Func(new) = new {
-                            prog.main = new;
-                        } else {
-                            //TODO remove this once prog.main is a value
-                            panic!("Replacing main func not yet supported")
-                        }
+        for &usage in &self[old] {
+            match usage {
+                Usage::Main => {
+                    if let Value::Func(new) = new {
+                        prog.main = new;
+                    } else {
+                        //TODO remove this once prog.main is a value
+                        panic!("Replacing main func not yet supported")
                     }
-                    Usage::Addr(instr, _) => {
-                        match prog.get_instr_mut(*instr) {
-                            InstructionInfo::Load { addr } => repl(addr, old, new),
-                            InstructionInfo::Store { addr, .. } => repl(addr, old, new),
-                            _ => unreachable!()
-                        }
+                }
+                Usage::Addr(instr, _) => {
+                    match prog.get_instr_mut(instr) {
+                        InstructionInfo::Load { addr } => repl(addr, old, new),
+                        InstructionInfo::Store { addr, .. } => repl(addr, old, new),
+                        _ => unreachable!()
                     }
-                    Usage::CallTarget(instr, _) => {
-                        match prog.get_instr_mut(*instr) {
-                            InstructionInfo::Call { target, .. } => repl(target, old, new),
-                            _ => unreachable!()
-                        }
+                }
+                Usage::CallTarget(instr, _) => {
+                    match prog.get_instr_mut(instr) {
+                        InstructionInfo::Call { target, .. } => repl(target, old, new),
+                        _ => unreachable!()
                     }
-                    Usage::Operand(instr, _) => {
-                        match prog.get_instr_mut(*instr) {
-                            InstructionInfo::Store { value, .. } => repl(value, old, new),
-                            InstructionInfo::Call { args, .. } => {
-                                let mut replaced_any = false;
-                                for arg in args {
-                                    replaced_any |= maybe_repl(arg, old, new);
-                                }
-                                debug_assert!(replaced_any);
+                }
+                Usage::Operand(instr, _) => {
+                    match prog.get_instr_mut(instr) {
+                        InstructionInfo::Store { value, .. } => repl(value, old, new),
+                        InstructionInfo::Call { args, .. } => {
+                            let mut replaced_any = false;
+                            for arg in args {
+                                replaced_any |= maybe_repl(arg, old, new);
                             }
-                            InstructionInfo::Binary { left, right, .. } => {
-                                let mut replaced_any = false;
-                                replaced_any |= maybe_repl(left, old, new);
-                                replaced_any |= maybe_repl(right, old, new);
-                                debug_assert!(replaced_any);
-                            }
-                            _ => unreachable!()
+                            debug_assert!(replaced_any);
                         }
-                    }
-                    Usage::TargetPhiValue(block) => {
-                        let block_info = prog.get_block_mut(*block);
-                        let mut replaced_any = false;
-                        block_info.terminator.for_each_target_mut(|target| {
-                            for phi_value in &mut target.phi_values {
-                                replaced_any |= maybe_repl(phi_value, old, new)
-                            }
-                        });
-                        debug_assert!(replaced_any)
-                    }
-                    Usage::BranchCond(block) => {
-                        match &mut prog.get_block_mut(*block).terminator {
-                            Terminator::Branch { cond, .. } => repl(cond, old, new),
-                            _ => unreachable!()
+                        InstructionInfo::Binary { left, right, .. } => {
+                            let mut replaced_any = false;
+                            replaced_any |= maybe_repl(left, old, new);
+                            replaced_any |= maybe_repl(right, old, new);
+                            debug_assert!(replaced_any);
                         }
+                        _ => unreachable!()
                     }
-                    Usage::ReturnValue(block) => {
-                        match &mut prog.get_block_mut(*block).terminator {
-                            Terminator::Return { value, .. } => repl(value, old, new),
-                            _ => unreachable!()
+                }
+                Usage::TargetPhiValue(block) => {
+                    let block_info = prog.get_block_mut(block);
+                    let mut replaced_any = false;
+                    block_info.terminator.for_each_target_mut(|target| {
+                        for phi_value in &mut target.phi_values {
+                            replaced_any |= maybe_repl(phi_value, old, new)
                         }
+                    });
+                    debug_assert!(replaced_any)
+                }
+                Usage::BranchCond(block) => {
+                    match &mut prog.get_block_mut(block).terminator {
+                        Terminator::Branch { cond, .. } => repl(cond, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::ReturnValue(block) => {
+                    match &mut prog.get_block_mut(block).terminator {
+                        Terminator::Return { value, .. } => repl(value, old, new),
+                        _ => unreachable!()
                     }
                 }
             }
         }
+    }
+}
+
+static EMPTY_USAGE_VEC: Vec<Usage> = Vec::new();
+
+impl std::ops::Index<Value> for UseInfo {
+    type Output = Vec<Usage>;
+
+    fn index(&self, index: Value) -> &Self::Output {
+        self.usages.get(&index).unwrap_or(&EMPTY_USAGE_VEC)
     }
 }

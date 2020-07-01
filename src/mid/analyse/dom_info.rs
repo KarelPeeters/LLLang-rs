@@ -115,45 +115,45 @@ impl DomInfo {
         }
     }
 
-    pub(crate) fn block_index(&self, block: Block) -> usize {
+    fn block_index(&self, block: Block) -> usize {
         self.blocks.iter().position(|&b| b == block)
             .expect("Block not found")
     }
 
-    fn is_dominator(&self, dominator: Block, block: Block) -> bool {
+    pub fn is_dominator(&self, dominator: Block, block: Block) -> bool {
         self.dominates[self.block_index(dominator)]
             .contains(self.block_index(block))
     }
 
-    fn is_strict_dominator(&self, dominator: Block, block: Block) -> bool {
+    pub fn is_strict_dominator(&self, dominator: Block, block: Block) -> bool {
         dominator != block &&
             self.dominates[self.block_index(dominator)]
                 .contains(self.block_index(block))
     }
 
-    fn iter_dominated_by(&self, dominator: Block) -> impl Iterator<Item=Block> + '_ {
+    pub fn iter_dominated_by(&self, dominator: Block) -> impl Iterator<Item=Block> + '_ {
         self.dominates[self.block_index(dominator)]
             .ones()
             .map(move |bi| self.blocks[bi])
     }
 
-    fn iter_dominator_frontier(&self, dominator: Block) -> impl Iterator<Item=Block> + '_ {
+    pub fn iter_dominator_frontier(&self, dominator: Block) -> impl Iterator<Item=Block> + '_ {
         self.frontier[self.block_index(dominator)]
             .ones()
             .map(move |bi| self.blocks[bi])
     }
 
-    fn parent(&self, block: Block) -> Option<Block> {
+    pub fn parent(&self, block: Block) -> Option<Block> {
         self.parent[self.block_index(block)].map(|i| self.blocks[i])
     }
 
     /// Iterate upwards trough the dominator tree, includes both the block itself and the entry block
-    fn iter_domtree(&self, block: Block) -> impl Iterator<Item=Block> + '_ {
+    pub fn iter_domtree(&self, block: Block) -> impl Iterator<Item=Block> + '_ {
         std::iter::successors(Some(self.block_index(block)), move |&i| self.parent[i])
             .map(move |bi| self.blocks[bi])
     }
 
-    pub(crate) fn iter_predecessors(&self, block: Block) -> impl Iterator<Item=Block> + '_ {
+    pub fn iter_predecessors(&self, block: Block) -> impl Iterator<Item=Block> + '_ {
         let bi = self.block_index(block);
         (0..self.blocks.len())
             .filter(move |&pi| self.successors[pi][bi])

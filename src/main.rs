@@ -1,18 +1,18 @@
 #![allow(dead_code)]
 #![deny(unused_must_use)]
 
-use std::fs::{File, read_to_string, read_dir};
+use std::ffi::{OsStr, OsString};
+use std::fs::{File, read_dir, read_to_string};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Clap;
 use derive_more::From;
-
-use crate::front::parser::ParseError;
-use std::ffi::{OsStr, OsString};
-use crate::front::FileId;
 use indexmap::map::IndexMap;
+
+use crate::front::FileId;
+use crate::front::parser::ParseError;
 
 mod front;
 mod back;

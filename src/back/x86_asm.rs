@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Function, Instruction, InstructionInfo, Program, StackSlot, Terminator, TypeInfo, Value, Parameter, Data, FunctionInfo};
+use crate::mid::ir::{BinaryOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, Parameter, Phi, Program, StackSlot, Target, Terminator, TypeInfo, Value};
 
 //TODO rethink what this means around alignment
 fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
@@ -27,6 +27,9 @@ struct AsmBuilder<'p> {
     param_stack_positions: IndexMap<Parameter, i32>,
     slot_stack_positions: IndexMap<StackSlot, i32>,
     instr_stack_positions: IndexMap<Instruction, i32>,
+    phi_stack_positions: IndexMap<Phi, i32>,
+
+    next_label_number: usize,
     //TODO make these match the indices in the IR debug format
     block_numbers: IndexMap<Block, usize>,
     func_numbers: IndexMap<Function, usize>,
@@ -34,6 +37,13 @@ struct AsmBuilder<'p> {
 }
 
 impl AsmBuilder<'_> {
+    //returns a distinct number on each invocation
+    fn label_number(&mut self) -> usize {
+        let num = self.next_label_number;
+        self.next_label_number += 1;
+        num
+    }
+
     fn block_number(&mut self, block: Block) -> usize {
         let next_num = self.block_numbers.len();
         *self.block_numbers.entry(block).or_insert(next_num)
@@ -73,18 +83,19 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("mov {}, func_{}", reg, func_number));
             }
             Value::Param(param) => {
-                let param_pos = *self.param_stack_positions.get(param).unwrap();
+                let param_pos = self.param_stack_positions[param];
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + param_pos));
             }
             Value::Slot(slot) => {
-                let slot_pos = *self.slot_stack_positions.get(slot).unwrap();
+                let slot_pos = self.slot_stack_positions[slot];
                 self.append_instr(&format!("lea {}, [esp+{}]", reg, stack_offset + slot_pos));
             },
-            Value::Phi(_) => {
-                todo!("phi not implemented in x86")
+            Value::Phi(phi) => {
+                let phi_pos = self.phi_stack_positions[phi];
+                self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + phi_pos));
             }
             Value::Instr(instr) => {
-                let instr_pos = *self.instr_stack_positions.get(instr).unwrap();
+                let instr_pos = self.instr_stack_positions[instr];
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + instr_pos));
             },
             Value::Extern(ext) => {
@@ -108,6 +119,19 @@ impl AsmBuilder<'_> {
         self.append_instr("idiv ebx");
     }
 
+    fn append_jump_to_target(&mut self, target: &Target) {
+        let target_block_info = self.prog.get_block(target.block);
+
+        //TODO this phivalue code is not entirely correct, what if two phi values are swapped?
+        for (phi, phi_value) in target_block_info.phis.iter().zip(&target.phi_values) {
+            self.append_value_to_reg("eax", &phi_value, 0);
+            self.append_instr(&format!("mov [esp+{}], eax", self.phi_stack_positions[phi]));
+        }
+
+        let block_number = self.block_number(target.block);
+        self.append_instr(&format!("jmp block_{}", block_number));
+    }
+
     pub fn append_block(&mut self, block: Block) {
         let block_number = self.block_number(block);
         self.append_ln(&format!("  block_{}: ", block_number));
@@ -116,7 +140,7 @@ impl AsmBuilder<'_> {
 
         //write out instructions
         for &instr in &block.instructions {
-            let instr_pos = *self.instr_stack_positions.get(&instr).unwrap();
+            let instr_pos = self.instr_stack_positions[&instr];
             match self.prog.get_instr(instr) {
                 InstructionInfo::Store { addr, value } => {
                     self.append_instr(";store");
@@ -181,21 +205,18 @@ impl AsmBuilder<'_> {
         self.append_instr(";terminator");
         match &block.terminator {
             Terminator::Jump { target} => {
-                assert!(target.phi_values.is_empty(), "TODO: block args");
-                let block_number = self.block_number(target.block);
-                self.append_instr(&format!("jmp block_{}", block_number));
+                self.append_jump_to_target(target);
             },
             Terminator::Branch { cond, targets: [true_target, false_target] } => {
-                assert!(true_target.phi_values.is_empty(), "TODO: block args");
-                assert!(false_target.phi_values.is_empty(), "TODO: block args");
-                let true_block_number = self.block_number(true_target.block);
-                let false_block_number = self.block_number(false_target.block);
+                let label_number = self.label_number();
 
                 self.append_value_to_reg("eax", cond, 0);
-
                 self.append_instr("test eax, eax");
-                self.append_instr(&format!("jnz block_{}", true_block_number));
-                self.append_instr(&format!("jmp block_{}", false_block_number));
+                self.append_instr(&format!("jz label_{}", label_number));
+
+                self.append_jump_to_target(true_target);
+                self.append_ln(&format!("  label_{}:", label_number));
+                self.append_jump_to_target(false_target);
             }
             Terminator::Return { value } => {
                 self.append_value_to_reg("eax", value, 0);
@@ -226,8 +247,16 @@ impl AsmBuilder<'_> {
         }
 
         self.prog.visit_blocks(func, |block| {
-            for &instr in &self.prog.get_block(block).instructions {
-                let ty = self.prog.get_type(self.prog.type_of_value(Value::Instr(instr)));
+            let block_info = self.prog.get_block(block);
+
+            for &phi in &block_info.phis {
+                let ty = self.prog.get_phi(phi).ty;
+                self.phi_stack_positions.insert(phi, stack_size);
+                stack_size += type_size_in_bytes(self.prog.get_type(ty));
+            }
+
+            for &instr in &block_info.instructions {
+                let ty = self.prog.get_type(self.prog.get_instr(instr).ty(self.prog));
                 self.instr_stack_positions.insert(instr, stack_size);
                 stack_size += type_size_in_bytes(ty);
             }
@@ -305,6 +334,8 @@ pub fn lower(prog: &Program) -> String {
         param_stack_positions: Default::default(),
         slot_stack_positions: Default::default(),
         instr_stack_positions: Default::default(),
+        phi_stack_positions: Default::default(),
+        next_label_number: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
         data_numbers: Default::default(),

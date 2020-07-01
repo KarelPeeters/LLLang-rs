@@ -283,7 +283,7 @@ pub enum BinaryOp {
 }
 
 impl InstructionInfo {
-    fn ty(&self, prog: &Program) -> Type {
+    pub fn ty(&self, prog: &Program) -> Type {
         match self {
             InstructionInfo::Load { addr } => {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
@@ -356,6 +356,7 @@ impl Terminator {
 }
 
 //TODO undef, func, param, slot, extern and data can all be "marked" const I think
+//TODO maybe this enum could implement From to make all the wrapping easier?
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
     Undef(Type),

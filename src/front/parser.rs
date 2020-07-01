@@ -182,6 +182,7 @@ impl<'a> Tokenizer<'a> {
         let start_pos = self.pos;
         if self.left.is_empty() { return Ok(Token::eof_token(start_pos)) }
 
+        //TODO don't capture keywords that continue to become identifiers
         for (pattern, ty) in TRIVIAL_TOKEN_LIST {
             if self.left.starts_with(pattern) {
                 self.skip_fixed(pattern.len());
