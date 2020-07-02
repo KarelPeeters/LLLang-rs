@@ -20,6 +20,7 @@ pub enum ParseError {
         allowed: Vec<TokenType>,
     },
     Eof {
+        after: Pos,
         expected: &'static str,
     },
 }
@@ -129,7 +130,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     /// self.left should only be advanced trough this function to ensure self.pos is updated
-    fn skip_fixed(&mut self, count: usize) {
+    fn skip_count(&mut self, count: usize) -> &str {
         //update position
         let skipped = &self.left[0..count];
         if let Some(last_newline) = skipped.rfind('\n') {
@@ -139,22 +140,25 @@ impl<'a> Tokenizer<'a> {
             self.pos.col += count;
         }
 
-        //actually skip
         self.left = &self.left[count..];
+
+        skipped
     }
 
     fn skip_past(&mut self, pattern: &'static str, allow_eof: bool) -> Result<()> {
+        let start_pos = self.pos;
+
         match self.left.find(pattern) {
             Some(i) => {
                 //skip up to and including the pattern
-                self.skip_fixed(i + pattern.len());
+                self.skip_count(i + pattern.len());
                 Ok(())
             },
             None => {
-                if !allow_eof { return Err(ParseError::Eof { expected: pattern }) }
+                if !allow_eof { return Err(ParseError::Eof { after: start_pos, expected: pattern }) }
 
                 //skip to the end
-                self.skip_fixed(self.left.len());
+                self.skip_count(self.left.len());
                 Ok(())
             }
         }
@@ -163,7 +167,7 @@ impl<'a> Tokenizer<'a> {
     fn skip_whitespace_and_comments(&mut self) -> Result<()> {
         loop {
             let prev_left = self.left;
-            self.skip_fixed(self.left.len() - self.left.trim_start().len());
+            self.skip_count(self.left.len() - self.left.trim_start().len());
 
             if self.left.starts_with("//") {
                 self.skip_past("\n", true)?;
@@ -179,12 +183,64 @@ impl<'a> Tokenizer<'a> {
     fn parse_next(&mut self) -> Result<Token> {
         self.skip_whitespace_and_comments()?;
         let start_pos = self.pos;
-        if self.left.is_empty() { return Ok(Token::eof_token(start_pos)) }
 
-        //TODO don't capture keywords that continue to become identifiers
+        let peek = if let Some(peek) = self.left.chars().next() {
+            peek
+        } else {
+            return Ok(Token::eof_token(start_pos))
+        };
+
+        //number
+        if peek.is_ascii_digit() {
+            let end = self.left
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(self.left.len());
+            let string = self.skip_count(end).to_owned();
+
+            return Ok(Token {
+                ty: TT::IntLit,
+                string,
+                span: Span::new(start_pos, self.pos),
+            });
+        }
+
+        //identifier
+        if peek.is_alphabetic() || peek == '_' {
+            let end = self.left
+                .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '@'))
+                .unwrap_or(self.left.len());
+            let string = self.skip_count(end).to_owned();
+
+            //check if it it happens to be a keyword:
+            let ty = TRIVIAL_TOKEN_LIST.iter()
+                .find(|(pattern, _)| pattern == &string)
+                .map(|&(_, ty)| ty)
+                .unwrap_or(TT::Id);
+
+            return Ok(Token {
+                ty,
+                string,
+                span: Span::new(start_pos, self.pos),
+            });
+        }
+
+        //string literal
+        if peek == '"' {
+            let end = 1 + self.left[1..].find('"')
+                .ok_or(ParseError::Eof { after: self.pos, expected: "\"" })?;
+            let content = self.skip_count(end+1)[1..end].to_owned();
+
+            return Ok(Token {
+                ty: TT::StringLit,
+                string: content,
+                span: Span::new(start_pos, self.pos),
+            })
+        }
+
+        //trivial token
         for (pattern, ty) in TRIVIAL_TOKEN_LIST {
             if self.left.starts_with(pattern) {
-                self.skip_fixed(pattern.len());
+                self.skip_count(pattern.len());
                 let end_pos = self.pos;
                 return Ok(Token {
                     ty: *ty,
@@ -194,54 +250,9 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        //TODO all this stuff can be rewritten to directly index into `left` instead of messing with
-        // iterators, that would properly be more readable
-        let mut chars = self.left.chars().peekable();
-        let peek = *chars.peek().unwrap();
-
-        //number
-        if peek.is_ascii_digit() {
-            let string: String = chars.take_while(|&c| c.is_ascii_digit()).collect();
-            self.skip_fixed(string.len());
-            let end_pos = self.pos;
-            return Ok(Token {
-                ty: TT::IntLit,
-                string,
-                span: Span::new(start_pos, end_pos),
-            });
-        }
-
-        //identifier
-        if peek.is_ascii_alphabetic() || peek == '_' {
-            let string: String = chars.take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '@').collect();
-            self.skip_fixed(string.len());
-            let end_pos = self.pos;
-            return Ok(Token {
-                ty: TT::Id,
-                string,
-                span: Span::new(start_pos, end_pos),
-            });
-        }
-
-        //string literal
-        if peek == '"' {
-            let closing_index = 1 + self.left[1..].find('"')
-                .ok_or(ParseError::Eof { expected: "\"" })?;
-
-            let content = self.left[1..closing_index].to_owned();
-            self.skip_fixed(2 + content.len());
-
-            let end_pos = self.pos;
-            return Ok(Token {
-                ty: TT::StringLit,
-                string: content,
-                span: Span::new(start_pos, end_pos),
-            })
-        }
-
         Err(ParseError::Char {
             pos: self.pos,
-            char: self.left.chars().next().unwrap(), //eof was handled earlier
+            char: peek,
         })
     }
 
@@ -420,9 +431,9 @@ impl<'a> Parser<'a> {
         match token.ty {
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => {
-                let item = self.variable_declaration(TT::Const).map(ast::Item::Const);
+                let decl = self.variable_declaration(TT::Const)?;
                 self.expect(TT::Semi, "end of item")?;
-                item
+                Ok(ast::Item::Const(decl))
             },
             TT::Use => {
                 let start = token.span.start;
