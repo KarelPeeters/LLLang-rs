@@ -89,7 +89,7 @@ fn collect_used(prog: &Program) -> Visited {
     todo
 }
 
-pub fn gc(prog: &mut Program) {
+pub fn gc(prog: &mut Program) -> bool {
     let visited = collect_used(prog);
 
     let before_count = prog.nodes.total_node_count();
@@ -106,4 +106,5 @@ pub fn gc(prog: &mut Program) {
     let after_count = prog.nodes.total_node_count();
 
     println!("gc removed {}/{} nodes", before_count - after_count, before_count);
+    before_count != after_count
 }

@@ -5,7 +5,7 @@ use crate::mid::analyse::use_info::{Usage, UseInfo};
 use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, StackSlot, Value};
 
 ///Replace slots and the associated loads and stores with phi values where possible
-pub fn slot_to_phi(prog: &mut Program) {
+pub fn slot_to_phi(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
     let funcs: Vec<Function> = prog.nodes.funcs.iter().map(|(func, _)| func).collect();
 
@@ -16,7 +16,8 @@ pub fn slot_to_phi(prog: &mut Program) {
         replaced_slot_count += slot_to_phi_fun(prog, &use_info, func);
     }
 
-    println!("slot_to_phi removed {:?} slots", replaced_slot_count)
+    println!("slot_to_phi removed {:?} slots", replaced_slot_count);
+    replaced_slot_count != 0
 }
 
 

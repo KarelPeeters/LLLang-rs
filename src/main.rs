@@ -64,9 +64,14 @@ fn parse_all(ll_path: &Path) -> Result<front::ast::Program> {
 }
 
 fn run_optimizations(prog: &mut mid::ir::Program) {
-    mid::opt::gc::gc(prog);
-    mid::opt::slot_to_phi::slot_to_phi(prog);
-    mid::opt::gc::gc(prog);
+    loop {
+        let mut changed = false;
+
+        changed |= mid::opt::slot_to_phi::slot_to_phi(prog);
+        changed |= mid::opt::gc::gc(prog);
+
+        if !changed { break }
+    }
 }
 
 fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
