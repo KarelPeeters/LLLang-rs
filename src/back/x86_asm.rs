@@ -207,7 +207,7 @@ impl AsmBuilder<'_> {
             Terminator::Jump { target} => {
                 self.append_jump_to_target(target);
             },
-            Terminator::Branch { cond, targets: [true_target, false_target] } => {
+            Terminator::Branch { cond, true_target, false_target } => {
                 let label_number = self.label_number();
 
                 self.append_value_to_reg("eax", cond, 0);

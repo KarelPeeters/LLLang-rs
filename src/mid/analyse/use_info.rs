@@ -62,10 +62,10 @@ impl UseInfo {
                 Terminator::Jump { target } => {
                     info.add_target_usages(block, target);
                 }
-                Terminator::Branch { cond, targets } => {
+                Terminator::Branch { cond, true_target, false_target } => {
                     info.add_usage(*cond, Usage::BranchCond(block));
-                    info.add_target_usages(block, &targets[0]);
-                    info.add_target_usages(block, &targets[1]);
+                    info.add_target_usages(block, true_target);
+                    info.add_target_usages(block, false_target);
                 }
                 Terminator::Return { value } => {
                     info.add_usage(*value, Usage::ReturnValue(block));

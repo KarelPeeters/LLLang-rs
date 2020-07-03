@@ -145,10 +145,8 @@ fn new_target(block: ir::Block) -> ir::Target {
 fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) -> ir::Terminator {
     ir::Terminator::Branch {
         cond,
-        targets: [
-            new_target(true_block),
-            new_target(false_block)
-        ],
+        true_target: new_target(true_block),
+        false_target: new_target(false_block),
     }
 }
 

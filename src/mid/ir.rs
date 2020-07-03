@@ -320,8 +320,7 @@ impl InstructionInfo {
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Jump { target: Target },
-    //TODO figure out a way to get named fields here
-    Branch { cond: Value, targets: [Target; 2] },
+    Branch { cond: Value, true_target: Target, false_target: Target },
     Return { value: Value },
     Unreachable,
 }
@@ -336,9 +335,9 @@ impl Terminator {
     pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
         match self {
             Terminator::Jump { target } => f(target),
-            Terminator::Branch { targets, .. } => {
-                f(&mut targets[0]);
-                f(&mut targets[1]);
+            Terminator::Branch { true_target, false_target, .. } => {
+                f(true_target);
+                f(false_target);
             },
             Terminator::Return { .. } => {},
             Terminator::Unreachable => {},
@@ -348,9 +347,9 @@ impl Terminator {
     pub fn for_each_target<F: FnMut(&Target)>(&self, mut f: F) {
         match self {
             Terminator::Jump { target } => f(target),
-            Terminator::Branch { targets, .. } => {
-                f(&targets[0]);
-                f(&targets[1]);
+            Terminator::Branch { true_target, false_target, .. } => {
+                f(true_target);
+                f(false_target);
             },
             Terminator::Return { .. } => {},
             Terminator::Unreachable => {},
