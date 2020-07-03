@@ -11,6 +11,7 @@ type Result<'a, T> = std::result::Result<T, Error<'a>>;
 struct LoopInfo {
     cond: ir::Block,
     end: ir::Block,
+    end_needs_return: bool,
 }
 
 struct Lower<'m, 'a> {
@@ -19,11 +20,8 @@ struct Lower<'m, 'a> {
     module_skeleton: &'m ModuleSkeleton<'m>,
     modules: &'m IndexMap<&'a str, ModuleSkeleton<'m>>,
 
-    //TODO replace this global state with parameters
     curr_func: ir::Function,
-    curr_block: ir::Block,
-
-    curr_loops: Vec<LoopInfo>,
+    loop_stack: Vec<LoopInfo>,
 }
 
 #[derive(Debug, Default)]
@@ -154,13 +152,26 @@ fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) ->
     }
 }
 
+enum ContinueOrBreak {
+    Break,
+    Continue,
+}
+
+/// Represents the a point the the program where more code can be appended to.
+/// This type intentionally doesn't implement Copy so it's easy to spot when it is accidentally used
+/// twice.
+struct Flow {
+    block: ir::Block,
+    needs_return: bool,
+}
+
 impl<'m, 'a> Lower<'m, 'a> {
-    fn start_new_block(&mut self) {
-        self.curr_block = self.prog.define_block(ir::BlockInfo {
-            phis: Vec::new(),
-            instructions: Vec::new(),
-            terminator: ir::Terminator::Unreachable,
-        });
+    #[must_use]
+    fn new_flow(&mut self, needs_return: bool) -> Flow {
+        Flow {
+            block: self.prog.define_block(ir::BlockInfo::new()),
+            needs_return,
+        }
     }
 
     fn define_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
@@ -168,37 +179,39 @@ impl<'m, 'a> Lower<'m, 'a> {
         self.prog.define_slot(slot)
     }
 
-    fn append_instr(&mut self, instr: ir::InstructionInfo) -> ir::Instruction {
+    fn append_instr(&mut self, block: ir::Block, instr: ir::InstructionInfo) -> ir::Instruction {
         let instr = self.prog.define_instr(instr);
-        self.prog.get_block_mut(self.curr_block).instructions.push(instr);
+        self.prog.get_block_mut(block).instructions.push(instr);
         instr
     }
 
-    fn append_load(&mut self, value: LRValue) -> ir::Value {
+    fn append_load(&mut self, block: ir::Block, value: LRValue) -> ir::Value {
         match value {
             LRValue::Left(value) =>
-                ir::Value::Instr(self.append_instr(ir::InstructionInfo::Load { addr: value })),
+                ir::Value::Instr(self.append_instr(block, ir::InstructionInfo::Load { addr: value })),
             LRValue::Right(value) =>
                 value,
         }
     }
 
-    fn append_store(&mut self, span: Span, addr: LRValue, value: ir::Value) -> Result<'static, ir::Value> {
+    fn append_store(&mut self, block: ir::Block, span: Span, addr: LRValue, value: ir::Value) -> Result<'static, ir::Value> {
         match addr {
             LRValue::Left(addr) =>
-                Ok(ir::Value::Instr(self.append_instr(ir::InstructionInfo::Store { addr, value }))),
+                Ok(ir::Value::Instr(self.append_instr(block, ir::InstructionInfo::Store { addr, value }))),
             LRValue::Right(_) =>
                 Err(Error::StoreIntoRValue(span)),
         }
     }
 
     /// None means this expression doesn't return control, eg. it returns from the function or breaks
-    fn append_expr(&mut self,
-                       scope: &mut Scope,
-                       expr: &'a ast::Expression,
-                       expect_ty: Option<ir::Type>,
-    ) -> Result<'a, LRValue> {
-        let result_value = match &expr.kind {
+    fn append_expr(
+        &mut self,
+        flow: Flow,
+        scope: &mut Scope,
+        expr: &'a ast::Expression,
+        expect_ty: Option<ir::Type>,
+    ) -> Result<'a, (Flow, LRValue)> {
+        let result: (Flow, LRValue) = match &expr.kind {
             ast::ExpressionKind::Null => {
                 // flexible, null can take on any pointer type
                 let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
@@ -208,12 +221,13 @@ impl<'m, 'a> Lower<'m, 'a> {
                         actual: self.prog.format_type(ty).to_string(),
                     })?;
 
-                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty, value: 0 })))
+                (flow, LRValue::Right(ir::Value::Const(ir::Const { ty, value: 0 })))
             }
             ast::ExpressionKind::BoolLit { value } => {
                 let ty_bool = self.prog.type_bool();
                 self.prog.check_type_match(expr, expect_ty, ty_bool)?;
-                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty: ty_bool, value: *value as i32 })))
+                let cst = ir::Value::Const(ir::Const { ty: ty_bool, value: *value as i32 });
+                (flow, LRValue::Right(cst))
             }
             ast::ExpressionKind::IntLit { value } => {
                 let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
@@ -229,8 +243,9 @@ impl<'m, 'a> Lower<'m, 'a> {
                         lit: value.clone(),
                         ty: self.prog.format_type(ty).to_string(),
                     })?;
+                let cst = ir::Value::Const(ir::Const { ty, value });
 
-                Ok(LRValue::Right(ir::Value::Const(ir::Const { ty, value })))
+                (flow, LRValue::Right(cst))
             }
             ast::ExpressionKind::StringLit { .. } => {
                 panic!("string literals only supported in consts for now")
@@ -238,7 +253,7 @@ impl<'m, 'a> Lower<'m, 'a> {
             ast::ExpressionKind::Identifier { id } => {
                 let value = scope.find_variable(id)?;
                 self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
-                Ok(value)
+                (flow, value)
             }
             ast::ExpressionKind::ModuleIdentifier { module, id } => {
                 //find the module
@@ -253,7 +268,8 @@ impl<'m, 'a> Lower<'m, 'a> {
                 //find the value itself
                 let value = module_skeleton.scope.find_variable(id)?;
                 self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
-                Ok(value)
+
+                (flow, value)
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
                 let expect_ty = match kind {
@@ -267,19 +283,20 @@ impl<'m, 'a> Lower<'m, 'a> {
                     }
                 };
 
-                let ir_left = self.append_expr_loaded(scope, left, expect_ty)?;
+                let (after_left, ir_left) = self.append_expr_loaded(flow, scope, left, expect_ty)?;
                 self.prog.check_integer_type(left, self.prog.type_of_value(ir_left))?;
 
                 //use the left type for both inference and correctness checking
                 let expect_ty = self.prog.type_of_value(ir_left);
-                let ir_right = self.append_expr_loaded(scope, right, Some(expect_ty))?;
+                let (after_right, ir_right) = self.append_expr_loaded(after_left, scope, right, Some(expect_ty))?;
 
-                let instr = self.append_instr(ir::InstructionInfo::Binary {
+                let instr = self.append_instr(after_right.block, ir::InstructionInfo::Binary {
                     kind: binary_op_map_kind(*kind),
                     left: ir_left,
                     right: ir_right,
                 });
-                Ok(LRValue::Right(ir::Value::Instr(instr)))
+
+                (after_right, LRValue::Right(ir::Value::Instr(instr)))
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
@@ -296,36 +313,39 @@ impl<'m, 'a> Lower<'m, 'a> {
                                     })
                             }).transpose()?;
 
-                        let inner = self.append_expr(scope, inner, expect_ty_inner)?;
-                        match inner {
+                        let (flow, inner) = self.append_expr(flow, scope, inner, expect_ty_inner)?;
+                        let inner = match inner {
                             //ref turns an lvalue into an rvalue
-                            LRValue::Left(inner) => Ok(LRValue::Right(inner)),
-                            LRValue::Right(_) => Err(Error::ReferenceOfLValue(expr.span)),
-                        }
+                            LRValue::Left(inner) => LRValue::Right(inner),
+                            LRValue::Right(_) => return Err(Error::ReferenceOfLValue(expr.span)),
+                        };
+
+                        (flow, inner)
                     },
                     ast::UnaryOp::Deref => {
                         let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
 
                         //load to get the value and wrap as lvalue again
-                        self.append_expr_loaded(scope, inner, expect_ty_inner)
-                            .map(LRValue::Left)
+                        let (after_value, value) = self.append_expr_loaded(flow, scope, inner, expect_ty_inner)?;
+                        (after_value, LRValue::Left(value))
                     },
                     ast::UnaryOp::Neg => {
-                        let inner = self.append_expr_loaded(scope, inner, expect_ty)?;
+                        let (after_inner, inner) = self.append_expr_loaded(flow, scope, inner, expect_ty)?;
                         let ty = self.prog.type_of_value(inner);
                         self.prog.check_integer_type(expr, ty)?;
 
-                        let instr = self.append_instr(ir::InstructionInfo::Binary {
+                        let instr = self.append_instr(after_inner.block, ir::InstructionInfo::Binary {
                             kind: ir::BinaryOp::Sub,
                             left: ir::Value::Const(ir::Const::new(ty, 0)),
                             right: inner,
                         });
-                        Ok(LRValue::Right(ir::Value::Instr(instr)))
+
+                        (after_inner, LRValue::Right(ir::Value::Instr(instr)))
                     },
                 }
             },
             ast::ExpressionKind::Call { target, args } => {
-                let target = self.append_expr_loaded(scope, target, None)?;
+                let (after_target, target) = self.append_expr_loaded(flow, scope, target, None)?;
 
                 //check that the target is a function
                 let target_ty = self.prog.type_of_value(target);
@@ -334,7 +354,6 @@ impl<'m, 'a> Lower<'m, 'a> {
                         expression: expr,
                         actual: self.prog.format_type(target_ty).to_string(),
                     })?;
-
 
                 //check return type and arg count
                 self.prog.check_type_match(expr, expect_ty, target_ty.ret)?;
@@ -348,207 +367,239 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 //append arg expressions and typecheck them
                 let target_param_types = target_ty.params.clone();
-                let ir_args =  args.iter()
-                    .enumerate()
-                    .map(|(i, arg)|
-                        self.append_expr_loaded(scope, arg, Some(target_param_types[i]))
-                    )
-                    .collect::<Result<_>>()?;
+                let mut ir_args = Vec::with_capacity(args.len());
+
+                let after_args = args.iter().enumerate().try_fold(after_target, |flow, (i, arg)| {
+                    let (after_value, value) = self.append_expr_loaded(flow, scope, arg, Some(target_param_types[i]))?;
+                    ir_args.push(value);
+                    Ok(after_value)
+                })?;
 
                 let call = ir::InstructionInfo::Call {
                     target,
                     args: ir_args,
                 };
-                let call = self.append_instr(call);
-                Ok(LRValue::Right(ir::Value::Instr(call)))
+
+                let call = self.append_instr(after_args.block, call);
+                (after_args, LRValue::Right(ir::Value::Instr(call)))
             },
             ast::ExpressionKind::Return { value } => {
                 let ret_ty = self.prog.get_func(self.curr_func).func_ty.ret;
 
-                let value = if let Some(value) = value {
-                    self.append_expr_loaded(scope, value, Some(ret_ty))?
+                let (after_value, value) = if let Some(value) = value {
+                    self.append_expr_loaded(flow, scope, value, Some(ret_ty))?
                 } else {
                     //check that function return type is indeed void
                     let void = self.prog.type_void();
                     self.prog.check_type_match(expr, Some(ret_ty), void)?;
-                    ir::Value::Undef(void)
+                    (flow, ir::Value::Undef(void))
                 };
 
                 let ret = ir::Terminator::Return { value };
-                self.prog.get_block_mut(self.curr_block).terminator = ret;
+                self.prog.get_block_mut(after_value.block).terminator = ret;
 
-                //start block and return undef so we can continue as if nothing happened
-                self.start_new_block();
-                //TODO ideally ir would have a "never" type which we could use here
-                //  or even more ideally we'd have proper typechecking in lower!
+                //start block and return undef so we can continue generating (and checking!) code
+                let next_flow = self.new_flow(false);
+
                 let ty = expect_ty.unwrap_or(self.prog.type_void());
-                Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
+                let undef = ir::Value::Undef(self.prog.define_type_ptr(ty));
+
+                (next_flow, LRValue::Left(undef))
             },
             ast::ExpressionKind::Continue =>
-                self.append_break_or_continue(expr, expect_ty, |info| info.cond),
+                self.append_break_or_continue(flow, expr, expect_ty, ContinueOrBreak::Continue)?,
             ast::ExpressionKind::Break =>
-                self.append_break_or_continue(expr, expect_ty, |info| info.end),
-        }?;
+                self.append_break_or_continue(flow, expr, expect_ty, ContinueOrBreak::Break)?,
+        };
 
         //check that the returned value's type is indeed expect_ty
         if cfg!(debug_assertions) {
-            let ty = self.prog.type_of_lrvalue(result_value);
+            let ty = self.prog.type_of_lrvalue(result.1);
             self.prog.check_type_match(expr, expect_ty, ty).expect("bug in lower")
         }
 
-        Ok(result_value)
+        Ok(result)
     }
 
-    fn append_break_or_continue<F: FnOnce(&LoopInfo) -> ir::Block>(
+    fn append_break_or_continue(
         &mut self,
+        flow: Flow,
         expr: &'a ast::Expression,
         expect_ty: Option<ir::Type>,
-        target: F,
-    ) -> Result<'a, LRValue> {
-        let loop_info = self.curr_loops.last()
+        kind: ContinueOrBreak,
+    ) -> Result<'a, (Flow, LRValue)> {
+        let loop_info = self.loop_stack.last_mut()
             .ok_or(Error::NotInLoop { expr })?;
 
-        let jump_cond = ir::Terminator::Jump { target: new_target(target(loop_info)) };
-        self.prog.get_block_mut(self.curr_block).terminator = jump_cond;
+        let target = match kind {
+            ContinueOrBreak::Continue => {
+                loop_info.cond
+            }
+            ContinueOrBreak::Break => {
+                loop_info.end_needs_return |= flow.needs_return;
+                loop_info.end
+            }
+        };
 
-        self.start_new_block();
+        let jump_cond = ir::Terminator::Jump { target: new_target(target) };
+        self.prog.get_block_mut(flow.block).terminator = jump_cond;
+
+        let next_flow = self.new_flow(false);
+
         let ty = expect_ty.unwrap_or(self.prog.type_void());
-        Ok(LRValue::Left(ir::Value::Undef(self.prog.define_type_ptr(ty))))
+        let undef = ir::Value::Undef(self.prog.define_type_ptr(ty));
+
+        Ok((next_flow, LRValue::Left(undef)))
     }
 
     fn append_expr_loaded(
         &mut self,
+        flow: Flow,
         scope: &mut Scope,
         expr: &'a ast::Expression,
         expect_ty: Option<ir::Type>,
-    ) -> Result<'a, ir::Value> {
-        let value = self.append_expr(scope, expr, expect_ty)?;
-        Ok(self.append_load(value))
+    ) -> Result<'a, (Flow, ir::Value)> {
+        let (after_value, value) = self.append_expr(flow, scope, expr, expect_ty)?;
+        let loaded_value = self.append_load(after_value.block, value);
+
+        Ok((after_value, loaded_value))
     }
 
-    fn append_block(&mut self, scope: &Scope, block: &'a ast::Block) -> Result<'a, ()> {
-        let scope = &mut scope.nest();
+    fn append_statement(&mut self, flow: Flow, scope: &mut Scope, stmt: &'a ast::Statement) -> Result<'a, Flow> {
+        match &stmt.kind {
+            ast::StatementKind::Declaration(decl) => {
+                assert!(!decl.mutable, "everything is mutable for now");
+                let expect_ty = decl.ty.as_ref()
+                    .map(|ty| self.prog.parse_type(ty))
+                    .transpose()?;
 
-        for stmt in &block.statements {
-            match &stmt.kind {
-                ast::StatementKind::Declaration(decl) => {
-                    assert!(!decl.mutable, "everything is mutable for now");
-                    let expect_ty = decl.ty.as_ref()
-                        .map(|ty| self.prog.parse_type(ty))
-                        .transpose()?;
+                let (after_value, value) = if let Some(init) = &decl.init {
+                    let (after_value, value) = self.append_expr_loaded(flow, scope, &init, expect_ty)?;
+                    (after_value, Some(value))
+                } else {
+                    (flow, None)
+                };
 
-                    let value = decl.init.as_ref()
-                        .map(|init| self.append_expr_loaded(scope, init, expect_ty))
-                        .transpose()?;
+                //figure out the type
+                let value_ty = value.map(|v| self.prog.type_of_value(v));
+                let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
 
-                    //figure out the type
-                    let value_ty = value.map(|v| self.prog.type_of_value(v));
-                    let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
+                //define the slot
+                let slot = self.define_slot(ty);
+                self.prog.get_func_mut(self.curr_func).slots.push(slot);
+                scope.declare_variable(&decl.id, LRValue::Left(ir::Value::Slot(slot)))?;
 
-                    //define the slot
-                    let slot = self.define_slot(ty);
-                    self.prog.get_func_mut(self.curr_func).slots.push(slot);
-                    scope.declare_variable(&decl.id, LRValue::Left(ir::Value::Slot(slot)))?;
-
-                    //optionally store the value
-                    if let Some(value) = value {
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
-                        self.append_instr(store);
-                    }
+                //optionally store the value
+                if let Some(value) = value {
+                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value };
+                    self.append_instr(after_value.block, store);
                 }
-                ast::StatementKind::Assignment(assign) => {
-                    let addr = self.append_expr(scope, &assign.left, None)?;
-                    let ty = self.prog.type_of_lrvalue(addr);
 
-                    let value = self.append_expr_loaded(scope, &assign.right, Some(ty))?;
-                    self.append_store(assign.span, addr, value)?;
-                }
-                ast::StatementKind::If(if_stmt) => {
-                    //condition
-                    let cond = self.append_expr_loaded(scope, &if_stmt.cond, Some(self.prog.type_bool()))?;
-                    let cond_end_block = self.curr_block;
+                Ok(after_value)
+            }
+            ast::StatementKind::Assignment(assign) => {
+                let (after_addr, addr) = self.append_expr(flow, scope, &assign.left, None)?;
+                let ty = self.prog.type_of_lrvalue(addr);
 
-                    //then
-                    self.start_new_block();
-                    let then_start_block = self.curr_block;
-                    self.append_block(scope, &if_stmt.then_block)?;
-                    let then_end_block = self.curr_block;
+                let (after_value, value) = self.append_expr_loaded(after_addr, scope, &assign.right, Some(ty))?;
+                self.append_store(after_value.block, assign.span, addr, value)?;
 
-                    //else
-                    self.start_new_block();
-                    let else_start_block = self.curr_block;
-                    if let Some(else_block) = &if_stmt.else_block {
-                        self.append_block(scope, else_block)?;
-                    }
-                    let else_end_block = self.curr_block;
+                Ok(after_value)
+            }
+            ast::StatementKind::If(if_stmt) => {
+                //condition
+                let (cond_end, cond) =
+                    self.append_expr_loaded(flow, scope, &if_stmt.cond, Some(self.prog.type_bool()))?;
 
-                    //end
-                    self.start_new_block();
-                    let end_block = self.curr_block;
+                //then
+                let then_start = self.new_flow(cond_end.needs_return);
+                let then_start_block = then_start.block;
+                let then_end = self.append_block(then_start, scope, &if_stmt.then_block)?;
 
-                    //connect everything
-                    let branch = new_branch(cond, then_start_block, else_start_block);
-                    let jump_end = ir::Terminator::Jump { target: new_target(end_block) };
+                //else
+                let else_start = self.new_flow(cond_end.needs_return);
+                let else_start_block = else_start.block;
+                let else_end = if let Some(else_block) = &if_stmt.else_block {
+                    self.append_block(else_start, scope, else_block)?
+                } else {
+                    else_start
+                };
 
-                    self.prog.get_block_mut(cond_end_block).terminator = branch;
-                    self.prog.get_block_mut(then_end_block).terminator = jump_end.clone();
-                    self.prog.get_block_mut(else_end_block).terminator = jump_end;
-                }
-                ast::StatementKind::While(while_stmt) => {
-                    let start_block = self.curr_block;
+                //end
+                let end_start = self.new_flow(then_end.needs_return || else_end.needs_return);
 
-                    //condition
-                    self.start_new_block();
-                    let cond_start_block = self.curr_block;
-                    let cond = self.append_expr_loaded(scope, &while_stmt.cond, Some(self.prog.type_bool()))?;
-                    let cond_end_block = self.curr_block;
+                //connect everything
+                let branch = new_branch(cond, then_start_block, else_start_block);
+                let jump_end = ir::Terminator::Jump { target: new_target(end_start.block) };
 
-                    //end
-                    self.start_new_block();
-                    let end_block = self.curr_block;
+                self.prog.get_block_mut(cond_end.block).terminator = branch;
+                self.prog.get_block_mut(then_end.block).terminator = jump_end.clone();
+                self.prog.get_block_mut(else_end.block).terminator = jump_end;
 
-                    let info = LoopInfo {
-                        cond: cond_start_block,
-                        end: end_block,
-                    };
-                    self.curr_loops.push(info);
+                Ok(end_start)
+            }
+            ast::StatementKind::While(while_stmt) => {
+                //condition
+                let cond_start = self.new_flow(flow.needs_return);
+                let cond_start_block = cond_start.block;
+                let (cond_end, cond) =
+                    self.append_expr_loaded(cond_start, scope, &while_stmt.cond, Some(self.prog.type_bool()))?;
 
-                    //body
-                    self.start_new_block();
-                    let body_start_block = self.curr_block;
-                    self.append_block(scope, &while_stmt.body)?;
-                    let body_end_block = self.curr_block;
+                //end
+                //needs_return will be set incrementally by all blocks that jump to end
+                let mut end_start = self.new_flow(false);
 
-                    self.curr_loops.pop().unwrap();
+                let loop_info = LoopInfo {
+                    cond: cond_start_block,
+                    end: end_start.block,
+                    end_needs_return: false,
+                };
+                self.loop_stack.push(loop_info);
 
-                    //connect everything
-                    let branch = new_branch(cond, body_start_block, end_block);
-                    let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
+                //body
+                let body_start = self.new_flow(cond_end.needs_return);
+                let body_start_block = body_start.block;
+                let body_end = self.append_block(body_start, scope, &while_stmt.body)?;
 
-                    self.prog.get_block_mut(start_block).terminator = jump_cond.clone();
-                    self.prog.get_block_mut(cond_end_block).terminator = branch;
-                    self.prog.get_block_mut(body_end_block).terminator = jump_cond;
+                let loop_info = self.loop_stack.pop().unwrap();
+                end_start.needs_return |= loop_info.end_needs_return;
 
-                    //continue withing code to end
-                    self.curr_block = end_block;
-                }
-                ast::StatementKind::Block(block) => {
-                    self.append_block(scope, block)?;
-                }
-                ast::StatementKind::Expression(expr) => {
-                    self.append_expr(scope, expr, None)?;
-                }
+                //connect everything
+                let branch = new_branch(cond, body_start_block, end_start.block);
+                end_start.needs_return |= cond_end.needs_return;
+                let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
+
+                self.prog.get_block_mut(flow.block).terminator = jump_cond.clone();
+                self.prog.get_block_mut(cond_end.block).terminator = branch;
+                self.prog.get_block_mut(body_end.block).terminator = jump_cond;
+
+                //continue withing code to end
+                Ok(end_start)
+            }
+            ast::StatementKind::Block(block) => {
+                self.append_block(flow, scope, block)
+            }
+            ast::StatementKind::Expression(expr) => {
+                let (after_value, _) = self.append_expr(flow, scope, expr, None)?;
+                Ok(after_value)
             }
         }
+    }
 
-        Ok(())
+    fn append_block(&mut self, flow: Flow, scope: &Scope, block: &'a ast::Block) -> Result<'a, Flow> {
+        let mut scope = scope.nest();
+
+        block.statements.iter()
+            .try_fold(flow, |flow, stmt| {
+                self.append_statement(flow, &mut scope, stmt)
+            })
     }
 
     fn append_func(&mut self, ast_func: &'a ast::Function, ir_func: ir::Function) -> Result<'a, ()> {
         self.curr_func = ir_func;
 
-        self.start_new_block();
-        self.prog.get_func_mut(ir_func).entry = self.curr_block;
+        let start = self.new_flow(true);
+        self.prog.get_func_mut(ir_func).entry = start.block;
 
         let mut scope = self.module_skeleton.scope.nest();
 
@@ -558,7 +609,7 @@ impl<'m, 'a> Lower<'m, 'a> {
 
             //allocate slots for parameters so their address can be taken
             let slot = self.define_slot(ty);
-            self.append_instr(ir::InstructionInfo::Store {
+            self.append_instr(start.block,ir::InstructionInfo::Store {
                 addr: ir::Value::Slot(slot),
                 value: ir::Value::Param(ir_param),
             });
@@ -571,11 +622,11 @@ impl<'m, 'a> Lower<'m, 'a> {
             scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
         }
 
-        let body = ast_func.body.as_ref().expect("can only generate code for functions with body");
-        self.append_block(&mut scope, body)?;
+        let body = ast_func.body.as_ref().
+            expect("can only generate code for functions with a body");
+        let end = self.append_block(start,&mut scope, body)?;
 
-        if self.prog.get_func(self.curr_func).entry == self.curr_block {
-            //TODO this return check has lots of false negatives
+        if end.needs_return {
             return Err(Error::MissingReturn(ast_func))
         }
 
@@ -759,7 +810,6 @@ pub fn lower(ast_prog: &ast::Program) -> Result<ir::Program> {
 
     //keep these as placeholders
     let tmp_func = prog.main;
-    let tmp_block = prog.get_func(prog.main).entry;
 
     //build skeletons
     let mut modules: IndexMap<&str, ModuleSkeleton> = IndexMap::new();
@@ -778,8 +828,7 @@ pub fn lower(ast_prog: &ast::Program) -> Result<ir::Program> {
             module_skeleton,
             modules: &modules,
             curr_func: tmp_func,
-            curr_block: tmp_block,
-            curr_loops: Vec::new(),
+            loop_stack: Vec::new(),
         };
 
         for (ast_func, ir_func) in &module_skeleton.functions_to_lower {

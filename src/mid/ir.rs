@@ -217,11 +217,7 @@ impl FunctionInfo {
     /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
-        let entry = prog.define_block(BlockInfo {
-            phis: Vec::new(),
-            instructions: Vec::new(),
-            terminator: Terminator::Unreachable,
-        });
+        let entry = prog.define_block(BlockInfo::new());
 
         Self {
             ty,
@@ -256,6 +252,17 @@ pub struct BlockInfo {
     pub phis: Vec<Phi>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
+}
+
+impl BlockInfo {
+    /// Create a new empty block with unreachable terminator.
+    pub fn new() -> BlockInfo {
+        BlockInfo {
+            phis: Vec::new(),
+            instructions: Vec::new(),
+            terminator: Terminator::Unreachable,
+        }
+    }
 }
 
 #[derive(Debug)]
