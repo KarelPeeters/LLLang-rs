@@ -27,7 +27,9 @@ struct AsmBuilder<'p> {
     param_stack_positions: IndexMap<Parameter, i32>,
     slot_stack_positions: IndexMap<StackSlot, i32>,
     instr_stack_positions: IndexMap<Instruction, i32>,
-    phi_stack_positions: IndexMap<Phi, i32>,
+
+    pre_phi_stack_positions: IndexMap<Phi, i32>,
+    post_phi_stack_positions: IndexMap<Phi, i32>,
 
     next_label_number: usize,
     //TODO make these match the indices in the IR debug format
@@ -91,7 +93,7 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("lea {}, [esp+{}]", reg, stack_offset + slot_pos));
             },
             Value::Phi(phi) => {
-                let phi_pos = self.phi_stack_positions[phi];
+                let phi_pos = self.post_phi_stack_positions[phi];
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + phi_pos));
             }
             Value::Instr(instr) => {
@@ -122,10 +124,9 @@ impl AsmBuilder<'_> {
     fn append_jump_to_target(&mut self, target: &Target) {
         let target_block_info = self.prog.get_block(target.block);
 
-        //TODO this phivalue code is not entirely correct, what if two phi values are swapped?
         for (phi, phi_value) in target_block_info.phis.iter().zip(&target.phi_values) {
             self.append_value_to_reg("eax", &phi_value, 0);
-            self.append_instr(&format!("mov [esp+{}], eax", self.phi_stack_positions[phi]));
+            self.append_instr(&format!("mov [esp+{}], eax", self.pre_phi_stack_positions[phi]));
         }
 
         let block_number = self.block_number(target.block);
@@ -137,6 +138,15 @@ impl AsmBuilder<'_> {
         self.append_ln(&format!("  block_{}: ", block_number));
 
         let block = self.prog.get_block(block);
+
+        //copy phi values from pre to post
+        if !block.phis.is_empty() {
+            self.append_instr(";phi copy");
+            for phi in &block.phis {
+                self.append_instr(&format!("mov eax, [esp+{}]", self.pre_phi_stack_positions[phi]));
+                self.append_instr(&format!("mov [esp+{}], eax", self.post_phi_stack_positions[phi]));
+            }
+        }
 
         //write out instructions
         for &instr in &block.instructions {
@@ -210,11 +220,15 @@ impl AsmBuilder<'_> {
             Terminator::Branch { cond, true_target, false_target } => {
                 let label_number = self.label_number();
 
+                self.append_instr(";  cond");
                 self.append_value_to_reg("eax", cond, 0);
                 self.append_instr("test eax, eax");
                 self.append_instr(&format!("jz label_{}", label_number));
 
+                self.append_instr(";  true");
                 self.append_jump_to_target(true_target);
+
+                self.append_instr(";  false");
                 self.append_ln(&format!("  label_{}:", label_number));
                 self.append_jump_to_target(false_target);
             }
@@ -251,8 +265,13 @@ impl AsmBuilder<'_> {
 
             for &phi in &block_info.phis {
                 let ty = self.prog.get_phi(phi).ty;
-                self.phi_stack_positions.insert(phi, stack_size);
-                stack_size += type_size_in_bytes(self.prog.get_type(ty));
+                let ty_size = type_size_in_bytes(self.prog.get_type(ty));
+
+                self.pre_phi_stack_positions.insert(phi, stack_size);
+                stack_size += ty_size;
+                self.post_phi_stack_positions.insert(phi, stack_size);
+                stack_size += ty_size;
+
             }
 
             for &instr in &block_info.instructions {
@@ -334,7 +353,8 @@ pub fn lower(prog: &Program) -> String {
         param_stack_positions: Default::default(),
         slot_stack_positions: Default::default(),
         instr_stack_positions: Default::default(),
-        phi_stack_positions: Default::default(),
+        pre_phi_stack_positions: Default::default(),
+        post_phi_stack_positions: Default::default(),
         next_label_number: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
