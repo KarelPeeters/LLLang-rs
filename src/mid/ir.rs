@@ -514,7 +514,22 @@ impl Display for Program {
                     writeln!(f, "      {:?}: {:?}", instr, instr_info)?;
                 }
 
-                writeln!(f, "      {:?}", block_info.terminator)?;
+                match &block_info.terminator {
+                    Terminator::Jump { target } => {
+                        writeln!(f, "      Jump {{")?;
+                        writeln!(f, "        {:?}", target)?;
+                        writeln!(f, "      }}")?;
+                    },
+                    Terminator::Branch { cond, true_target, false_target } => {
+                        writeln!(f, "      Branch {{")?;
+                        writeln!(f, "        cond: {:?}", cond)?;
+                        writeln!(f, "        true:  {:?}", true_target)?;
+                        writeln!(f, "        false: {:?}", false_target)?;
+                        writeln!(f, "      }}")?;
+                    },
+                    term => writeln!(f, "      {:?}", term)?,
+                }
+
                 writeln!(f, "    }}")?;
 
                 Ok(())
