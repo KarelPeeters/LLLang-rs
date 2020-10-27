@@ -153,9 +153,9 @@ impl<'a> Tokenizer<'a> {
                 //skip up to and including the pattern
                 self.skip_count(i + pattern.len());
                 Ok(())
-            },
+            }
             None => {
-                if !allow_eof { return Err(ParseError::Eof { after: start_pos, expected: pattern }) }
+                if !allow_eof { return Err(ParseError::Eof { after: start_pos, expected: pattern }); }
 
                 //skip to the end
                 self.skip_count(self.left.len());
@@ -176,7 +176,7 @@ impl<'a> Tokenizer<'a> {
                 self.skip_past("*/", false)?;
             }
 
-            if prev_left == self.left { return Ok(()) }
+            if prev_left == self.left { return Ok(()); }
         }
     }
 
@@ -187,7 +187,7 @@ impl<'a> Tokenizer<'a> {
         let peek = if let Some(peek) = self.left.chars().next() {
             peek
         } else {
-            return Ok(Token::eof_token(start_pos))
+            return Ok(Token::eof_token(start_pos));
         };
 
         //number
@@ -228,13 +228,13 @@ impl<'a> Tokenizer<'a> {
         if peek == '"' {
             let end = 1 + self.left[1..].find('"')
                 .ok_or(ParseError::Eof { after: self.pos, expected: "\"" })?;
-            let content = self.skip_count(end+1)[1..end].to_owned();
+            let content = self.skip_count(end + 1)[1..end].to_owned();
 
             return Ok(Token {
                 ty: TT::StringLit,
                 string: content,
                 span: Span::new(start_pos, self.pos),
-            })
+            });
         }
 
         //trivial token
@@ -408,7 +408,7 @@ impl<'a> Parser<'a> {
             result.push(item(self)?);
             end_pos = self.last_popped_end;
 
-            if self.accept(end)?.is_some() { break }
+            if self.accept(end)?.is_some() { break; }
 
             if let Some(sep) = sep {
                 self.expect(sep, "separator")?;
@@ -434,7 +434,7 @@ impl<'a> Parser<'a> {
                 let decl = self.variable_declaration(TT::Const)?;
                 self.expect(TT::Semi, "end of item")?;
                 Ok(ast::Item::Const(decl))
-            },
+            }
             TT::Use => {
                 let start = token.span.start;
                 self.pop()?;
@@ -488,7 +488,7 @@ impl<'a> Parser<'a> {
 
     fn block(&mut self) -> Result<ast::Block> {
         let start_pos = self.expect(TT::OpenC, "start of block")?.span.start;
-        let (span, statements) = self.list(TT::CloseC, None,Self::statement)?;
+        let (span, statements) = self.list(TT::CloseC, None, Self::statement)?;
 
         Ok(ast::Block { span: Span::new(start_pos, span.end), statements })
     }
@@ -502,7 +502,7 @@ impl<'a> Parser<'a> {
                 //declaration
                 let decl = self.variable_declaration(TT::Let)?;
                 (ast::StatementKind::Declaration(decl), true)
-            },
+            }
             TT::If => {
                 self.pop()?;
                 let cond = self.expression()?;
@@ -518,7 +518,7 @@ impl<'a> Parser<'a> {
                     then_block,
                     else_block,
                 }), false)
-            },
+            }
             TT::While => {
                 self.pop()?;
 
@@ -530,10 +530,10 @@ impl<'a> Parser<'a> {
                     cond: Box::new(cond),
                     body,
                 }), false)
-            },
+            }
             TT::OpenC => {
                 (ast::StatementKind::Block(self.block()?), false)
-            },
+            }
             _ => {
                 let left = self.expression()?;
 
@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
                 };
 
                 (kind, true)
-            },
+            }
         };
 
         if need_semi {
@@ -590,7 +590,7 @@ impl<'a> Parser<'a> {
                 .find(|i| i.token == token.ty);
 
             if let Some(info) = info {
-                if info.level < lower_level { break }
+                if info.level < lower_level { break; }
                 self.pop()?;
 
                 let next_lower_level = info.level + (info.bind_left as u8);
@@ -605,7 +605,7 @@ impl<'a> Parser<'a> {
                     },
                 }
             } else {
-                break
+                break;
             }
         }
 
@@ -623,7 +623,7 @@ impl<'a> Parser<'a> {
                 let token = self.pop()?;
                 prefix_ops.push((token.span.start, info.op));
             } else {
-                break
+                break;
             }
         }
 
@@ -676,30 +676,30 @@ impl<'a> Parser<'a> {
                     span: token.span,
                     kind: ast::ExpressionKind::IntLit { value: token.string },
                 })
-            },
+            }
             TT::True | TT::False => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
                     span: token.span,
                     kind: ast::ExpressionKind::BoolLit { value: token.string.parse().expect("TTs should parse correctly") },
                 })
-            },
+            }
             TT::Null => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
                     span: token.span,
                     kind: ast::ExpressionKind::Null,
                 })
-            },
+            }
             TT::StringLit => {
                 let token = self.pop()?;
                 Ok(ast::Expression {
                     span: token.span,
                     kind: ast::ExpressionKind::StringLit {
                         value: token.string
-                    }
+                    },
                 })
-            },
+            }
             TT::Id => {
                 let token = self.pop()?;
                 let left = ast::Identifier { span: token.span, string: token.string };
@@ -770,14 +770,14 @@ impl<'a> Parser<'a> {
                     span: Span::new(start_pos, inner.span.end),
                     kind: ast::TypeKind::Ref(Box::new(inner)),
                 })
-            },
+            }
             TT::Id => {
                 let token = self.pop()?;
                 Ok(ast::Type {
                     span: token.span,
                     kind: ast::TypeKind::Simple(token.string),
                 })
-            },
+            }
             TT::OpenB => {
                 self.pop()?;
                 let (_, params) = self.list(TT::CloseB, Some(TT::Comma), Self::type_decl)?;

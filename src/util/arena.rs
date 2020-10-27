@@ -1,5 +1,5 @@
-use std::fmt::Formatter;
 use std::fmt::Debug;
+use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};

@@ -295,10 +295,10 @@ impl InstructionInfo {
             InstructionInfo::Load { addr } => {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
                     .expect("load addr should have a pointer type")
-            },
+            }
             InstructionInfo::Store { .. } => {
                 prog.type_void()
-            },
+            }
             InstructionInfo::Call { target, .. } => {
                 prog.get_type(prog.type_of_value(*target)).as_func()
                     .expect("call target should have a function type")
@@ -338,9 +338,9 @@ impl Terminator {
             Terminator::Branch { true_target, false_target, .. } => {
                 f(true_target);
                 f(false_target);
-            },
-            Terminator::Return { .. } => {},
-            Terminator::Unreachable => {},
+            }
+            Terminator::Return { .. } => {}
+            Terminator::Unreachable => {}
         }
     }
 
@@ -350,9 +350,9 @@ impl Terminator {
             Terminator::Branch { true_target, false_target, .. } => {
                 f(true_target);
                 f(false_target);
-            },
-            Terminator::Return { .. } => {},
-            Terminator::Unreachable => {},
+            }
+            Terminator::Return { .. } => {}
+            Terminator::Unreachable => {}
         }
     }
 
@@ -412,7 +412,7 @@ impl Program {
         blocks_left.push_front(func.entry);
 
         while let Some(block) = blocks_left.pop_front() {
-            if !blocks_seen.insert(block) { continue }
+            if !blocks_seen.insert(block) { continue; }
 
             f(block)?;
 
@@ -519,14 +519,14 @@ impl Display for Program {
                         writeln!(f, "      Jump {{")?;
                         writeln!(f, "        {:?}", target)?;
                         writeln!(f, "      }}")?;
-                    },
+                    }
                     Terminator::Branch { cond, true_target, false_target } => {
                         writeln!(f, "      Branch {{")?;
                         writeln!(f, "        cond: {:?}", cond)?;
                         writeln!(f, "        true:  {:?}", true_target)?;
                         writeln!(f, "        false: {:?}", false_target)?;
                         writeln!(f, "      }}")?;
-                    },
+                    }
                     term => writeln!(f, "      {:?}", term)?,
                 }
 

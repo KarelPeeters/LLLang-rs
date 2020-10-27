@@ -76,10 +76,10 @@ impl AsmBuilder<'_> {
         match value {
             Value::Undef(_) => {
                 self.append_instr(&format!(";mov {}, undef", reg)) //easy
-            },
+            }
             Value::Const(cst) => {
                 self.append_instr(&format!("mov {}, {}", reg, cst.value))
-            },
+            }
             Value::Func(func) => {
                 let func_number = self.func_number(*func);
                 self.append_instr(&format!("mov {}, func_{}", reg, func_number));
@@ -91,7 +91,7 @@ impl AsmBuilder<'_> {
             Value::Slot(slot) => {
                 let slot_pos = self.slot_stack_positions[slot];
                 self.append_instr(&format!("lea {}, [esp+{}]", reg, stack_offset + slot_pos));
-            },
+            }
             Value::Phi(phi) => {
                 let phi_pos = self.post_phi_stack_positions[phi];
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + phi_pos));
@@ -99,7 +99,7 @@ impl AsmBuilder<'_> {
             Value::Instr(instr) => {
                 let instr_pos = self.instr_stack_positions[instr];
                 self.append_instr(&format!("mov {}, [esp+{}]", reg, stack_offset + instr_pos));
-            },
+            }
             Value::Extern(ext) => {
                 let name = &self.prog.get_ext(*ext).name;
                 self.append_instr(&format!("mov {}, {}", reg, name));
@@ -157,13 +157,13 @@ impl AsmBuilder<'_> {
                     self.append_value_to_reg("eax", value, 0);
                     self.append_value_to_reg("ebx", addr, 0);
                     self.append_instr("mov [ebx], eax");
-                },
+                }
                 InstructionInfo::Load { addr } => {
                     self.append_instr(";load");
                     self.append_value_to_reg("ebx", addr, 0);
                     self.append_instr("mov eax, [ebx]");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
-                },
+                }
                 InstructionInfo::Call { target, args } => {
                     self.append_instr(";call");
 
@@ -198,25 +198,25 @@ impl AsmBuilder<'_> {
                             self.append_instr("cmp eax, ebx");
                             self.append_instr("sete cl");
                             self.append_instr("mov eax, ecx");
-                        },
+                        }
                         BinaryOp::Neq => {
                             self.append_instr("xor ecx, ecx");
                             self.append_instr("cmp eax, ebx");
                             self.append_instr("setne cl");
                             self.append_instr("mov eax, ecx");
-                        },
+                        }
                     }
 
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
-                },
+                }
             }
         }
 
         self.append_instr(";terminator");
         match &block.terminator {
-            Terminator::Jump { target} => {
+            Terminator::Jump { target } => {
                 self.append_jump_to_target(target);
-            },
+            }
             Terminator::Branch { cond, true_target, false_target } => {
                 let label_number = self.label_number();
 
@@ -271,7 +271,6 @@ impl AsmBuilder<'_> {
                 stack_size += ty_size;
                 self.post_phi_stack_positions.insert(phi, stack_size);
                 stack_size += ty_size;
-
             }
 
             for &instr in &block_info.instructions {

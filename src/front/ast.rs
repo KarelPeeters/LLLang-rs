@@ -1,5 +1,6 @@
-use crate::front::Span;
 use indexmap::map::IndexMap;
+
+use crate::front::Span;
 
 #[derive(Debug)]
 pub struct Type {
@@ -14,7 +15,7 @@ pub enum TypeKind {
     Func {
         params: Vec<Type>,
         ret: Box<Type>,
-    }
+    },
 }
 
 #[derive(Debug)]
@@ -91,7 +92,7 @@ pub struct Declaration {
     pub mutable: bool,
     pub id: Identifier,
     pub ty: Option<Type>,
-    pub init: Option<Box<Expression>>
+    pub init: Option<Box<Expression>>,
 }
 
 #[derive(Debug)]
@@ -128,7 +129,7 @@ pub enum ExpressionKind {
     BoolLit { value: bool },
     StringLit { value: String },
     Null,
-    
+
     Identifier { id: Identifier },
     ModuleIdentifier { module: Identifier, id: Identifier },
 
@@ -165,5 +166,7 @@ pub enum BinaryOp {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum UnaryOp {
-    Ref, Deref, Neg,
+    Ref,
+    Deref,
+    Neg,
 }

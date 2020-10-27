@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::mid::ir::{Block, BlockInfo, Function, InstructionInfo, Program, Value, FunctionInfo};
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, InstructionInfo, Program, Value};
 
 #[derive(Default)]
 struct Visited {
@@ -17,7 +17,7 @@ impl Visited {
                 Value::Func(func) => {
                     //queue this function for visiting
                     self.funcs.push_back(func)
-                },
+                }
                 Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
                 Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
                     //there are only tracked as values

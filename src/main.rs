@@ -70,7 +70,7 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
         changed |= mid::opt::slot_to_phi::slot_to_phi(prog);
         changed |= mid::opt::gc::gc(prog);
 
-        if !changed { break }
+        if !changed { break; }
     }
 }
 
@@ -114,7 +114,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         .status()?;
 
     if !result.success() {
-        return Err(CompileError::Assemble)
+        return Err(CompileError::Assemble);
     }
 
     let result = Command::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.27.29110\\bin\\Hostx64\\x86\\link.exe")
@@ -128,7 +128,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         .status()?;
 
     if !result.success() {
-        return Err(CompileError::Link)
+        return Err(CompileError::Link);
     }
 
     Ok(asm_path.with_extension("exe"))
@@ -182,7 +182,7 @@ fn main() -> Result<()> {
         Some("asm") => Level::ASM,
         _ => {
             eprintln!("Expected either .ll or .asm file as input");
-            return Ok(())
+            return Ok(());
         }
     };
 
