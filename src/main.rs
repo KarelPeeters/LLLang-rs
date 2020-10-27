@@ -117,7 +117,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         return Err(CompileError::Assemble)
     }
 
-    let result = Command::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.26.28801\\bin\\Hostx64\\x86\\link.exe")
+    let result = Command::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.27.29110\\bin\\Hostx64\\x86\\link.exe")
         .current_dir(asm_path.parent().unwrap())
         .arg("/nologo")
         .arg("/subsystem:console")
