@@ -91,7 +91,7 @@ impl ProgramExt for ir::Program {
             ast::TypeKind::Ref(inner) => {
                 let inner = self.parse_type(inner)?;
                 Ok(self.define_type_ptr(inner))
-            },
+            }
             ast::TypeKind::Func { params, ret } => {
                 let params = params.iter()
                     .map(|p| self.parse_type(p))
@@ -107,10 +107,10 @@ impl ProgramExt for ir::Program {
             LRValue::Left(value) => {
                 let ty = self.type_of_value(value);
                 self.get_type(ty).unwrap_ptr().expect("lvalue should have pointer type")
-            },
+            }
             LRValue::Right(value) => {
                 self.type_of_value(value)
-            },
+            }
         }
     }
 
@@ -121,7 +121,7 @@ impl ProgramExt for ir::Program {
                     expression: expr,
                     expected: self.format_type(expected).to_string(),
                     actual: self.format_type(actual).to_string(),
-                })
+                });
             }
         }
         Ok(())
@@ -260,7 +260,7 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 //check that it's actually used
                 if !self.module_skeleton.used_modules.contains(&*module.string) {
-                    return Err(Error::ModuleNotUsed { module })
+                    return Err(Error::ModuleNotUsed { module });
                 }
 
                 //find the value itself
@@ -274,7 +274,7 @@ impl<'m, 'a> Lower<'m, 'a> {
                     ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul |
                     ast::BinaryOp::Div | ast::BinaryOp::Mod => {
                         expect_ty
-                    },
+                    }
                     ast::BinaryOp::Eq | ast::BinaryOp::Neq => {
                         self.prog.check_type_match(expr, expect_ty, self.prog.type_bool())?;
                         None
@@ -319,14 +319,14 @@ impl<'m, 'a> Lower<'m, 'a> {
                         };
 
                         (flow, inner)
-                    },
+                    }
                     ast::UnaryOp::Deref => {
                         let expect_ty_inner = expect_ty.map(|ty| self.prog.define_type_ptr(ty));
 
                         //load to get the value and wrap as lvalue again
                         let (after_value, value) = self.append_expr_loaded(flow, scope, inner, expect_ty_inner)?;
                         (after_value, LRValue::Left(value))
-                    },
+                    }
                     ast::UnaryOp::Neg => {
                         let (after_inner, inner) = self.append_expr_loaded(flow, scope, inner, expect_ty)?;
                         let ty = self.prog.type_of_value(inner);
@@ -339,9 +339,9 @@ impl<'m, 'a> Lower<'m, 'a> {
                         });
 
                         (after_inner, LRValue::Right(ir::Value::Instr(instr)))
-                    },
+                    }
                 }
-            },
+            }
             ast::ExpressionKind::Call { target, args } => {
                 let (after_target, target) = self.append_expr_loaded(flow, scope, target, None)?;
 
@@ -360,7 +360,7 @@ impl<'m, 'a> Lower<'m, 'a> {
                         call: expr,
                         expected: target_ty.params.len(),
                         actual: args.len(),
-                    })
+                    });
                 }
 
                 //append arg expressions and typecheck them
@@ -380,7 +380,7 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 let call = self.append_instr(after_args.block, call);
                 (after_args, LRValue::Right(ir::Value::Instr(call)))
-            },
+            }
             ast::ExpressionKind::Return { value } => {
                 let ret_ty = self.prog.get_func(self.curr_func).func_ty.ret;
 
@@ -403,7 +403,7 @@ impl<'m, 'a> Lower<'m, 'a> {
                 let undef = ir::Value::Undef(self.prog.define_type_ptr(ty));
 
                 (next_flow, LRValue::Left(undef))
-            },
+            }
             ast::ExpressionKind::Continue =>
                 self.append_break_or_continue(flow, expr, expect_ty, ContinueOrBreak::Continue)?,
             ast::ExpressionKind::Break =>
@@ -607,7 +607,7 @@ impl<'m, 'a> Lower<'m, 'a> {
 
             //allocate slots for parameters so their address can be taken
             let slot = self.define_slot(ty);
-            self.append_instr(start.block,ir::InstructionInfo::Store {
+            self.append_instr(start.block, ir::InstructionInfo::Store {
                 addr: ir::Value::Slot(slot),
                 value: ir::Value::Param(ir_param),
             });
@@ -622,10 +622,10 @@ impl<'m, 'a> Lower<'m, 'a> {
 
         let body = ast_func.body.as_ref().
             expect("can only generate code for functions with a body");
-        let end = self.append_block(start,&mut scope, body)?;
+        let end = self.append_block(start, &mut scope, body)?;
 
         if end.needs_return {
-            return Err(Error::MissingReturn(ast_func))
+            return Err(Error::MissingReturn(ast_func));
         }
 
         Ok(())
@@ -703,7 +703,7 @@ pub enum LowerError<'a> {
     //other
     NotInLoop {
         expr: &'a ast::Expression,
-    }
+    },
 }
 
 #[derive(Debug, Default)]
@@ -740,7 +740,7 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                     }
                     (false, None) => {
                         //functions need bodies
-                        return Err(Error::MissingFunctionBody(ast_func))
+                        return Err(Error::MissingFunctionBody(ast_func));
                     }
                     (ext, Some(_)) => {
                         //standard function, maybe marked extern
@@ -764,7 +764,7 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                                 return Err(Error::MainFunctionWrongType {
                                     expected: prog.format_type(expected_main_ty).to_string(),
                                     actual: prog.format_type(actual_func_ty).to_string(),
-                                })
+                                });
                             }
 
                             prog.main = ir_func;
@@ -779,7 +779,7 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                 let ty = decl.ty.as_ref().map(|ty| prog.parse_type(ty)).transpose()?;
                 let init = decl.init.as_ref().expect("consts need initialized for now");
 
-                match &init.kind {
+                let value = match &init.kind {
                     ast::ExpressionKind::StringLit { value } => {
                         let ty_byte = prog.define_type_int(8);
                         let ty_byte_ptr = prog.define_type_ptr(ty_byte);
@@ -790,12 +790,36 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                             bytes: value.clone().into_bytes(),
                         });
 
-                        skeleton.scope.declare_variable(&decl.id, LRValue::Right(ir::Value::Data(data)))?;
-                    },
+                        LRValue::Right(ir::Value::Data(data))
+                    }
+                    ast::ExpressionKind::BoolLit { value } => {
+                        let ty_bool = prog.type_bool();
+                        prog.check_type_match(init, ty, ty_bool)?;
+                        LRValue::Right(ir::Value::Const(ir::Const { ty: ty_bool, value: *value as i32 }))
+                    }
+                    ast::ExpressionKind::IntLit { value } => {
+                        let ty = ty.ok_or(Error::CannotInferType(init.span))?;
+                        prog.get_type(ty).unwrap_int()
+                            .ok_or(Error::ExpectIntegerType {
+                                expression: init,
+                                actual: prog.format_type(ty).to_string(),
+                            })?;
+
+                        let value = value.parse::<i32>()
+                            .map_err(|_| Error::InvalidLiteral {
+                                span: init.span,
+                                lit: value.clone(),
+                                ty: prog.format_type(ty).to_string(),
+                            })?;
+
+                        LRValue::Right(ir::Value::Const(ir::Const { ty, value }))
+                    }
                     kind => {
                         panic!("This kind of const initializer is not supported for now: {:?}", kind)
                     }
-                }
+                };
+
+                skeleton.scope.declare_variable(&decl.id, value)?;
             }
         }
     }
