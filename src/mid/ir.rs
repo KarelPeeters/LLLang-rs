@@ -136,6 +136,10 @@ impl Program {
         self.types.push(TypeInfo::Func(func_ty))
     }
 
+    pub fn define_type_tuple(&mut self, tuple_ty: TupleType) -> Type {
+        self.types.push(TypeInfo::Tuple(tuple_ty))
+    }
+
     pub fn type_bool(&self) -> Type {
         self.ty_bool
     }
@@ -169,12 +173,18 @@ pub enum TypeInfo {
     Integer { bits: u32 },
     Pointer { inner: Type },
     Func(FunctionType),
+    Tuple(TupleType),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionType {
     pub params: Vec<Type>,
     pub ret: Type,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TupleType {
+    pub fields: Vec<Type>,
 }
 
 impl TypeInfo {
@@ -459,6 +469,15 @@ impl Program {
                             write!(f, "{}", self.prog.format_type(param_ty))?;
                         }
                         write!(f, ") -> {}", self.prog.format_type(func_ty.ret))?;
+                        Ok(())
+                    }
+                    TypeInfo::Tuple(tuple_ty) => {
+                        write!(f, "(")?;
+                        for (i, &param_ty) in tuple_ty.fields.iter().enumerate() {
+                            if i > 0 { write!(f, ", ")?; }
+                            write!(f, "{}", self.prog.format_type(param_ty))?;
+                        }
+                        write!(f, ")")?;
                         Ok(())
                     }
                 }

@@ -3,13 +3,18 @@ use indexmap::map::IndexMap;
 use crate::mid::ir::{BinaryOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, Parameter, Phi, Program, StackSlot, Target, Terminator, TypeInfo, Value};
 
 //TODO rethink what this means around alignment
-fn type_size_in_bytes(ty: &TypeInfo) -> i32 {
+fn type_size_in_bytes(prog: &Program, ty: &TypeInfo) -> i32 {
     match ty {
         TypeInfo::Integer { bits: 32 } => 4,
         TypeInfo::Integer { bits: 1 } => 4,
         TypeInfo::Integer { bits: 8 } => 4,
-        TypeInfo::Integer { .. } => panic!("Only 32 bit integers and booleans supported for now"),
-        TypeInfo::Pointer { .. } | TypeInfo::Func { .. } => 4,
+        TypeInfo::Integer { .. } => panic!("Only 32 bit integers, booleans and bytes supported for now"),
+        TypeInfo::Pointer { .. } | TypeInfo::Func(..) => 4,
+        TypeInfo::Tuple(tuple_ty) => {
+            tuple_ty.fields.iter()
+                .map(|&field| type_size_in_bytes(prog, prog.get_type(field)))
+                .sum()
+        }
         //TODO change this back to 0, but then we need to check the type whenever we store
         TypeInfo::Void => 4
     }
@@ -254,7 +259,7 @@ impl AsmBuilder<'_> {
         //TODO for stdcall we don't actually need to allocate slots, they already have an address on the stack
         for &slot in &func_info.slots {
             let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
-            let size = type_size_in_bytes(ty);
+            let size = type_size_in_bytes(&self.prog, ty);
 
             self.slot_stack_positions.insert(slot, stack_size);
             stack_size += size;
@@ -265,7 +270,7 @@ impl AsmBuilder<'_> {
 
             for &phi in &block_info.phis {
                 let ty = self.prog.get_phi(phi).ty;
-                let ty_size = type_size_in_bytes(self.prog.get_type(ty));
+                let ty_size = type_size_in_bytes(&self.prog, self.prog.get_type(ty));
 
                 self.pre_phi_stack_positions.insert(phi, stack_size);
                 stack_size += ty_size;
@@ -276,7 +281,7 @@ impl AsmBuilder<'_> {
             for &instr in &block_info.instructions {
                 let ty = self.prog.get_type(self.prog.get_instr(instr).ty(self.prog));
                 self.instr_stack_positions.insert(instr, stack_size);
-                stack_size += type_size_in_bytes(ty);
+                stack_size += type_size_in_bytes(&self.prog, ty);
             }
         });
 
@@ -291,7 +296,7 @@ impl AsmBuilder<'_> {
         //determine the stack position for each parameter
         for &param in func_info.params.iter() {
             self.param_stack_positions.insert(param, stack_size);
-            let size = type_size_in_bytes(self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
+            let size = type_size_in_bytes(&self.prog, self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
             stack_size += size;
             param_size += size;
         }

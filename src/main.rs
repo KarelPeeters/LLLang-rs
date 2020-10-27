@@ -23,6 +23,7 @@ mod util;
 enum CompileError {
     IO(std::io::Error),
     InvalidFileName(OsString),
+    DuplicateModuleName(String),
     Parse(ParseError),
     Lower,
     Assemble,
@@ -31,36 +32,70 @@ enum CompileError {
 
 type Result<T> = std::result::Result<T, CompileError>;
 
+#[derive(Default)]
+struct ModuleCollector {
+    modules: IndexMap<String, front::ast::Module>,
+    next_file_id: usize,
+}
+
+impl ModuleCollector {
+    fn add_module_file(&mut self, path: &Path, root: bool) -> Result<()> {
+        if root {
+            assert!(!self.modules.contains_key(""), "root can only be added once")
+        }
+
+        let id = self.next_file_id;
+        self.next_file_id += 1;
+
+        let name = if root {
+            ""
+        } else {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| CompileError::InvalidFileName(path.as_os_str().to_owned()))?
+        };
+
+        let src = read_to_string(path)?;
+        let module = front::parser::parse_module(FileId { id }, &src)?;
+
+        if self.modules.insert(name.to_owned(), module).is_some() {
+            Err(CompileError::DuplicateModuleName(name.to_owned()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Parse the main file and all of the lib files into a single program
 fn parse_all(ll_path: &Path) -> Result<front::ast::Program> {
-    let mut modules = IndexMap::new();
+    let mut collector = ModuleCollector::default();
 
-    //parse main file
-    let main_src = read_to_string(ll_path)?;
-    let main_module = front::parser::parse_module(FileId { id: 0 }, &main_src)?;
-    modules.insert("".to_owned(), main_module);
+    //main file
+    collector.add_module_file(ll_path, true)?;
 
-    //parse lib files
-    let mut next_id = 1;
+    //lib files
     //TODO this is brittle, ship the lib files with the exe instead
     for entry in read_dir("lib")? {
         let path = entry?.path();
 
         if path.extension() == Some(OsStr::new("ll")) {
-            let module_name = path.file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| CompileError::InvalidFileName(path.as_os_str().to_owned()))?;
-
-            let id = FileId { id: next_id };
-            next_id += 1;
-
-            let module_src = read_to_string(&path);
-            let module = front::parser::parse_module(id, &module_src?)?;
-            modules.insert(module_name.to_owned(), module);
+            collector.add_module_file(&path, false)?;
         }
     }
 
-    Ok(front::ast::Program { modules })
+    //files in the same folder as the main file
+    if let Some(parent_path) = ll_path.parent() {
+        for sibling in parent_path.read_dir()? {
+            let sibling_path = sibling?.path();
+            if sibling_path == ll_path { continue; }
+
+            if sibling_path.extension() == Some(OsStr::new("ll")) {
+                collector.add_module_file(&sibling_path, false)?;
+            }
+        }
+    }
+
+    Ok(front::ast::Program { modules: collector.modules })
 }
 
 fn run_optimizations(prog: &mut mid::ir::Program) {

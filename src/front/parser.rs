@@ -3,7 +3,6 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::{ast, FileId, Pos, Span};
-use crate::front::ast::{BinaryOp, UnaryOp, UseDecl};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -43,12 +42,14 @@ declare_tokens![
     IntLit,
     StringLit,
 
+    //TODO remove these as tokens and just handle them as paths?
     True("true"),
     False("false"),
     Null("null"),
 
     Extern("extern"),
     Use("use"),
+    Struct("struct"),
     Fun("fun"),
     Return("return"),
     Let("let"),
@@ -290,40 +291,40 @@ struct BinOpInfo {
     level: u8,
     token: TT,
     bind_left: bool,
-    op: BinaryOp,
+    op: ast::BinaryOp,
 }
 
 impl BinOpInfo {
-    const fn new(level: u8, token: TokenType, bind_left: bool, op: BinaryOp) -> Self {
+    const fn new(level: u8, token: TokenType, bind_left: bool, op: ast::BinaryOp) -> Self {
         Self { level, token, bind_left, op }
     }
 }
 
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
-    BinOpInfo::new(3, TT::DoubleEq, true, BinaryOp::Eq),
-    BinOpInfo::new(3, TT::NotEq, true, BinaryOp::Neq),
-    BinOpInfo::new(5, TT::Plus, true, BinaryOp::Add),
-    BinOpInfo::new(5, TT::Minus, true, BinaryOp::Sub),
-    BinOpInfo::new(6, TT::Slash, true, BinaryOp::Div),
-    BinOpInfo::new(6, TT::Star, true, BinaryOp::Mul),
-    BinOpInfo::new(6, TT::Percent, true, BinaryOp::Mod),
+    BinOpInfo::new(3, TT::DoubleEq, true, ast::BinaryOp::Eq),
+    BinOpInfo::new(3, TT::NotEq, true, ast::BinaryOp::Neq),
+    BinOpInfo::new(5, TT::Plus, true, ast::BinaryOp::Add),
+    BinOpInfo::new(5, TT::Minus, true, ast::BinaryOp::Sub),
+    BinOpInfo::new(6, TT::Slash, true, ast::BinaryOp::Div),
+    BinOpInfo::new(6, TT::Star, true, ast::BinaryOp::Mul),
+    BinOpInfo::new(6, TT::Percent, true, ast::BinaryOp::Mod),
 ];
 
 struct UnOpInfo {
     token: TT,
-    op: UnaryOp,
+    op: ast::UnaryOp,
 }
 
 impl UnOpInfo {
-    const fn new(token: TokenType, op: UnaryOp) -> Self {
+    const fn new(token: TokenType, op: ast::UnaryOp) -> Self {
         UnOpInfo { token, op }
     }
 }
 
 const PREFIX_UNARY_OPERATOR_INFO: &[UnOpInfo] = &[
-    UnOpInfo::new(TT::Ampersand, UnaryOp::Ref),
-    UnOpInfo::new(TT::Star, UnaryOp::Deref),
-    UnOpInfo::new(TT::Minus, UnaryOp::Neg),
+    UnOpInfo::new(TT::Ampersand, ast::UnaryOp::Ref),
+    UnOpInfo::new(TT::Star, ast::UnaryOp::Deref),
+    UnOpInfo::new(TT::Minus, ast::UnaryOp::Neg),
 ];
 
 #[allow(dead_code)]
@@ -427,8 +428,10 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<ast::Item> {
         let token = self.peek();
+        let start = token.span.start;
 
         match token.ty {
+            TT::Struct => self.struct_().map(ast::Item::Struct),
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => {
                 let decl = self.variable_declaration(TT::Const)?;
@@ -436,18 +439,37 @@ impl<'a> Parser<'a> {
                 Ok(ast::Item::Const(decl))
             }
             TT::Use => {
-                let start = token.span.start;
                 self.pop()?;
-                let name = self.identifier()?;
+                let module = self.identifier()?;
                 self.expect(TT::Semi, "end of item")?;
 
-                Ok(ast::Item::UseDecl(UseDecl {
-                    span: Span::new(start, name.span.end),
-                    name,
+                Ok(ast::Item::UseDecl(ast::UseDecl {
+                    span: Span::new(start, module.span.end),
+                    module,
                 }))
             }
-            _ => Err(Self::unexpected_token(token, &[TT::Fun], "start of item"))
+            _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fun, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
+    }
+
+    fn struct_(&mut self) -> Result<ast::Struct> {
+        let start = self.expect(TT::Struct, "start of struct declaration")?.span.start;
+        let id = self.identifier()?;
+        self.expect(TT::OpenC, "start of struct fields")?;
+
+        let (_, fields) = self.list(TT::CloseC, Some(TT::Comma), Self::struct_field)?;
+
+        let span = Span::new(start, self.last_popped_end);
+        Ok(ast::Struct { span, id, fields })
+    }
+
+    fn struct_field(&mut self) -> Result<ast::StructField> {
+        let id = self.identifier()?;
+        self.expect(TT::Colon, "struct field type")?;
+        let ty = self.type_decl()?;
+
+        let span = Span::new(id.span.start, ty.span.end);
+        Ok(ast::StructField { span, id, ty })
     }
 
     fn function(&mut self) -> Result<ast::Function> {
@@ -701,21 +723,10 @@ impl<'a> Parser<'a> {
                 })
             }
             TT::Id => {
-                let token = self.pop()?;
-                let left = ast::Identifier { span: token.span, string: token.string };
-
-                let kind = if self.accept(TT::DoubleColon)?.is_some() {
-                    let right_token = self.expect(TT::Id, "child identifier")?;
-                    let right = ast::Identifier { span: token.span, string: right_token.string };
-
-                    ast::ExpressionKind::ModuleIdentifier { module: left, id: right }
-                } else {
-                    ast::ExpressionKind::Identifier { id: left }
-                };
-
+                let path = self.path()?;
                 Ok(ast::Expression {
-                    span: Span::new(token.span.start, self.last_popped_end),
-                    kind,
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::Path(path),
                 })
             }
             TT::OpenB => {
@@ -755,6 +766,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn path(&mut self) -> Result<ast::Path> {
+        let mut parents = Vec::new();
+        let mut id = self.identifier()?;
+
+        while self.accept(TT::DoubleColon)?.is_some() {
+            parents.push(id);
+            id = self.identifier()?;
+        }
+
+        Ok(ast::Path { span: Span::new(id.span.start, self.last_popped_end), parents, id })
+    }
+
     fn identifier(&mut self) -> Result<ast::Identifier> {
         let token = self.expect(TT::Id, "identifier")?;
         Ok(ast::Identifier { span: token.span, string: token.string })
@@ -772,10 +795,10 @@ impl<'a> Parser<'a> {
                 })
             }
             TT::Id => {
-                let token = self.pop()?;
+                let path = self.path()?;
                 Ok(ast::Type {
-                    span: token.span,
-                    kind: ast::TypeKind::Simple(token.string),
+                    span: path.span,
+                    kind: ast::TypeKind::Path(path),
                 })
             }
             TT::OpenB => {

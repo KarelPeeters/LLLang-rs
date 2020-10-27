@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::map::IndexMap;
 
@@ -38,7 +38,9 @@ impl Scope<'_> {
     fn declare_variable<'a>(&mut self, id: &'a ast::Identifier, var: LRValue) -> Result<'a, ()> {
         if self.variables.insert(id.string.to_owned(), var).is_some() {
             Err(Error::IdentifierDeclaredTwice(id))
-        } else { Ok(()) }
+        } else {
+            Ok(())
+        }
     }
 
     fn find_variable<'a>(&self, id: &'a ast::Identifier) -> Result<'a, LRValue> {
@@ -72,36 +74,12 @@ enum LRValue {
 
 //utility functions on ir::Program
 trait ProgramExt {
-    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type>;
     fn type_of_lrvalue(&self, value: LRValue) -> ir::Type;
     fn check_type_match<'a>(&self, expr: &'a ast::Expression, expected: Option<ir::Type>, actual: ir::Type) -> Result<'a, ()>;
     fn check_integer_type<'a>(&self, expr: &'a ast::Expression, actual: ir::Type) -> Result<'a, ()>;
 }
 
 impl ProgramExt for ir::Program {
-    fn parse_type<'a>(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
-        match &ty.kind {
-            ast::TypeKind::Simple(string) => match string.as_ref() {
-                "int" => Ok(self.define_type_int(32)),
-                "bool" => Ok(self.type_bool()),
-                "void" => Ok(self.type_void()),
-                "byte" => Ok(self.define_type_int(8)),
-                _ => Err(Error::InvalidType(ty)),
-            },
-            ast::TypeKind::Ref(inner) => {
-                let inner = self.parse_type(inner)?;
-                Ok(self.define_type_ptr(inner))
-            }
-            ast::TypeKind::Func { params, ret } => {
-                let params = params.iter()
-                    .map(|p| self.parse_type(p))
-                    .collect::<Result<_>>()?;
-                let ret = self.parse_type(ret)?;
-                Ok(self.define_type_func(ir::FunctionType { params, ret }))
-            }
-        }
-    }
-
     fn type_of_lrvalue(&self, value: LRValue) -> ir::Type {
         match value {
             LRValue::Left(value) => {
@@ -164,6 +142,33 @@ struct Flow {
 }
 
 impl<'m, 'a> Lower<'m, 'a> {
+    fn find_module(&self, module: &'a ast::Identifier) -> Result<'a, &ModuleSkeleton> {
+        if self.module_skeleton.used_modules.contains(&*module.string) {
+            //guaranteed to be found because this module must exist if it is marked as used
+            Ok(self.modules.get(&*module.string).unwrap())
+        } else {
+            Err(Error::ModuleNotUsed { module })
+        }
+    }
+
+    fn parse_type(&mut self, ty: &'a ast::Type) -> Result<'a, ir::Type> {
+        match &ty.kind {
+            ast::TypeKind::Path(path) => {
+                match &*path.parents {
+                    [module] => {
+                        let module = self.find_module(module)?;
+                        let declared_struct = module.declared_structs.get(&*path.id.string)
+                            .ok_or(Error::UndeclaredIdentifier(&path.id))?;
+                        Ok(declared_struct.ty)
+                    }
+                    _ => self.module_skeleton.parse_local_type(&mut self.prog, ty),
+                }
+            }
+            ast::TypeKind::Ref(_) | ast::TypeKind::Func { .. } =>
+                self.module_skeleton.parse_local_type(&mut self.prog, ty)
+        }
+    }
+
     #[must_use]
     fn new_flow(&mut self, needs_return: bool) -> Flow {
         Flow {
@@ -201,7 +206,6 @@ impl<'m, 'a> Lower<'m, 'a> {
         }
     }
 
-    /// None means this expression doesn't return control, eg. it returns from the function or breaks
     fn append_expr(
         &mut self,
         flow: Flow,
@@ -248,25 +252,13 @@ impl<'m, 'a> Lower<'m, 'a> {
             ast::ExpressionKind::StringLit { .. } => {
                 panic!("string literals only supported in consts for now")
             }
-            ast::ExpressionKind::Identifier { id } => {
-                let value = scope.find_variable(id)?;
+            ast::ExpressionKind::Path(path) => {
+                let value = match &*path.parents {
+                    [] => scope.find_variable(&path.id)?,
+                    [module] => self.find_module(module)?.scope.find_variable(&path.id)?,
+                    _ => panic!("Only paths with depth 1 allowed for now")
+                };
                 self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
-                (flow, value)
-            }
-            ast::ExpressionKind::ModuleIdentifier { module, id } => {
-                //find the module
-                let module_skeleton: &ModuleSkeleton = self.modules.get(&*module.string)
-                    .ok_or(Error::ModuleNotFound { module })?;
-
-                //check that it's actually used
-                if !self.module_skeleton.used_modules.contains(&*module.string) {
-                    return Err(Error::ModuleNotUsed { module });
-                }
-
-                //find the value itself
-                let value = module_skeleton.scope.find_variable(id)?;
-                self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
-
                 (flow, value)
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
@@ -468,7 +460,7 @@ impl<'m, 'a> Lower<'m, 'a> {
             ast::StatementKind::Declaration(decl) => {
                 assert!(!decl.mutable, "everything is mutable for now");
                 let expect_ty = decl.ty.as_ref()
-                    .map(|ty| self.prog.parse_type(ty))
+                    .map(|ty| self.parse_type(ty))
                     .transpose()?;
 
                 let (after_value, value) = if let Some(init) = &decl.init {
@@ -602,7 +594,7 @@ impl<'m, 'a> Lower<'m, 'a> {
         let mut scope = self.module_skeleton.scope.nest();
 
         for param in &ast_func.params {
-            let ty = self.prog.parse_type(&param.ty)?;
+            let ty = self.parse_type(&param.ty)?;
             let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
 
             //allocate slots for parameters so their address can be taken
@@ -706,27 +698,102 @@ pub enum LowerError<'a> {
     },
 }
 
+#[derive(Debug)]
+struct DeclaredStruct<'a> {
+    ty: ir::Type,
+    field_names: Vec<&'a str>,
+}
+
 #[derive(Debug, Default)]
 struct ModuleSkeleton<'a> {
     scope: Scope<'static>,
     used_modules: HashSet<&'a str>,
+    declared_structs: HashMap<&'a str, DeclaredStruct<'a>>,
     functions_to_lower: Vec<(&'a ast::Function, ir::Function)>,
 }
 
-fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is_root: bool) -> Result<'a, ModuleSkeleton<'a>> {
+impl<'a> ModuleSkeleton<'a> {
+    ///parse basic types and types that are already declared in this module
+    ///this is temporary and will be replaced by something that supports reordering
+    fn parse_local_type<'ta>(&self, prog: &mut ir::Program, ty: &'ta ast::Type) -> Result<'ta, ir::Type> {
+        match &ty.kind {
+            ast::TypeKind::Path(path) => {
+                match &*path.parents {
+                    [] => {
+                        match &*path.id.string {
+                            "int" => Ok(prog.define_type_int(32)),
+                            "bool" => Ok(prog.type_bool()),
+                            "void" => Ok(prog.type_void()),
+                            "byte" => Ok(prog.define_type_int(8)),
+                            string => {
+                                let declared_struct = self.declared_structs.get(string)
+                                    .ok_or(Error::UndeclaredIdentifier(&path.id))?;
+                                Ok(declared_struct.ty)
+                            }
+                        }
+                    }
+                    _ => {
+                        //error here
+                        panic!("Path types not supported yet here")
+                    }
+                }
+            }
+            ast::TypeKind::Ref(inner) => {
+                let inner = self.parse_local_type(prog, inner)?;
+                Ok(prog.define_type_ptr(inner))
+            }
+            ast::TypeKind::Func { params, ret } => {
+                let params = params.iter()
+                    .map(|p| self.parse_local_type(prog, p))
+                    .collect::<Result<_>>()?;
+                let ret = self.parse_local_type(prog, ret)?;
+                Ok(prog.define_type_func(ir::FunctionType { params, ret }))
+            }
+        }
+    }
+}
+
+fn build_module_skeleton<'a>(
+    prog: &mut ir::Program,
+    module: &'a ast::Module,
+    is_root: bool,
+    all_modules: &IndexMap<String, ast::Module>,
+) -> Result<'a, ModuleSkeleton<'a>> {
     let mut skeleton = ModuleSkeleton::default();
 
     for item in &module.items {
         match item {
             ast::Item::UseDecl(decl) => {
-                skeleton.used_modules.insert(&decl.name.string);
+                if !all_modules.contains_key(&*decl.module.string) {
+                    return Err(Error::ModuleNotFound { module: &decl.module });
+                }
+
+                skeleton.used_modules.insert(&decl.module.string);
+            }
+            ast::Item::Struct(ast_struct) => {
+                if skeleton.declared_structs.contains_key(&*ast_struct.id.string) {
+                    return Err(Error::IdentifierDeclaredTwice(&ast_struct.id));
+                } else {
+                    let field_tys = ast_struct.fields.iter()
+                        .map(|field| skeleton.parse_local_type(prog, &field.ty))
+                        .collect::<Result<_>>()?;
+                    let tuple_ty = prog.define_type_tuple(ir::TupleType { fields: field_tys });
+                    let declared_struct = DeclaredStruct {
+                        ty: tuple_ty,
+                        field_names: ast_struct.fields.iter()
+                            .map(|field| field.id.string.as_ref())
+                            .collect(),
+                    };
+
+                    skeleton.declared_structs.insert(&*ast_struct.id.string, declared_struct);
+                }
             }
             ast::Item::Function(ast_func) => {
                 let ret_ty = ast_func.ret_ty.as_ref()
-                    .map_or(Ok(prog.type_void()), |t| prog.parse_type(t))?;
+                    .map_or(Ok(prog.type_void()), |t| skeleton.parse_local_type(prog, t))?;
 
                 let param_tys = ast_func.params.iter()
-                    .map(|param| prog.parse_type(&param.ty))
+                    .map(|param| skeleton.parse_local_type(prog, &param.ty))
                     .collect::<Result<_>>()?;
                 let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
 
@@ -776,7 +843,7 @@ fn build_module_skeleton<'a>(prog: &mut ir::Program, module: &'a ast::Module, is
                 skeleton.scope.declare_variable(&ast_func.id, LRValue::Right(value))?;
             }
             ast::Item::Const(decl) => {
-                let ty = decl.ty.as_ref().map(|ty| prog.parse_type(ty)).transpose()?;
+                let ty = decl.ty.as_ref().map(|ty| skeleton.parse_local_type(prog, ty)).transpose()?;
                 let init = decl.init.as_ref().expect("consts need initialized for now");
 
                 let value = match &init.kind {
@@ -838,9 +905,9 @@ pub fn lower(ast_prog: &ast::Program) -> Result<ir::Program> {
 
     for (module_name, ast_module) in &ast_prog.modules {
         let is_root = module_name == "";
-        let module_info = build_module_skeleton(&mut prog, ast_module, is_root)?;
+        let module_skeleton = build_module_skeleton(&mut prog, ast_module, is_root, &ast_prog.modules)?;
 
-        modules.insert(module_name, module_info);
+        modules.insert(module_name, module_skeleton);
     }
 
     //actually generate code

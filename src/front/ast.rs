@@ -10,7 +10,7 @@ pub struct Type {
 
 #[derive(Debug)]
 pub enum TypeKind {
-    Simple(String),
+    Path(Path),
     Ref(Box<Type>),
     Func {
         params: Vec<Type>,
@@ -22,6 +22,13 @@ pub enum TypeKind {
 pub struct Identifier {
     pub span: Span,
     pub string: String,
+}
+
+#[derive(Debug)]
+pub struct Path {
+    pub span: Span,
+    pub parents: Vec<Identifier>,
+    pub id: Identifier,
 }
 
 #[derive(Debug)]
@@ -37,6 +44,7 @@ pub struct Module {
 #[derive(Debug)]
 pub enum Item {
     UseDecl(UseDecl),
+    Struct(Struct),
     Function(Function),
     Const(Declaration),
 }
@@ -44,7 +52,21 @@ pub enum Item {
 #[derive(Debug)]
 pub struct UseDecl {
     pub span: Span,
-    pub name: Identifier,
+    pub module: Identifier,
+}
+
+#[derive(Debug)]
+pub struct Struct {
+    pub span: Span,
+    pub id: Identifier,
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Debug)]
+pub struct StructField {
+    pub span: Span,
+    pub id: Identifier,
+    pub ty: Type,
 }
 
 #[derive(Debug)]
@@ -130,8 +152,7 @@ pub enum ExpressionKind {
     StringLit { value: String },
     Null,
 
-    Identifier { id: Identifier },
-    ModuleIdentifier { module: Identifier, id: Identifier },
+    Path(Path),
 
     Call {
         target: Box<Expression>,
