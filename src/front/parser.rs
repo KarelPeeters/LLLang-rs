@@ -71,6 +71,7 @@ declare_tokens![
     Slash("/"),
     Percent("%"),
 
+    Dot("."),
     DoubleColon("::"),
     Semi(";"),
     Colon(":"),
@@ -440,7 +441,7 @@ impl<'a> Parser<'a> {
             }
             TT::Use => {
                 self.pop()?;
-                let module = self.identifier()?;
+                let module = self.identifier("module name")?;
                 self.expect(TT::Semi, "end of item")?;
 
                 Ok(ast::Item::UseDecl(ast::UseDecl {
@@ -454,7 +455,7 @@ impl<'a> Parser<'a> {
 
     fn struct_(&mut self) -> Result<ast::Struct> {
         let start = self.expect(TT::Struct, "start of struct declaration")?.span.start;
-        let id = self.identifier()?;
+        let id = self.identifier("struct name")?;
         self.expect(TT::OpenC, "start of struct fields")?;
 
         let (_, fields) = self.list(TT::CloseC, Some(TT::Comma), Self::struct_field)?;
@@ -464,8 +465,8 @@ impl<'a> Parser<'a> {
     }
 
     fn struct_field(&mut self) -> Result<ast::StructField> {
-        let id = self.identifier()?;
-        self.expect(TT::Colon, "struct field type")?;
+        let id = self.identifier("field name")?;
+        self.expect(TT::Colon, "field type")?;
         let ty = self.type_decl()?;
 
         let span = Span::new(id.span.start, ty.span.end);
@@ -477,7 +478,7 @@ impl<'a> Parser<'a> {
 
         let ext = self.accept(TT::Extern)?.is_some();
         self.expect(TT::Fun, "function declaration")?;
-        let id = self.identifier()?;
+        let id = self.identifier("function name")?;
 
         self.expect(TT::OpenB, "start of parameters")?;
         let (_, params) = self.list(TT::CloseB, Some(TT::Comma), Self::parameter)?;
@@ -500,7 +501,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self) -> Result<ast::Parameter> {
-        let id = self.identifier()?;
+        let id = self.identifier("parameter name")?;
         self.expect(TT::Colon, "parameter type")?;
         let ty = self.type_decl()?;
 
@@ -587,7 +588,7 @@ impl<'a> Parser<'a> {
     fn variable_declaration(&mut self, ty: TT) -> Result<ast::Declaration> {
         let start_pos = self.expect(ty, "variable declaration")?.span.start;
         let mutable = self.accept(TT::Mut)?.is_some();
-        let id = self.identifier()?;
+        let id = self.identifier("variable name")?;
 
         let ty = self.accept(TT::Colon)?
             .map(|_| self.type_decl())
@@ -635,7 +636,7 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        //prefix
+        //prefix, will be applied later from right to left
         let mut prefix_ops = Vec::new();
         loop {
             let token = self.peek();
@@ -651,26 +652,40 @@ impl<'a> Parser<'a> {
 
         //inner expression
         let mut curr = self.atomic()?;
+        let curr_start = curr.span.start;
 
         //postfix, apply immediately from left to right
         loop {
             let token = self.peek();
 
-            match token.ty {
+            let kind = match token.ty {
                 TT::OpenB => {
                     //call
                     self.pop()?;
                     let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;
-                    let span = Span::new(curr.span.start, self.last_popped_end);
-                    curr = ast::Expression {
-                        span,
-                        kind: ast::ExpressionKind::Call {
-                            target: Box::new(curr),
-                            args,
-                        },
+                    ast::ExpressionKind::Call {
+                        target: Box::new(curr),
+                        args,
+                    }
+                }
+                TT::Dot => {
+                    //dot indexing
+                    self.pop()?;
+                    //TODO change this back to an identifier index
+                    // let index = self.identifier("index")?;
+                    let index = self.expect(TT::IntLit, "integer index")?.string;
+
+                    ast::ExpressionKind::DotIndex {
+                        target: Box::new(curr),
+                        index
                     }
                 }
                 _ => break
+            };
+
+            curr = ast::Expression {
+                span: Span::new(curr_start, self.last_popped_end),
+                kind,
             }
         }
 
@@ -768,18 +783,18 @@ impl<'a> Parser<'a> {
 
     fn path(&mut self) -> Result<ast::Path> {
         let mut parents = Vec::new();
-        let mut id = self.identifier()?;
+        let mut id = self.identifier("identifier")?;
 
         while self.accept(TT::DoubleColon)?.is_some() {
             parents.push(id);
-            id = self.identifier()?;
+            id = self.identifier("path element")?;
         }
 
         Ok(ast::Path { span: Span::new(id.span.start, self.last_popped_end), parents, id })
     }
 
-    fn identifier(&mut self) -> Result<ast::Identifier> {
-        let token = self.expect(TT::Id, "identifier")?;
+    fn identifier(&mut self, description: &'static str) -> Result<ast::Identifier> {
+        let token = self.expect(TT::Id, description)?;
         Ok(ast::Identifier { span: token.span, string: token.string })
     }
 

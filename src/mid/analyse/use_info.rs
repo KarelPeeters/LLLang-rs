@@ -6,6 +6,7 @@ use crate::mid::ir::{Block, Instruction, InstructionInfo, Program, Target, Termi
 // a call or a load or whatever
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
 // eg. slot_to_phi only cares about slots
+//TODO try to unify some of this code with gc
 #[derive(Debug, Copy, Clone)]
 pub enum Usage {
     //program main
@@ -54,6 +55,9 @@ impl UseInfo {
                     InstructionInfo::Binary { kind: _, left, right } => {
                         info.add_usage(*left, Usage::Operand(instr, block));
                         info.add_usage(*right, Usage::Operand(instr, block));
+                    }
+                    InstructionInfo::StructSubPtr { target, index: _, result_ty:_ } => {
+                        info.add_usage(*target, Usage::Operand(instr, block));
                     }
                 }
             }

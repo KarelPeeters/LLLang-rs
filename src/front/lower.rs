@@ -4,6 +4,7 @@ use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
+use crate::util::arena::Arena;
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -339,7 +340,7 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 //check that the target is a function
                 let target_ty = self.prog.type_of_value(target);
-                let target_ty = self.prog.get_type(target_ty).as_func()
+                let target_ty = self.prog.get_type(target_ty).unwrap_func()
                     .ok_or_else(|| Error::ExpectFunctionType {
                         expression: expr,
                         actual: self.prog.format_type(target_ty).to_string(),
@@ -372,6 +373,29 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 let call = self.append_instr(after_args.block, call);
                 (after_args, LRValue::Right(ir::Value::Instr(call)))
+            }
+            ast::ExpressionKind::DotIndex { target, index } => {
+                //TODO typechecking?
+                //TODO proper errors
+                //TODO allow reference to struct too?
+
+                let (after_target, target) = self.append_expr(flow, scope, target, None)?;
+                let struct_ty = self.prog.get_type(self.prog.type_of_lrvalue(target)).unwrap_tuple()
+                    .expect("dot indexing only works on structs");
+
+                match target {
+                    LRValue::Left(target) => {
+                        //TODO we need to know the ast struct type here, but we only get the ir type
+                        let index = index.parse::<usize>().unwrap();
+
+                        let result_ty = self.prog.define_type_ptr(struct_ty.fields[index]);
+                        let struct_sub_ptr = self.append_instr(after_target.block, ir::InstructionInfo::StructSubPtr { target, index, result_ty });
+                        (after_target, LRValue::Left(ir::Value::Instr(struct_sub_ptr)))
+                    }
+                    LRValue::Right(_) => {
+                        panic!("dot indexing only works for LValues")
+                    }
+                }
             }
             ast::ExpressionKind::Return { value } => {
                 let ret_ty = self.prog.get_func(self.curr_func).func_ty.ret;

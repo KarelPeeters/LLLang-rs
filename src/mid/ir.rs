@@ -204,9 +204,17 @@ impl TypeInfo {
         }
     }
 
-    pub fn as_func(&self) -> Option<&FunctionType> {
+    pub fn unwrap_func(&self) -> Option<&FunctionType> {
         if let TypeInfo::Func(func_ty) = self {
             Some(func_ty)
+        } else {
+            None
+        }
+    }
+
+    pub fn unwrap_tuple(&self) -> Option<&TupleType> {
+        if let TypeInfo::Tuple(tuple_ty) = self {
+            Some(tuple_ty)
         } else {
             None
         }
@@ -286,6 +294,12 @@ pub enum InstructionInfo {
     Store { addr: Value, value: Value },
     Call { target: Value, args: Vec<Value> },
     Binary { kind: BinaryOp, left: Value, right: Value },
+    //TODO we need to store the result type here, which sucks
+    //  possible solutions:
+    //    * use "Cell" in program so we can create types on an immutable program?
+    //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
+
+    StructSubPtr { target: Value, index: usize, result_ty: Type },
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -310,11 +324,12 @@ impl InstructionInfo {
                 prog.type_void()
             }
             InstructionInfo::Call { target, .. } => {
-                prog.get_type(prog.type_of_value(*target)).as_func()
+                prog.get_type(prog.type_of_value(*target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
             InstructionInfo::Binary { kind, left, .. } => {
+                //TODO maybe split Binary up into math and logical? they almost always need to be handled separately
                 match kind {
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
                     BinaryOp::Mod =>
@@ -323,6 +338,7 @@ impl InstructionInfo {
                         prog.ty_bool,
                 }
             }
+            InstructionInfo::StructSubPtr { result_ty, .. } => *result_ty
         }
     }
 }

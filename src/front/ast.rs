@@ -159,6 +159,12 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
     },
 
+    //TODO for now we're indexing by integer index but we actually want to index by string instead
+    DotIndex {
+        target: Box<Expression>,
+        index: String,
+    },
+
     Binary {
         kind: BinaryOp,
         left: Box<Expression>,
