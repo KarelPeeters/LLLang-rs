@@ -52,11 +52,12 @@ impl UseInfo {
                             info.add_usage(arg, Usage::Operand(instr, block));
                         }
                     }
-                    InstructionInfo::Binary { kind: _, left, right } => {
+                    InstructionInfo::Arithmetic { kind: _, left, right } |
+                    InstructionInfo::Logical { kind: _, left, right } => {
                         info.add_usage(*left, Usage::Operand(instr, block));
                         info.add_usage(*right, Usage::Operand(instr, block));
                     }
-                    InstructionInfo::StructSubPtr { target, index: _, result_ty:_ } => {
+                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
                         info.add_usage(*target, Usage::Operand(instr, block));
                     }
                 }
@@ -143,7 +144,8 @@ impl UseInfo {
                             }
                             debug_assert!(replaced_any);
                         }
-                        InstructionInfo::Binary { left, right, .. } => {
+                        InstructionInfo::Arithmetic { left, right, .. } |
+                        InstructionInfo::Logical { left, right, .. } => {
                             let mut replaced_any = false;
                             replaced_any |= maybe_repl(left, old, new);
                             replaced_any |= maybe_repl(right, old, new);

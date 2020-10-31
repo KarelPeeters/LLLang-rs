@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::mid::ir::{BinaryOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, Parameter, Phi, Program, StackSlot, Target, Terminator, TypeInfo, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Parameter, Phi, Program, StackSlot, Target, Terminator, TypeInfo, Value};
 
 //TODO rethink what this means around alignment
 fn type_size_in_bytes(prog: &Program, ty: &TypeInfo) -> i32 {
@@ -183,38 +183,40 @@ impl AsmBuilder<'_> {
                     self.append_instr("call eax");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::Binary { kind, left, right } => {
-                    self.append_instr(";binop");
+                InstructionInfo::Arithmetic { kind, left, right } => {
+                    self.append_instr(";arithmetic");
                     self.append_value_to_reg("eax", left, 0);
                     self.append_value_to_reg("ebx", right, 0);
 
                     //eax = op(eax, ebx)
                     match kind {
-                        BinaryOp::Add => self.append_instr("add eax, ebx"),
-                        BinaryOp::Sub => self.append_instr("sub eax, ebx"),
-                        BinaryOp::Mul => self.append_instr("imul eax, ebx"),
-                        BinaryOp::Div => self.append_div(),
-                        BinaryOp::Mod => {
+                        ArithmeticOp::Add => self.append_instr("add eax, ebx"),
+                        ArithmeticOp::Sub => self.append_instr("sub eax, ebx"),
+                        ArithmeticOp::Mul => self.append_instr("imul eax, ebx"),
+                        ArithmeticOp::Div => self.append_div(),
+                        ArithmeticOp::Mod => {
                             self.append_div();
                             self.append_instr("mov eax, edx");
-                        }
-                        BinaryOp::Eq => {
-                            self.append_instr("xor ecx, ecx");
-                            self.append_instr("cmp eax, ebx");
-                            self.append_instr("sete cl");
-                            self.append_instr("mov eax, ecx");
-                        }
-                        BinaryOp::Neq => {
-                            self.append_instr("xor ecx, ecx");
-                            self.append_instr("cmp eax, ebx");
-                            self.append_instr("setne cl");
-                            self.append_instr("mov eax, ecx");
                         }
                     }
 
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::StructSubPtr { target, index, result_ty:_  } => {
+                InstructionInfo::Logical { kind, left, right } => {
+                    self.append_instr(";logical");
+                    self.append_value_to_reg("eax", left, 0);
+                    self.append_value_to_reg("ebx", right, 0);
+                    self.append_instr("xor ecx, ecx");
+                    self.append_instr("cmp eax, ebx");
+
+                    match kind {
+                        LogicalOp::Eq => self.append_instr("sete cl"),
+                        LogicalOp::Neq => self.append_instr("setne cl"),
+                    }
+
+                    self.append_instr(&format!("mov [esp+{}], ecx", instr_pos));
+                }
+                InstructionInfo::StructSubPtr { target, index, result_ty: _ } => {
                     let tuple_ty = self.prog.get_type(self.prog.type_of_value(*target)).unwrap_ptr()
                         .and_then(|ty| self.prog.get_type(ty).unwrap_tuple())
                         .expect("structSubPtr target should have tuple pointer type");

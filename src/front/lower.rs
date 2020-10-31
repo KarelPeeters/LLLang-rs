@@ -4,7 +4,6 @@ use indexmap::map::IndexMap;
 
 use crate::front::{ast, Span};
 use crate::mid::ir;
-use crate::util::arena::Arena;
 
 type Error<'a> = LowerError<'a>;
 type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -55,15 +54,15 @@ impl Scope<'_> {
     }
 }
 
-fn binary_op_map_kind(ast_kind: ast::BinaryOp) -> ir::BinaryOp {
+fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
     match ast_kind {
-        ast::BinaryOp::Add => ir::BinaryOp::Add,
-        ast::BinaryOp::Sub => ir::BinaryOp::Sub,
-        ast::BinaryOp::Mul => ir::BinaryOp::Mul,
-        ast::BinaryOp::Div => ir::BinaryOp::Div,
-        ast::BinaryOp::Mod => ir::BinaryOp::Mod,
-        ast::BinaryOp::Eq => ir::BinaryOp::Eq,
-        ast::BinaryOp::Neq => ir::BinaryOp::Neq,
+        ast::BinaryOp::Add => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right },
+        ast::BinaryOp::Sub => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right },
+        ast::BinaryOp::Mul => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right },
+        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div, left, right },
+        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod, left, right },
+        ast::BinaryOp::Eq => ir::InstructionInfo::Logical { kind: ir::LogicalOp::Eq, left, right },
+        ast::BinaryOp::Neq => ir::InstructionInfo::Logical { kind: ir::LogicalOp::Neq, left, right },
     }
 }
 
@@ -281,11 +280,8 @@ impl<'m, 'a> Lower<'m, 'a> {
                 let expect_ty = self.prog.type_of_value(ir_left);
                 let (after_right, ir_right) = self.append_expr_loaded(after_left, scope, right, Some(expect_ty))?;
 
-                let instr = self.append_instr(after_right.block, ir::InstructionInfo::Binary {
-                    kind: binary_op_map_kind(*kind),
-                    left: ir_left,
-                    right: ir_right,
-                });
+                let instr = binary_op_to_instr(*kind, ir_left, ir_right);
+                let instr = self.append_instr(after_right.block, instr);
 
                 (after_right, LRValue::Right(ir::Value::Instr(instr)))
             }
@@ -325,8 +321,8 @@ impl<'m, 'a> Lower<'m, 'a> {
                         let ty = self.prog.type_of_value(inner);
                         self.prog.check_integer_type(expr, ty)?;
 
-                        let instr = self.append_instr(after_inner.block, ir::InstructionInfo::Binary {
-                            kind: ir::BinaryOp::Sub,
+                        let instr = self.append_instr(after_inner.block, ir::InstructionInfo::Arithmetic {
+                            kind: ir::ArithmeticOp::Sub,
                             left: ir::Value::Const(ir::Const::new(ty, 0)),
                             right: inner,
                         });

@@ -293,22 +293,27 @@ pub enum InstructionInfo {
     Load { addr: Value },
     Store { addr: Value, value: Value },
     Call { target: Value, args: Vec<Value> },
-    Binary { kind: BinaryOp, left: Value, right: Value },
+    Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
+    Logical { kind: LogicalOp, left: Value, right: Value },
+
     //TODO we need to store the result type here, which sucks
     //  possible solutions:
     //    * use "Cell" in program so we can create types on an immutable program?
     //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
-
     StructSubPtr { target: Value, index: usize, result_ty: Type },
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum BinaryOp {
+pub enum ArithmeticOp {
     Add,
     Sub,
     Mul,
     Div,
     Mod,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum LogicalOp {
     Eq,
     Neq,
 }
@@ -320,24 +325,14 @@ impl InstructionInfo {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
                     .expect("load addr should have a pointer type")
             }
-            InstructionInfo::Store { .. } => {
-                prog.type_void()
-            }
+            InstructionInfo::Store { .. } => prog.type_void(),
             InstructionInfo::Call { target, .. } => {
                 prog.get_type(prog.type_of_value(*target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::Binary { kind, left, .. } => {
-                //TODO maybe split Binary up into math and logical? they almost always need to be handled separately
-                match kind {
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
-                    BinaryOp::Mod =>
-                        prog.type_of_value(*left),
-                    BinaryOp::Eq | BinaryOp::Neq =>
-                        prog.ty_bool,
-                }
-            }
+            InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
+            InstructionInfo::Logical { .. } => prog.ty_bool,
             InstructionInfo::StructSubPtr { result_ty, .. } => *result_ty
         }
     }

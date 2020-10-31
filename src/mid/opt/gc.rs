@@ -73,11 +73,12 @@ fn collect_used(prog: &Program) -> Visited {
                             todo.add_value(*arg);
                         }
                     }
-                    InstructionInfo::Binary { left, right, kind: _ } => {
+                    InstructionInfo::Arithmetic { left, right, kind: _ } |
+                    InstructionInfo::Logical { left, right, kind: _ } => {
                         todo.add_value(*left);
                         todo.add_value(*right);
                     }
-                    InstructionInfo::StructSubPtr { target, index: _, result_ty:_ } => {
+                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
                         todo.add_value(*target);
                     }
                 }
