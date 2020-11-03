@@ -100,7 +100,7 @@ fn build_value_for_slot(
     let ty = prog.get_slot(slot).inner_ty;
 
     //find a matching store in the current block
-    for &instr in &prog.get_block(block).instructions[0..instr_pos] {
+    for &instr in prog.get_block(block).instructions[0..instr_pos].iter().rev() {
         if let &InstructionInfo::Store { addr, value } = prog.get_instr(instr) {
             if addr == Value::Slot(slot) {
                 //if the stored value is a load that will be also replaced by this pass we need to keep recursing
