@@ -24,6 +24,8 @@ pub fn slot_to_phi(prog: &mut Program) -> bool {
 //TODO this could be replaced by a more efficient data structure
 type PhiMap = HashMap<(Block, StackSlot), Phi>;
 
+//TODO this is a complete bruteforce implementation
+//  there are lots of way to improve this, but this works for now
 fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> usize {
     let func_info = prog.get_func(func);
     let dom_info = DomInfo::new(prog, func);
@@ -35,14 +37,34 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
             .all(|usage| matches!(usage, Usage::Addr(_, _)))
     }).collect();
 
-    //iterate over all usages of those slots and build a phi graph for them all at the same time
-    //doing this for each slot separately doesn't work because they might end up using each other
+    //create all phis
     let mut phi_map: PhiMap = HashMap::new();
-
     for &slot in &replaced_slots {
+        let ty = prog.get_slot(slot).inner_ty;
+
+        for &block in &dom_info.blocks {
+            let phi = prog.define_phi(PhiInfo { ty });
+
+            prog.get_block_mut(block).phis.push(phi);
+            phi_map.insert((block, slot), phi);
+        }
+    }
+
+    //fill in phi operands
+    for &slot in &replaced_slots {
+        //fill in phi operands
+        for &block in &dom_info.blocks {
+            let block_instr_count = prog.get_block(block).instructions.len();
+            let value = get_value_for_slot(prog, &dom_info, &phi_map, entry, &replaced_slots, slot, block, block_instr_count);
+
+            prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
+                target.phi_values.push(value)
+            });
+        }
+
         let slot_usages = &use_info[Value::Slot(slot)];
 
-        //replace all loads with the actual value
+        //replace loads
         for &usage in slot_usages {
             if let Usage::Addr(instr, block) = usage {
                 let instr_info = prog.get_instr(instr);
@@ -54,7 +76,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
                         let load_index = prog.get_block(block).instructions.iter()
                             .position(|&i| i == instr).unwrap();
 
-                        let value = build_value_for_slot(prog, &dom_info, &mut phi_map, entry, &replaced_slots, slot, block, load_index);
+                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry, &replaced_slots, slot, block, load_index);
                         use_info.replace_usages(prog, Value::Instr(instr), value);
                     }
                     &InstructionInfo::Store { addr, .. } => {
@@ -68,7 +90,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
             }
         }
 
-        //remove the loads and stores
+        //remove loads & stores
         for &usage in slot_usages {
             if let Usage::Addr(instr, block) = usage {
                 remove_item(&mut prog.get_block_mut(block).instructions, &instr).unwrap();
@@ -87,10 +109,10 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of
 /// a slot at a given program position, inserting phi nodes along the way.
-fn build_value_for_slot(
+fn get_value_for_slot(
     prog: &mut Program,
     dom_info: &DomInfo,
-    phi_map: &mut PhiMap,
+    phi_map: &PhiMap,
     entry: Block,
     replaced_slots: &Vec<StackSlot>,
     slot: StackSlot,
@@ -100,7 +122,7 @@ fn build_value_for_slot(
     let ty = prog.get_slot(slot).inner_ty;
 
     //find a matching store in the current block
-    for &instr in prog.get_block(block).instructions[0..instr_pos].iter().rev() {
+    for &instr in &prog.get_block(block).instructions[0..instr_pos] {
         if let &InstructionInfo::Store { addr, value } = prog.get_instr(instr) {
             if addr == Value::Slot(slot) {
                 //if the stored value is a load that will be also replaced by this pass we need to keep recursing
@@ -116,7 +138,7 @@ fn build_value_for_slot(
                             let value_index = prog.get_block(block).instructions.iter()
                                 .position(|&i| i == value_instr).unwrap();
 
-                            return build_value_for_slot(prog, dom_info, phi_map, entry, replaced_slots, value_slot, block, value_index);
+                            return get_value_for_slot(prog, dom_info, phi_map, entry, replaced_slots, value_slot, block, value_index);
                         }
                     }
                 }
@@ -131,28 +153,8 @@ fn build_value_for_slot(
         return Value::Undef(ty);
     }
 
-    //if this block already has a phi for this slot return it
-    if let Some(&phi) = phi_map.get(&(block, slot)) {
-        return Value::Phi(phi);
-    }
-
-    //otherwise create a new phi and populate it
-    //immediately insert it because this phi might be used by itself
-    let phi = prog.define_phi(PhiInfo { ty });
-    prog.get_block_mut(block).phis.push(phi);
-    phi_map.insert((block, slot), phi);
-
-    for pred in dom_info.iter_predecessors(block) {
-        let pred_inst_count = prog.get_block(pred).instructions.len();
-        let value = build_value_for_slot(prog, dom_info, phi_map, entry, replaced_slots, slot, pred, pred_inst_count);
-        prog.get_block_mut(pred).terminator.for_each_target_mut(|target| {
-            if target.block == block {
-                target.phi_values.push(value);
-            }
-        })
-    }
-
-    Value::Phi(phi)
+    //return the corresponding phi value
+    Value::Phi(*phi_map.get(&(block, slot)).unwrap())
 }
 
 fn remove_item<T: PartialEq>(vec: &mut Vec<T>, item: &T) -> Option<T> {
