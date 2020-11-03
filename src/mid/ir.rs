@@ -290,6 +290,7 @@ pub struct PhiInfo {
 
 #[derive(Debug)]
 pub enum InstructionInfo {
+    Freeze { value: Value },
     Load { addr: Value },
     Store { addr: Value, value: Value },
     Call { target: Value, args: Vec<Value> },
@@ -321,6 +322,7 @@ pub enum LogicalOp {
 impl InstructionInfo {
     pub fn ty(&self, prog: &Program) -> Type {
         match self {
+            InstructionInfo::Freeze { value } => prog.type_of_value(*value),
             InstructionInfo::Load { addr } => {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
                     .expect("load addr should have a pointer type")

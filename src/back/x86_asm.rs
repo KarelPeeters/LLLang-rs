@@ -157,6 +157,10 @@ impl AsmBuilder<'_> {
         for &instr in &block.instructions {
             let instr_pos = self.instr_stack_positions[&instr];
             match self.prog.get_instr(instr) {
+                InstructionInfo::Freeze { value } => {
+                    self.append_value_to_reg("eax", value, 0);
+                    self.append_instr("mov [ebx], eax");
+                }
                 InstructionInfo::Store { addr, value } => {
                     self.append_instr(";store");
                     self.append_value_to_reg("eax", value, 0);

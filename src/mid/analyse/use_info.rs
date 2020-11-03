@@ -39,12 +39,15 @@ impl UseInfo {
         for (block, block_info) in &prog.nodes.blocks {
             for &instr in &block_info.instructions {
                 match prog.get_instr(instr) {
-                    InstructionInfo::Load { addr } => {
-                        info.add_usage(*addr, Usage::Addr(instr, block));
+                    &InstructionInfo::Freeze { value } => {
+                        info.add_usage(value, Usage::Operand(instr, block))
                     }
-                    InstructionInfo::Store { addr, value } => {
-                        info.add_usage(*addr, Usage::Addr(instr, block));
-                        info.add_usage(*value, Usage::Operand(instr, block));
+                    &InstructionInfo::Load { addr } => {
+                        info.add_usage(addr, Usage::Addr(instr, block));
+                    }
+                    &InstructionInfo::Store { addr, value } => {
+                        info.add_usage(addr, Usage::Addr(instr, block));
+                        info.add_usage(value, Usage::Operand(instr, block));
                     }
                     InstructionInfo::Call { target, args } => {
                         info.add_usage(*target, Usage::CallTarget(instr, block));
@@ -52,13 +55,13 @@ impl UseInfo {
                             info.add_usage(arg, Usage::Operand(instr, block));
                         }
                     }
-                    InstructionInfo::Arithmetic { kind: _, left, right } |
-                    InstructionInfo::Logical { kind: _, left, right } => {
-                        info.add_usage(*left, Usage::Operand(instr, block));
-                        info.add_usage(*right, Usage::Operand(instr, block));
+                    &InstructionInfo::Arithmetic { kind: _, left, right } |
+                    &InstructionInfo::Logical { kind: _, left, right } => {
+                        info.add_usage(left, Usage::Operand(instr, block));
+                        info.add_usage(right, Usage::Operand(instr, block));
                     }
-                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
-                        info.add_usage(*target, Usage::Operand(instr, block));
+                    &InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
+                        info.add_usage(target, Usage::Operand(instr, block));
                     }
                 }
             }

@@ -60,9 +60,10 @@ fn collect_used(prog: &Program) -> Visited {
                 todo.add_value(Value::Instr(*instr));
 
                 match prog.get_instr(*instr) {
-                    InstructionInfo::Load { addr } => {
-                        todo.add_value(*addr);
-                    }
+                    InstructionInfo::Freeze { value } =>
+                        todo.add_value(*value),
+                    InstructionInfo::Load { addr } =>
+                        todo.add_value(*addr),
                     InstructionInfo::Store { addr, value } => {
                         todo.add_value(*addr);
                         todo.add_value(*value);
@@ -78,9 +79,8 @@ fn collect_used(prog: &Program) -> Visited {
                         todo.add_value(*left);
                         todo.add_value(*right);
                     }
-                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
-                        todo.add_value(*target);
-                    }
+                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } =>
+                        todo.add_value(*target),
                 }
             }
 
