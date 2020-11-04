@@ -16,6 +16,9 @@ pub enum TypeKind {
         params: Vec<Type>,
         ret: Box<Type>,
     },
+    Tuple {
+        fields: Vec<Type>
+    },
 }
 
 #[derive(Debug)]

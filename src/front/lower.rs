@@ -164,7 +164,7 @@ impl<'m, 'a> Lower<'m, 'a> {
                     _ => self.module_skeleton.parse_local_type(&mut self.prog, ty),
                 }
             }
-            ast::TypeKind::Ref(_) | ast::TypeKind::Func { .. } =>
+            ast::TypeKind::Ref(_) | ast::TypeKind::Func { .. } | ast::TypeKind::Tuple { .. } =>
                 self.module_skeleton.parse_local_type(&mut self.prog, ty)
         }
     }
@@ -384,7 +384,8 @@ impl<'m, 'a> Lower<'m, 'a> {
                         //TODO we need to know the ast struct type here, but we only get the ir type
                         let index = index.parse::<usize>().unwrap();
 
-                        let result_ty = self.prog.define_type_ptr(struct_ty.fields[index]);
+                        let result_inner_ty = struct_ty.fields[index];
+                        let result_ty = self.prog.define_type_ptr(result_inner_ty);
                         let struct_sub_ptr = self.append_instr(after_target.block, ir::InstructionInfo::StructSubPtr { target, index, result_ty });
                         (after_target, LRValue::Left(ir::Value::Instr(struct_sub_ptr)))
                     }
@@ -768,6 +769,14 @@ impl<'a> ModuleSkeleton<'a> {
                     .collect::<Result<_>>()?;
                 let ret = self.parse_local_type(prog, ret)?;
                 Ok(prog.define_type_func(ir::FunctionType { params, ret }))
+            }
+            ast::TypeKind::Tuple { fields } => {
+                let tuple_type = ir::TupleType {
+                    fields: fields.iter()
+                        .map(|field| self.parse_local_type(prog, field))
+                        .collect::<Result<_>>()?
+                };
+                Ok(prog.define_type_tuple(tuple_type))
             }
         }
     }

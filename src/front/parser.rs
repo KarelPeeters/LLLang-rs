@@ -817,17 +817,26 @@ impl<'a> Parser<'a> {
                 })
             }
             TT::OpenB => {
+                //func or tuple
                 self.pop()?;
-                let (_, params) = self.list(TT::CloseB, Some(TT::Comma), Self::type_decl)?;
-                self.expect(TT::Arrow, "return type separator")?;
-                let ret = self.type_decl()?;
+                let (_, list) = self.list(TT::CloseB, Some(TT::Comma), Self::type_decl)?;
+
+                let kind = if self.accept(TT::Arrow)?.is_some() {
+                    let ret = self.type_decl()?;
+
+                    ast::TypeKind::Func {
+                        params: list,
+                        ret: Box::new(ret),
+                    }
+                } else {
+                    ast::TypeKind::Tuple {
+                        fields: list
+                    }
+                };
 
                 Ok(ast::Type {
                     span: Span::new(start_pos, self.last_popped_end),
-                    kind: ast::TypeKind::Func {
-                        params,
-                        ret: Box::new(ret),
-                    },
+                    kind,
                 })
             }
             _ => Err(Self::unexpected_token(self.peek(), &[TT::Ampersand, TT::Id, TT::OpenB], "type declaration")),
