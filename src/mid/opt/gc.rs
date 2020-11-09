@@ -74,7 +74,7 @@ fn collect_used(prog: &Program) -> Visited {
                         }
                     }
                     InstructionInfo::Arithmetic { left, right, kind: _ } |
-                    InstructionInfo::Logical { left, right, kind: _ } => {
+                    InstructionInfo::Comparison { left, right, kind: _ } => {
                         todo.add_value(*left);
                         todo.add_value(*right);
                     }

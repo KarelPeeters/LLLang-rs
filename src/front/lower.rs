@@ -61,8 +61,12 @@ fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value
         ast::BinaryOp::Mul => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right },
         ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div, left, right },
         ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod, left, right },
-        ast::BinaryOp::Eq => ir::InstructionInfo::Logical { kind: ir::LogicalOp::Eq, left, right },
-        ast::BinaryOp::Neq => ir::InstructionInfo::Logical { kind: ir::LogicalOp::Neq, left, right },
+        ast::BinaryOp::Eq => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Eq, left, right },
+        ast::BinaryOp::Neq => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Neq, left, right },
+        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gte, left, right },
+        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gt, left, right },
+        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lte, left, right },
+        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lt, left, right },
     }
 }
 
@@ -267,7 +271,9 @@ impl<'m, 'a> Lower<'m, 'a> {
                     ast::BinaryOp::Div | ast::BinaryOp::Mod => {
                         expect_ty
                     }
-                    ast::BinaryOp::Eq | ast::BinaryOp::Neq => {
+                    ast::BinaryOp::Eq | ast::BinaryOp::Neq |
+                    ast::BinaryOp::Gte | ast::BinaryOp::Gt |
+                    ast::BinaryOp::Lte | ast::BinaryOp::Lt => {
                         self.prog.check_type_match(expr, expect_ty, self.prog.type_bool())?;
                         None
                     }

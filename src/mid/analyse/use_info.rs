@@ -103,7 +103,7 @@ pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
             }
         }
         &InstructionInfo::Arithmetic { kind: _, left, right } |
-        &InstructionInfo::Logical { kind: _, left, right } => {
+        &InstructionInfo::Comparison { kind: _, left, right } => {
             f(left, Usage::BinaryOperand { func, block, instr });
             f(right, Usage::BinaryOperand { func, block, instr });
         }
@@ -255,7 +255,7 @@ impl UseInfo {
                 Usage::BinaryOperand { instr, .. } => {
                     match prog.get_instr_mut(instr) {
                         InstructionInfo::Arithmetic { left, right, .. } |
-                        InstructionInfo::Logical { left, right, .. } => {
+                        InstructionInfo::Comparison { left, right, .. } => {
                             let mut replaced_any = false;
                             replaced_any |= maybe_repl(count, left, old, new);
                             replaced_any |= maybe_repl(count, right, old, new);

@@ -65,6 +65,10 @@ declare_tokens![
 
     NotEq("!="),
     DoubleEq("=="),
+    GreaterEqual(">="),
+    Greater(">"),
+    LessEqual("<="),
+    Less("<"),
 
     Plus("+"),
     Minus("-"),
@@ -304,6 +308,10 @@ impl BinOpInfo {
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
     BinOpInfo::new(3, TT::DoubleEq, true, ast::BinaryOp::Eq),
     BinOpInfo::new(3, TT::NotEq, true, ast::BinaryOp::Neq),
+    BinOpInfo::new(3, TT::GreaterEqual, true, ast::BinaryOp::Gte),
+    BinOpInfo::new(3, TT::Greater, true, ast::BinaryOp::Gt),
+    BinOpInfo::new(3, TT::LessEqual, true, ast::BinaryOp::Lte),
+    BinOpInfo::new(3, TT::Less, true, ast::BinaryOp::Lt),
     BinOpInfo::new(5, TT::Plus, true, ast::BinaryOp::Add),
     BinOpInfo::new(5, TT::Minus, true, ast::BinaryOp::Sub),
     BinOpInfo::new(6, TT::Slash, true, ast::BinaryOp::Div),

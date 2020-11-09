@@ -190,8 +190,13 @@ pub enum BinaryOp {
     Mul,
     Div,
     Mod,
+
     Eq,
     Neq,
+    Gte,
+    Gt,
+    Lte,
+    Lt,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

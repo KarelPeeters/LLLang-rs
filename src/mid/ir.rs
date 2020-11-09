@@ -294,7 +294,7 @@ pub enum InstructionInfo {
     Store { addr: Value, value: Value },
     Call { target: Value, args: Vec<Value> },
     Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
-    Logical { kind: LogicalOp, left: Value, right: Value },
+    Comparison { kind: LogicalOp, left: Value, right: Value },
 
     //TODO we need to store the result type here, which sucks
     //  possible solutions:
@@ -303,6 +303,7 @@ pub enum InstructionInfo {
     StructSubPtr { target: Value, index: usize, result_ty: Type },
 }
 
+//TODO what about signed and unsigned? type or operation?
 #[derive(Debug, Copy, Clone)]
 pub enum ArithmeticOp {
     Add,
@@ -312,10 +313,15 @@ pub enum ArithmeticOp {
     Mod,
 }
 
+//TODO what about signed and unsigned? type or operation?
 #[derive(Debug, Copy, Clone)]
 pub enum LogicalOp {
     Eq,
     Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
 }
 
 impl InstructionInfo {
@@ -332,7 +338,7 @@ impl InstructionInfo {
                     .ret
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
-            InstructionInfo::Logical { .. } => prog.ty_bool,
+            InstructionInfo::Comparison { .. } => prog.ty_bool,
             InstructionInfo::StructSubPtr { result_ty, .. } => *result_ty
         }
     }

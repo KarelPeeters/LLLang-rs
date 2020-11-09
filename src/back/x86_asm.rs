@@ -203,7 +203,7 @@ impl AsmBuilder<'_> {
 
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::Logical { kind, left, right } => {
+                InstructionInfo::Comparison { kind, left, right } => {
                     self.append_instr(";logical");
                     self.append_value_to_reg("eax", left, 0);
                     self.append_value_to_reg("ebx", right, 0);
@@ -213,6 +213,10 @@ impl AsmBuilder<'_> {
                     match kind {
                         LogicalOp::Eq => self.append_instr("sete cl"),
                         LogicalOp::Neq => self.append_instr("setne cl"),
+                        LogicalOp::Gte => self.append_instr("setae cl"),
+                        LogicalOp::Gt => self.append_instr("seta cl"),
+                        LogicalOp::Lte => self.append_instr("setbe cl"),
+                        LogicalOp::Lt => self.append_instr("setb cl"),
                     }
 
                     self.append_instr(&format!("mov [esp+{}], ecx", instr_pos));

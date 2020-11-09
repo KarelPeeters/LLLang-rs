@@ -310,33 +310,40 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
             ) = (map.eval(left), map.eval(right)) {
                 //TODO this probably doesn't handle wrapping correctly yet
                 assert_eq!(left.ty, right.ty);
+                let ty = left.ty;
+                let (left, right) = (left.value, right.value);
 
                 let result = match kind {
-                    ArithmeticOp::Add => left.value + right.value,
-                    ArithmeticOp::Sub => left.value - right.value,
-                    ArithmeticOp::Mul => left.value * right.value,
+                    ArithmeticOp::Add => left + right,
+                    ArithmeticOp::Sub => left - right,
+                    ArithmeticOp::Mul => left * right,
                     //TODO are x/0 and x%0 undefined?
-                    ArithmeticOp::Div => left.value / right.value,
-                    ArithmeticOp::Mod => left.value % right.value,
+                    ArithmeticOp::Div => left / right,
+                    ArithmeticOp::Mod => left % right,
                 };
 
-                Lattice::Const(Value::Const(Const { ty: left.ty, value: result }))
+                Lattice::Const(Value::Const(Const { ty, value: result }))
             } else {
                 //TODO sometimes this can be inferred as well, eg "0 * x"
                 Lattice::Overdef
             }
         }
-        &InstructionInfo::Logical { kind, left, right } => {
+        &InstructionInfo::Comparison { kind, left, right } => {
             if let (
                 Lattice::Const(Value::Const(left)),
                 Lattice::Const(Value::Const(right))
             ) = (map.eval(left), map.eval(right)) {
                 //TODO this probably doesn't handle wrapping correctly yet
                 assert_eq!(left.ty, right.ty);
+                let (left, right) = (left.value, right.value);
 
                 let result = match kind {
                     LogicalOp::Eq => left == right,
                     LogicalOp::Neq => left != right,
+                    LogicalOp::Gte => left >= right,
+                    LogicalOp::Gt => left > right,
+                    LogicalOp::Lte => left <= right,
+                    LogicalOp::Lt => left < right,
                 };
 
                 Lattice::Const(Value::Const(Const { ty: prog.type_bool(), value: result as i32 }))
