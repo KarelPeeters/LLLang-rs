@@ -300,7 +300,7 @@ pub enum InstructionInfo {
     //  possible solutions:
     //    * use "Cell" in program so we can create types on an immutable program?
     //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
-    StructSubPtr { target: Value, index: usize, result_ty: Type },
+    StructSubPtr { base: Value, index: usize, result_ty: Type },
 }
 
 //TODO what about signed and unsigned? type or operation?

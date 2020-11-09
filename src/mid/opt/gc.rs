@@ -78,8 +78,8 @@ fn collect_used(prog: &Program) -> Visited {
                         todo.add_value(*left);
                         todo.add_value(*right);
                     }
-                    InstructionInfo::StructSubPtr { target, index: _, result_ty: _ } => {
-                        todo.add_value(*target);
+                    InstructionInfo::StructSubPtr { base, index: _, result_ty: _ } => {
+                        todo.add_value(*base);
                     }
                 }
             }

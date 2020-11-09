@@ -392,7 +392,10 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                         let result_inner_ty = struct_ty.fields[index];
                         let result_ty = self.prog.define_type_ptr(result_inner_ty);
-                        let struct_sub_ptr = self.append_instr(after_target.block, ir::InstructionInfo::StructSubPtr { target, index, result_ty });
+
+                        let struct_sub_ptr = ir::InstructionInfo::StructSubPtr { base: target, index, result_ty };
+                        let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
+
                         (after_target, LRValue::Left(ir::Value::Instr(struct_sub_ptr)))
                     }
                     LRValue::Right(_) => {
