@@ -100,6 +100,7 @@ impl Program {
     // Return the program representing `fn main() -> int { unreachable(); }`
     pub fn new() -> Self {
         let mut types = ArenaSet::default();
+        let ty_void = types.push(TypeInfo::Void);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
 
         let mut prog = Self {

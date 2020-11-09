@@ -638,7 +638,13 @@ impl<'m, 'a> Lower<'m, 'a> {
         let end = self.append_block(start, &mut scope, body)?;
 
         if end.needs_return {
-            return Err(Error::MissingReturn(ast_func));
+            if ret_ty == self.prog.type_void() {
+                //automatically insert return
+                let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.type_void()) };
+                self.prog.get_block_mut(end.block).terminator = ret;
+            } else {
+                return Err(Error::MissingReturn(ast_func));
+            }
         }
 
         Ok(())
