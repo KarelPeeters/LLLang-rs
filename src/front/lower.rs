@@ -609,13 +609,15 @@ impl<'m, 'a> Lower<'m, 'a> {
     fn append_func(&mut self, ast_func: &'a ast::Function, ir_func: ir::Function) -> Result<'a, ()> {
         self.curr_func = ir_func;
 
+        let ret_ty = self.prog.get_func(ir_func).func_ty.ret;
+
         let start = self.new_flow(true);
         self.prog.get_func_mut(ir_func).entry = start.block;
 
         let mut scope = self.module_skeleton.scope.nest();
 
-        for param in &ast_func.params {
-            let ty = self.parse_type(&param.ty)?;
+        for (i, param) in ast_func.params.iter().enumerate() {
+            let ty = self.prog.get_func(ir_func).func_ty.params[i];
             let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
 
             //allocate slots for parameters so their address can be taken
