@@ -34,7 +34,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
     //figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
         use_info[Value::Slot(slot)].iter()
-            .all(|usage| matches!(usage, Usage::Addr(_, _)))
+            .all(|usage| matches!(usage, Usage::Addr { .. } ))
     }).collect();
 
     //create all phis
@@ -66,7 +66,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
         //replace loads
         for &usage in slot_usages {
-            if let Usage::Addr(instr, block) = usage {
+            if let Usage::Addr { instr, block, .. } = usage {
                 let instr_info = prog.get_instr(instr);
                 match instr_info {
                     &InstructionInfo::Load { addr } => {
@@ -92,7 +92,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
         //remove loads & stores
         for &usage in slot_usages {
-            if let Usage::Addr(instr, block) = usage {
+            if let Usage::Addr { instr, block, .. } = usage {
                 remove_item(&mut prog.get_block_mut(block).instructions, &instr).unwrap();
             } else {
                 unreachable!("usage type: {:?}", usage)

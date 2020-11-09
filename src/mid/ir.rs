@@ -101,7 +101,6 @@ impl Program {
     pub fn new() -> Self {
         let mut types = ArenaSet::default();
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
-        let ty_void = types.push(TypeInfo::Void);
 
         let mut prog = Self {
             nodes: Default::default(),
@@ -382,7 +381,6 @@ impl Terminator {
     }
 }
 
-//TODO undef, func, param, slot, extern and data can all be "marked" const I think
 //TODO maybe this enum could implement From to make all the wrapping easier?
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Value {
@@ -395,6 +393,23 @@ pub enum Value {
     Instr(Instruction),
     Extern(Extern),
     Data(Data),
+}
+
+//TODO should this be represented in the type system instead?
+impl Value {
+    pub fn is_const_like(self) -> bool {
+        match self {
+            Value::Undef(_) => false,
+            Value::Const(_) => true,
+            Value::Func(_) => true,
+            Value::Param(_) => false,
+            Value::Slot(_) => false,
+            Value::Phi(_) => false,
+            Value::Instr(_) => false,
+            Value::Extern(_) => true,
+            Value::Data(_) => true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -445,11 +460,40 @@ impl Program {
         Ok(())
     }
 
+    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, func: Function, mut f: F) -> Result<(), E> {
+        let func = self.get_func(func);
+
+        let mut blocks_left = VecDeque::new();
+        let mut blocks_seen = HashSet::new();
+        blocks_left.push_front(func.entry);
+
+        while let Some(block) = blocks_left.pop_front() {
+            if !blocks_seen.insert(block) { continue; }
+
+            f(self, block)?;
+
+            let block_info = self.get_block(block);
+            block_info.terminator.for_each_successor(
+                |succ| blocks_left.push_back(succ));
+        }
+
+        Ok(())
+    }
+
     /// Visit all the blocks reachable from the entry of `func`
     pub fn visit_blocks<F: FnMut(Block)>(&self, func: Function, mut f: F) {
         //change this to use ! once that's stable
         self.try_visit_blocks::<(), _>(func, |block| {
             f(block);
+            Ok(())
+        }).unwrap();
+    }
+
+    /// Visit all the blocks reachable from the entry of `func`
+    pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, func: Function, mut f: F) {
+        //change this to use ! once that's stable
+        self.try_visit_blocks_mut::<(), _>(func, |prog, block| {
+            f(prog, block);
             Ok(())
         }).unwrap();
     }

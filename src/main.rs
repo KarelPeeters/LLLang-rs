@@ -102,8 +102,10 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
     loop {
         let mut changed = false;
 
+        changed |= mid::opt::gc::gc(prog);
         changed |= mid::opt::slot_to_phi::slot_to_phi(prog);
         changed |= mid::opt::gc::gc(prog);
+        changed |= mid::opt::sccp::sccp(prog);
 
         if !changed { break; }
     }
