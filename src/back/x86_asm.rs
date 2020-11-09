@@ -80,7 +80,8 @@ impl AsmBuilder<'_> {
     fn append_value_to_reg(&mut self, reg: &str, value: &Value, stack_offset: i32) {
         match value {
             Value::Undef(_) => {
-                self.append_instr(&format!(";mov {}, undef", reg)) //easy
+                //placeholder to make debugging easier
+                self.append_instr(&format!("mov {}, 0xabcd ;undef", reg))
             }
             Value::Const(cst) => {
                 self.append_instr(&format!("mov {}, {}", reg, cst.value))
