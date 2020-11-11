@@ -183,7 +183,9 @@ impl<'m, 'a> Lower<'m, 'a> {
 
     fn define_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
         let slot = ir::StackSlotInfo::new(inner_ty, &mut self.prog);
-        self.prog.define_slot(slot)
+        let slot = self.prog.define_slot(slot);
+        self.prog.get_func_mut(self.curr_func).slots.push(slot);
+        slot
     }
 
     fn append_instr(&mut self, block: ir::Block, instr: ir::InstructionInfo) -> ir::Instruction {
@@ -213,7 +215,7 @@ impl<'m, 'a> Lower<'m, 'a> {
     fn append_expr(
         &mut self,
         flow: Flow,
-        scope: &mut Scope,
+        scope: &Scope,
         expr: &'a ast::Expression,
         expect_ty: Option<ir::Type>,
     ) -> Result<'a, (Flow, LRValue)> {
@@ -475,7 +477,7 @@ impl<'m, 'a> Lower<'m, 'a> {
     fn append_expr_loaded(
         &mut self,
         flow: Flow,
-        scope: &mut Scope,
+        scope: &Scope,
         expr: &'a ast::Expression,
         expect_ty: Option<ir::Type>,
     ) -> Result<'a, (Flow, ir::Value)> {
@@ -483,6 +485,47 @@ impl<'m, 'a> Lower<'m, 'a> {
         let loaded_value = self.append_load(after_value.block, value);
 
         Ok((after_value, loaded_value))
+    }
+
+    fn append_loop<
+        C: FnOnce(&mut Self, Flow) -> Result<'a, (Flow, ir::Value)>,
+        B: FnOnce(&mut Self, Flow) -> Result<'a, Flow>
+    >(&mut self, flow: Flow, cond: C, body: B) -> Result<'a, Flow> {
+        //condition
+        let cond_start = self.new_flow(flow.needs_return);
+        let cond_start_block = cond_start.block;
+        let (cond_end, cond) = cond(self, cond_start)?;
+
+        //end
+        //needs_return will be set incrementally by all blocks that jump to end
+        let mut end_start = self.new_flow(false);
+
+        let loop_info = LoopInfo {
+            cond: cond_start_block,
+            end: end_start.block,
+            end_needs_return: false,
+        };
+        self.loop_stack.push(loop_info);
+
+        //body
+        let body_start = self.new_flow(cond_end.needs_return);
+        let body_start_block = body_start.block;
+        let body_end = body(self, body_start)?;
+
+        let loop_info = self.loop_stack.pop().unwrap();
+        end_start.needs_return |= loop_info.end_needs_return;
+
+        //connect everything
+        let branch = new_branch(cond, body_start_block, end_start.block);
+        end_start.needs_return |= cond_end.needs_return;
+        let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
+
+        self.prog.get_block_mut(flow.block).terminator = jump_cond.clone();
+        self.prog.get_block_mut(cond_end.block).terminator = branch;
+        self.prog.get_block_mut(body_end.block).terminator = jump_cond;
+
+        //continue withing code to end
+        Ok(end_start)
     }
 
     fn append_statement(&mut self, flow: Flow, scope: &mut Scope, stmt: &'a ast::Statement) -> Result<'a, Flow> {
@@ -506,7 +549,6 @@ impl<'m, 'a> Lower<'m, 'a> {
 
                 //define the slot
                 let slot = self.define_slot(ty);
-                self.prog.get_func_mut(self.curr_func).slots.push(slot);
                 scope.declare_variable(&decl.id, LRValue::Left(ir::Value::Slot(slot)))?;
 
                 //optionally store the value
@@ -534,13 +576,13 @@ impl<'m, 'a> Lower<'m, 'a> {
                 //then
                 let then_start = self.new_flow(cond_end.needs_return);
                 let then_start_block = then_start.block;
-                let then_end = self.append_block(then_start, scope, &if_stmt.then_block)?;
+                let then_end = self.append_nested_block(then_start, scope, &if_stmt.then_block)?;
 
                 //else
                 let else_start = self.new_flow(cond_end.needs_return);
                 let else_start_block = else_start.block;
                 let else_end = if let Some(else_block) = &if_stmt.else_block {
-                    self.append_block(else_start, scope, else_block)?
+                    self.append_nested_block(else_start, scope, else_block)?
                 } else {
                     else_start
                 };
@@ -559,45 +601,80 @@ impl<'m, 'a> Lower<'m, 'a> {
                 Ok(end_start)
             }
             ast::StatementKind::While(while_stmt) => {
-                //condition
-                let cond_start = self.new_flow(flow.needs_return);
-                let cond_start_block = cond_start.block;
-                let (cond_end, cond) =
-                    self.append_expr_loaded(cond_start, scope, &while_stmt.cond, Some(self.prog.type_bool()))?;
+                let ty_bool = self.prog.type_bool();
 
-                //end
-                //needs_return will be set incrementally by all blocks that jump to end
-                let mut end_start = self.new_flow(false);
-
-                let loop_info = LoopInfo {
-                    cond: cond_start_block,
-                    end: end_start.block,
-                    end_needs_return: false,
+                let cond = |s: &mut Self, cond_start: Flow| {
+                    s.append_expr_loaded(cond_start, scope, &while_stmt.cond, Some(ty_bool))
                 };
-                self.loop_stack.push(loop_info);
+                let body = |s: &mut Self, body_start: Flow| {
+                    s.append_nested_block(body_start, scope, &while_stmt.body)
+                };
 
-                //body
-                let body_start = self.new_flow(cond_end.needs_return);
-                let body_start_block = body_start.block;
-                let body_end = self.append_block(body_start, scope, &while_stmt.body)?;
+                self.append_loop(flow, cond, body)
+            }
+            ast::StatementKind::For(for_stmt) => {
+                //figure out the index type
+                let index_ty = for_stmt.index_ty.as_ref()
+                    .map(|var_ty| self.parse_type(var_ty))
+                    .transpose()?;
+                if let Some(index_ty) = index_ty {
+                    self.prog.check_integer_type(&for_stmt.start, index_ty)?;
+                }
 
-                let loop_info = self.loop_stack.pop().unwrap();
-                end_start.needs_return |= loop_info.end_needs_return;
+                //evaluate the range
+                let (flow, start_value) = self.append_expr_loaded(flow, scope, &for_stmt.start, index_ty)?;
+                let index_ty = self.prog.type_of_value(start_value);
+                self.prog.check_integer_type(&for_stmt.start, index_ty)?;
+                let (flow, end_value) = self.append_expr_loaded(flow, scope, &for_stmt.end, Some(index_ty))?;
 
-                //connect everything
-                let branch = new_branch(cond, body_start_block, end_start.block);
-                end_start.needs_return |= cond_end.needs_return;
-                let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
+                //declare slot for index
+                let mut index_scope = scope.nest();
+                let index_slot = self.define_slot(index_ty);
+                //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
+                //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
+                index_scope.declare_variable(&for_stmt.index, LRValue::Left(ir::Value::Slot(index_slot)))?;
 
-                self.prog.get_block_mut(flow.block).terminator = jump_cond.clone();
-                self.prog.get_block_mut(cond_end.block).terminator = branch;
-                self.prog.get_block_mut(body_end.block).terminator = jump_cond;
+                //index = start
+                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: ir::Value::Slot(index_slot), value: start_value });
 
-                //continue withing code to end
-                Ok(end_start)
+                //index < end
+                let cond = |s: &mut Self, cond_start: Flow| {
+                    let load = s.append_instr(cond_start.block, ir::InstructionInfo::Load {
+                        addr: ir::Value::Slot(index_slot),
+                    });
+                    let cond = s.append_instr(cond_start.block, ir::InstructionInfo::Comparison {
+                        kind: ir::LogicalOp::Lt,
+                        left: ir::Value::Instr(load),
+                        right: end_value,
+                    });
+
+                    Ok((cond_start, ir::Value::Instr(cond)))
+                };
+
+                //body; index = index + 1
+                let body = |s: &mut Self, body_start: Flow| {
+                    let body_end = s.append_nested_block(body_start, &index_scope, &for_stmt.body)?;
+
+                    let load = s.append_instr(body_end.block, ir::InstructionInfo::Load {
+                        addr: ir::Value::Slot(index_slot),
+                    });
+                    let inc = s.append_instr(body_end.block, ir::InstructionInfo::Arithmetic {
+                        kind: ir::ArithmeticOp::Add,
+                        left: ir::Value::Instr(load),
+                        right: ir::Value::Const(ir::Const { ty: index_ty, value: 1 }),
+                    });
+                    s.append_instr(body_end.block, ir::InstructionInfo::Store {
+                        addr: ir::Value::Slot(index_slot),
+                        value: ir::Value::Instr(inc),
+                    });
+
+                    Ok(body_end)
+                };
+
+                self.append_loop(flow, cond, body)
             }
             ast::StatementKind::Block(block) => {
-                self.append_block(flow, scope, block)
+                self.append_nested_block(flow, scope, block)
             }
             ast::StatementKind::Expression(expr) => {
                 let (after_value, _) = self.append_expr(flow, scope, expr, None)?;
@@ -606,12 +683,12 @@ impl<'m, 'a> Lower<'m, 'a> {
         }
     }
 
-    fn append_block(&mut self, flow: Flow, scope: &Scope, block: &'a ast::Block) -> Result<'a, Flow> {
-        let mut scope = scope.nest();
+    fn append_nested_block(&mut self, flow: Flow, scope: &Scope, block: &'a ast::Block) -> Result<'a, Flow> {
+        let mut inner_scope = scope.nest();
 
         block.statements.iter()
             .try_fold(flow, |flow, stmt| {
-                self.append_statement(flow, &mut scope, stmt)
+                self.append_statement(flow, &mut inner_scope, stmt)
             })
     }
 
@@ -626,27 +703,23 @@ impl<'m, 'a> Lower<'m, 'a> {
         let mut scope = self.module_skeleton.scope.nest();
 
         for (i, param) in ast_func.params.iter().enumerate() {
-            let ty = self.prog.get_func(ir_func).func_ty.params[i];
-            let ir_param = self.prog.define_param(ir::ParameterInfo { ty });
+            let ir_param = self.prog.get_func(ir_func).params[i];
 
-            //allocate slots for parameters so their address can be taken
-            let slot = self.define_slot(ty);
+            //allocate a slot for the parameter so its address can be taken
+            let slot = self.define_slot(self.prog.get_param(ir_param).ty);
+
+            //immediately copy the param into the slot
             self.append_instr(start.block, ir::InstructionInfo::Store {
                 addr: ir::Value::Slot(slot),
                 value: ir::Value::Param(ir_param),
             });
-
-            //push slot and param to function
-            let curr_func = self.prog.get_func_mut(self.curr_func);
-            curr_func.params.push(ir_param);
-            curr_func.slots.push(slot);
 
             scope.declare_variable(&param.id, LRValue::Left(ir::Value::Slot(slot)))?;
         }
 
         let body = ast_func.body.as_ref().
             expect("can only generate code for functions with a body");
-        let end = self.append_block(start, &mut scope, body)?;
+        let end = self.append_nested_block(start, &mut scope, body)?;
 
         if end.needs_return {
             if ret_ty == self.prog.type_void() {
@@ -844,23 +917,31 @@ fn build_module_skeleton<'a>(
                 let func_ty = ir::FunctionType { params: param_tys, ret: ret_ty };
 
                 let value = match (ast_func.ext, &ast_func.body) {
+                    //external function, leave this for the backend to figure out
                     (true, None) => {
-                        //external function, leave this for the backend to figure out
                         let func_ty = prog.define_type_func(func_ty);
                         let ir_ext = ir::ExternInfo { name: ast_func.id.string.clone(), ty: func_ty };
                         let ir_ext = prog.define_ext(ir_ext);
                         ir::Value::Extern(ir_ext)
                     }
+                    //functions need bodies
                     (false, None) => {
-                        //functions need bodies
                         return Err(Error::MissingFunctionBody(ast_func));
                     }
+                    //standard function, maybe marked extern
                     (ext, Some(_)) => {
-                        //standard function, maybe marked extern
                         let mut ir_func = ir::FunctionInfo::new(func_ty, prog);
                         if ext {
                             ir_func.global_name = Some(ast_func.id.string.clone());
                         }
+
+                        //add the parameters
+                        ir_func.params.extend(
+                            ir_func.func_ty.params.iter()
+                                .map(|&ty| prog.define_param(ir::ParameterInfo { ty }))
+                        );
+
+                        //define and register the function
                         let ir_func = prog.define_func(ir_func);
                         let func_value = ir::Value::Func(ir_func);
                         skeleton.functions_to_lower.push((ast_func, ir_func));

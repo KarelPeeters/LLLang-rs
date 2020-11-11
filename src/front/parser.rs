@@ -58,10 +58,13 @@ declare_tokens![
     If("if"),
     Else("else"),
     While("while"),
+    For("for"),
+    In("in"),
     Break("break"),
     Continue("continue"),
 
     Arrow("->"),
+    DoubleDot(".."),
 
     NotEq("!="),
     DoubleEq("=="),
@@ -553,14 +556,27 @@ impl<'a> Parser<'a> {
             TT::While => {
                 self.pop()?;
 
-                let cond = self.expression()?;
+                let cond = Box::new(self.expression()?);
                 let body = self.block()?;
 
-                (ast::StatementKind::While(ast::WhileStatement {
-                    span: Span::new(start_pos, self.last_popped_end),
-                    cond: Box::new(cond),
-                    body,
-                }), false)
+                let span = Span::new(start_pos, self.last_popped_end);
+                (ast::StatementKind::While(ast::WhileStatement { span, cond, body }), false)
+            }
+            TT::For => {
+                self.pop()?;
+
+                let index = self.identifier("index variable")?;
+                let index_ty = self.maybe_type_decl()?;
+
+                self.expect(TT::In, "in")?;
+                let start = Box::new(self.expression()?);
+                self.expect(TT::DoubleDot, "range separator")?;
+                let end = Box::new(self.expression()?);
+
+                let body = self.block()?;
+
+                let span = Span::new(start_pos, self.last_popped_end);
+                (ast::StatementKind::For(ast::ForStatement { span, index, index_ty, start, end, body }), false)
             }
             TT::OpenC => {
                 (ast::StatementKind::Block(self.block()?), false)
@@ -577,7 +593,7 @@ impl<'a> Parser<'a> {
                         right: Box::new(right),
                     })
                 } else {
-                    // expression
+                    //expression
                     ast::StatementKind::Expression(Box::new(left))
                 };
 
@@ -598,9 +614,7 @@ impl<'a> Parser<'a> {
         let mutable = self.accept(TT::Mut)?.is_some();
         let id = self.identifier("variable name")?;
 
-        let ty = self.accept(TT::Colon)?
-            .map(|_| self.type_decl())
-            .transpose()?;
+        let ty = self.maybe_type_decl()?;
         let init = self.accept(TT::Eq)?
             .map(|_| self.expression().map(Box::new))
             .transpose()?;
@@ -685,7 +699,7 @@ impl<'a> Parser<'a> {
 
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),
-                        index
+                        index,
                     }
                 }
                 _ => break
@@ -804,6 +818,12 @@ impl<'a> Parser<'a> {
     fn identifier(&mut self, description: &'static str) -> Result<ast::Identifier> {
         let token = self.expect(TT::Id, description)?;
         Ok(ast::Identifier { span: token.span, string: token.string })
+    }
+
+    fn maybe_type_decl(&mut self) -> Result<Option<ast::Type>> {
+        self.accept(TT::Colon)?
+            .map(|_| self.type_decl())
+            .transpose()
     }
 
     fn type_decl(&mut self) -> Result<ast::Type> {

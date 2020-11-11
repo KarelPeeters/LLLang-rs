@@ -108,6 +108,7 @@ pub enum StatementKind {
     Expression(Box<Expression>),
     If(IfStatement),
     While(WhileStatement),
+    For(ForStatement),
     Block(Block),
 }
 
@@ -139,6 +140,16 @@ pub struct IfStatement {
 pub struct WhileStatement {
     pub span: Span,
     pub cond: Box<Expression>,
+    pub body: Block,
+}
+
+#[derive(Debug)]
+pub struct ForStatement {
+    pub span: Span,
+    pub index: Identifier,
+    pub index_ty: Option<Type>,
+    pub start: Box<Expression>,
+    pub end: Box<Expression>,
     pub body: Block,
 }
 
