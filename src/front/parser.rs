@@ -82,6 +82,7 @@ declare_tokens![
     DoubleColon("::"),
     Semi(";"),
     Colon(":"),
+    QuestionMark("?"),
     Comma(","),
     Eq("="),
     Ampersand("&"),
@@ -700,6 +701,21 @@ impl<'a> Parser<'a> {
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),
                         index,
+                    }
+                }
+                //TODO operator precedence: a > b ? a : b doesn't parse as (a > b) ? a : b
+                TT::QuestionMark => {
+                    //ternary operator
+                    self.pop()?;
+
+                    let then_value = self.expression()?;
+                    self.expect(TT::Colon, "continue ternary expression")?;
+                    let else_value = self.expression()?;
+
+                    ast::ExpressionKind::Ternary {
+                        condition: Box::new(curr),
+                        then_value: Box::new(then_value),
+                        else_value: Box::new(else_value),
                     }
                 }
                 _ => break

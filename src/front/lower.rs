@@ -145,6 +145,8 @@ struct Flow {
     needs_return: bool,
 }
 
+//TODO general code cleanup: split the code that deals with lowering a single function into a
+//  separate module, this file is getting a bit too large and confusing
 impl<'m, 'a> Lower<'m, 'a> {
     fn find_module(&self, module: &'a ast::Identifier) -> Result<'a, &ModuleSkeleton> {
         if self.module_skeleton.used_modules.contains(&*module.string) {
@@ -212,6 +214,32 @@ impl<'m, 'a> Lower<'m, 'a> {
         }
     }
 
+    fn append_if<
+        T: FnOnce(&mut Self, Flow) -> Result<'a, Flow>,
+        E: FnOnce(&mut Self, Flow) -> Result<'a, Flow>
+    >(&mut self, flow: Flow, cond: ir::Value, then_func: T, else_func: E) -> Result<'a, Flow> {
+        //create flows
+        let then_start = self.new_flow(flow.needs_return);
+        let then_start_block = then_start.block;
+        let then_end = then_func(self, then_start)?;
+
+        let else_start = self.new_flow(flow.needs_return);
+        let else_start_block = else_start.block;
+        let else_end = else_func(self, else_start)?;
+
+        let end_start = self.new_flow(then_end.needs_return || else_end.needs_return);
+
+        //connect everything
+        let branch = new_branch(cond, then_start_block, else_start_block);
+        let jump_end = ir::Terminator::Jump { target: new_target(end_start.block) };
+
+        self.prog.get_block_mut(flow.block).terminator = branch;
+        self.prog.get_block_mut(then_end.block).terminator = jump_end.clone();
+        self.prog.get_block_mut(else_end.block).terminator = jump_end;
+
+        Ok(end_start)
+    }
+
     fn append_expr(
         &mut self,
         flow: Flow,
@@ -266,6 +294,47 @@ impl<'m, 'a> Lower<'m, 'a> {
                 };
                 self.prog.check_type_match(expr, expect_ty, self.prog.type_of_lrvalue(value))?;
                 (flow, value)
+            }
+            ast::ExpressionKind::Ternary { condition, then_value, else_value } => {
+                //TODO remove this once there is better type inference
+                let expect_ty = expect_ty.ok_or(LowerError::CannotInferType(expr.span))?;
+
+                let result_slot = self.define_slot(expect_ty);
+                let (after_cond, cond) =
+                    self.append_expr_loaded(flow, scope, condition, Some(self.prog.type_bool()))?;
+
+                //TODO is it possible to do append_expr here instead? is an LValue ternary operator useful?
+                //  and how does this interact with LRValue? we need to propagate the LR-ness
+                //  eg (c ? a : b)[6] = 3
+                let end_start = self.append_if(
+                    after_cond,
+                    cond,
+                    //TODO any way to remove this code duplication?
+                    |s: &mut Self, then_start: Flow| {
+                        let (then_end, then_value) =
+                            s.append_expr_loaded(then_start, scope, then_value, Some(expect_ty))?;
+
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: then_value };
+                        s.append_instr(then_end.block, store);
+
+                        Ok(then_end)
+                    },
+                    |s: &mut Self, else_start: Flow| {
+                        let (else_end, else_value) =
+                            s.append_expr_loaded(else_start, scope, else_value, Some(expect_ty))?;
+
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: else_value };
+                        s.append_instr(else_end.block, store);
+
+                        Ok(else_end)
+                    },
+                )?;
+
+                let load = ir::InstructionInfo::Load { addr: ir::Value::Slot(result_slot) };
+                let load = self.append_instr(end_start.block, load);
+                let result_value = ir::Value::Instr(load);
+
+                (end_start, LRValue::Right(result_value))
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
                 let expect_ty = match kind {
@@ -569,48 +638,34 @@ impl<'m, 'a> Lower<'m, 'a> {
                 Ok(after_value)
             }
             ast::StatementKind::If(if_stmt) => {
-                //condition
                 let (cond_end, cond) =
                     self.append_expr_loaded(flow, scope, &if_stmt.cond, Some(self.prog.type_bool()))?;
 
-                //then
-                let then_start = self.new_flow(cond_end.needs_return);
-                let then_start_block = then_start.block;
-                let then_end = self.append_nested_block(then_start, scope, &if_stmt.then_block)?;
-
-                //else
-                let else_start = self.new_flow(cond_end.needs_return);
-                let else_start_block = else_start.block;
-                let else_end = if let Some(else_block) = &if_stmt.else_block {
-                    self.append_nested_block(else_start, scope, else_block)?
-                } else {
-                    else_start
-                };
-
-                //end
-                let end_start = self.new_flow(then_end.needs_return || else_end.needs_return);
-
-                //connect everything
-                let branch = new_branch(cond, then_start_block, else_start_block);
-                let jump_end = ir::Terminator::Jump { target: new_target(end_start.block) };
-
-                self.prog.get_block_mut(cond_end.block).terminator = branch;
-                self.prog.get_block_mut(then_end.block).terminator = jump_end.clone();
-                self.prog.get_block_mut(else_end.block).terminator = jump_end;
-
-                Ok(end_start)
+                self.append_if(
+                    cond_end,
+                    cond,
+                    |s: &mut Self, then_flow: Flow| {
+                        s.append_nested_block(then_flow, scope, &if_stmt.then_block)
+                    },
+                    |s: &mut Self, else_flow: Flow| {
+                        if let Some(else_block) = &if_stmt.else_block {
+                            s.append_nested_block(else_flow, scope, else_block)
+                        } else {
+                            Ok(else_flow)
+                        }
+                    },
+                )
             }
             ast::StatementKind::While(while_stmt) => {
-                let ty_bool = self.prog.type_bool();
-
-                let cond = |s: &mut Self, cond_start: Flow| {
-                    s.append_expr_loaded(cond_start, scope, &while_stmt.cond, Some(ty_bool))
-                };
-                let body = |s: &mut Self, body_start: Flow| {
-                    s.append_nested_block(body_start, scope, &while_stmt.body)
-                };
-
-                self.append_loop(flow, cond, body)
+                self.append_loop(
+                    flow,
+                    |s: &mut Self, cond_start: Flow| {
+                        s.append_expr_loaded(cond_start, scope, &while_stmt.cond, Some(s.prog.type_bool()))
+                    },
+                    |s: &mut Self, body_start: Flow| {
+                        s.append_nested_block(body_start, scope, &while_stmt.body)
+                    },
+                )
             }
             ast::StatementKind::For(for_stmt) => {
                 //figure out the index type

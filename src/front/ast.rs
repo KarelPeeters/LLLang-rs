@@ -179,6 +179,11 @@ pub enum ExpressionKind {
         index: String,
     },
 
+    Ternary {
+        condition: Box<Expression>,
+        then_value: Box<Expression>,
+        else_value: Box<Expression>,
+    },
     Binary {
         kind: BinaryOp,
         left: Box<Expression>,
