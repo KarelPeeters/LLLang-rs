@@ -624,7 +624,27 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
-        self.precedence_climb_binop(0)
+        let expr = self.precedence_climb_binop(0)?;
+        let start = expr.span.start;
+
+        if self.accept(TT::QuestionMark)?.is_some() {
+            let then_value = self.expression()?;
+            self.expect(TT::Colon, "continue ternary expression")?;
+            let else_value = self.expression()?;
+
+            let kind = ast::ExpressionKind::Ternary {
+                condition: Box::new(expr),
+                then_value: Box::new(then_value),
+                else_value: Box::new(else_value),
+            };
+
+            Ok(ast::Expression {
+                span: Span::new(start, self.last_popped_end),
+                kind,
+            })
+        } else {
+            Ok(expr)
+        }
     }
 
     fn precedence_climb_binop(&mut self, lower_level: u8) -> Result<ast::Expression> {
@@ -701,21 +721,6 @@ impl<'a> Parser<'a> {
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),
                         index,
-                    }
-                }
-                //TODO operator precedence: a > b ? a : b doesn't parse as (a > b) ? a : b
-                TT::QuestionMark => {
-                    //ternary operator
-                    self.pop()?;
-
-                    let then_value = self.expression()?;
-                    self.expect(TT::Colon, "continue ternary expression")?;
-                    let else_value = self.expression()?;
-
-                    ast::ExpressionKind::Ternary {
-                        condition: Box::new(curr),
-                        then_value: Box::new(then_value),
-                        else_value: Box::new(else_value),
                     }
                 }
                 _ => break
