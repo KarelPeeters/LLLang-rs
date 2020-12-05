@@ -6,14 +6,41 @@ use std::ops::{Index, IndexMut};
 
 use indexmap::map::IndexMap;
 
+macro_rules! new_index_type {
+    ($name:ident, $value:ident) => {
+        #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+        pub struct $name {
+            idx: crate::util::arena::Idx<$value>
+        }
+
+        //trick to make the imports not leak outside of the macro
+        const _: () = {
+            use crate::util::arena::IndexType;
+            use crate::util::arena::Idx;
+
+            impl IndexType for $name {
+                type T = $value;
+                fn idx(&self) -> Idx<Self::T> {
+                    self.idx
+                }
+                fn new(idx: Idx<Self::T>) -> Self {
+                    Self { idx }
+                }
+            }
+
+            impl std::fmt::Debug for $name {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{:?} {}", IndexType::idx(self), stringify!($name))
+                }
+            }
+        };
+    }
+}
+
 pub trait IndexType: Sized + Debug {
     type T;
     fn idx(&self) -> Idx<Self::T>;
     fn new(idx: Idx<Self::T>) -> Self;
-
-    fn sentinel() -> Self {
-        Self::new(Idx::sentinel())
-    }
 }
 
 pub struct Idx<T> {
@@ -34,11 +61,6 @@ impl<T> IndexType for Idx<T> {
 impl<T> Idx<T> {
     fn new(i: usize) -> Self {
         Self { i, ph: PhantomData }
-    }
-
-    // a fake index that will never be part of an actual arena
-    pub fn sentinel() -> Idx<T> {
-        Self::new(usize::MAX)
     }
 }
 

@@ -14,10 +14,11 @@ use indexmap::map::IndexMap;
 use crate::front::FileId;
 use crate::front::parser::ParseError;
 
+#[macro_use]
+mod util;
 mod front;
 mod back;
 mod mid;
-mod util;
 
 #[derive(Debug, From)]
 enum CompileError {

@@ -2,32 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use crate::util::arena::{Arena, ArenaSet, Idx, IndexType};
-
-macro_rules! new_index_type {
-    ($name:ident, $value:ident) => {
-        #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-        pub struct $name {
-            idx: Idx<$value>
-        }
-
-        impl IndexType for $name {
-            type T = $value;
-            fn idx(&self) -> Idx<Self::T> {
-                self.idx
-            }
-            fn new(idx: Idx<Self::T>) -> Self {
-                Self { idx }
-            }
-        }
-
-        impl Debug for $name {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{:?} {}", self.idx(), stringify!($name))
-            }
-        }
-    }
-}
+use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
@@ -100,24 +75,20 @@ impl Program {
     // Return the program representing `fn main() -> int { unreachable(); }`
     pub fn new() -> Self {
         let mut types = ArenaSet::default();
+        let mut nodes = Arenas::default();
+
         let ty_void = types.push(TypeInfo::Void);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
+        let ty_int = types.push(TypeInfo::Integer { bits: 32 });
 
-        let mut prog = Self {
-            nodes: Default::default(),
-            types,
-            ty_bool,
-            ty_void,
-            main: Function::sentinel(),
-        };
+        let main_func_ty = FunctionType { params: Vec::new(), ret: ty_int };
+        let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
 
-        let ty_int = prog.define_type_int(32);
-        let func_ty = FunctionType { params: Vec::new(), ret: ty_int };
-        let func = FunctionInfo::new(func_ty, &mut prog);
-        let func = prog.define_func(func);
-        prog.main = func;
+        let entry = nodes.blocks.push(BlockInfo::new());
+        let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
+        let main = nodes.funcs.push(main_info);
 
-        prog
+        Program { nodes, types, ty_bool, ty_void, main }
     }
 
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
@@ -237,6 +208,10 @@ impl FunctionInfo {
         let ty = prog.define_type_func(func_ty.clone());
         let entry = prog.define_block(BlockInfo::new());
 
+        Self::new_given_parts(func_ty, ty, entry)
+    }
+
+    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Block) -> Self {
         Self {
             ty,
             func_ty,
