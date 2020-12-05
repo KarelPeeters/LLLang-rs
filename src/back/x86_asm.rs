@@ -356,8 +356,9 @@ impl AsmBuilder<'_> {
             self.text.push_str(&format!("data_{}:\n  db ", data_num));
 
             let data_info = self.prog.get_data(data);
-            for b in &data_info.bytes {
-                self.text.push_str(&format!("{}, ", b));
+            for (i, b) in data_info.bytes.iter().enumerate() {
+                if i != 0 { self.text.push_str(", ") }
+                self.text.push_str(&format!("{}", b));
             }
             self.text.push('\n');
         }
