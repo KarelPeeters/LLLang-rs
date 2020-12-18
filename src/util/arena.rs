@@ -1,17 +1,15 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 use indexmap::map::IndexMap;
 
 macro_rules! new_index_type {
-    ($name:ident, $value:ident) => {
+    ($name:ident) => {
         #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-        pub struct $name {
-            idx: crate::util::arena::Idx<$value>
-        }
+        pub struct $name(crate::util::arena::Idx);
 
         //trick to make the imports not leak outside of the macro
         const _: () = {
@@ -19,18 +17,17 @@ macro_rules! new_index_type {
             use crate::util::arena::Idx;
 
             impl IndexType for $name {
-                type T = $value;
-                fn idx(&self) -> Idx<Self::T> {
-                    self.idx
+                fn idx(&self) -> Idx {
+                    self.0
                 }
-                fn new(idx: Idx<Self::T>) -> Self {
-                    Self { idx }
+                fn new(idx: Idx) -> Self {
+                    Self(idx)
                 }
             }
 
             impl std::fmt::Debug for $name {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    write!(f, "{:?} {}", IndexType::idx(self), stringify!($name))
+                    write!(f, "{:?} {}", self.0, stringify!($name))
                 }
             }
         };
@@ -38,58 +35,24 @@ macro_rules! new_index_type {
 }
 
 pub trait IndexType: Sized + Debug {
-    type T;
-    fn idx(&self) -> Idx<Self::T>;
-    fn new(idx: Idx<Self::T>) -> Self;
+    fn idx(&self) -> Idx;
+    fn new(idx: Idx) -> Self;
 }
 
-pub struct Idx<T> {
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Idx {
     i: usize,
-    ph: PhantomData<T>,
 }
 
-impl<T> IndexType for Idx<T> {
-    type T = T;
-    fn idx(&self) -> Idx<T> {
-        *self
-    }
-    fn new(idx: Idx<T>) -> Self {
-        idx
-    }
-}
-
-impl<T> Idx<T> {
+impl Idx {
     fn new(i: usize) -> Self {
-        Self { i, ph: PhantomData }
+        Self { i }
     }
 }
 
-impl<T> Debug for Idx<T> {
+impl Debug for Idx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "<{}>", self.i)
-    }
-}
-
-//Traits implemented manually because #[derive(...)] places bounds on T
-impl<T> Clone for Idx<T> {
-    fn clone(&self) -> Self {
-        Self::new(self.i)
-    }
-}
-
-impl<T> Copy for Idx<T> {}
-
-impl<T> PartialEq for Idx<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.i == other.i
-    }
-}
-
-impl<T> Eq for Idx<T> {}
-
-impl<T> Hash for Idx<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.i.hash(state)
     }
 }
 
@@ -200,8 +163,8 @@ impl<K: IndexType, T: Eq + Hash + Clone> ArenaSet<K, T> {
         }
     }
 
-    pub fn pop(&mut self, index: Idx<T>) -> T {
-        let value = self.map_fwd.remove(&index.i)
+    pub fn pop(&mut self, index: K) -> T {
+        let value = self.map_fwd.remove(&index.idx().i)
             .unwrap_or_else(|| panic!("Value {:?} not found", index));
         self.map_back.remove(&value);
         value
@@ -262,13 +225,13 @@ impl<'s, K: IndexType, T: 's> Iterator for ArenaSetIterator<'s, K, T> {
 
 #[cfg(test)]
 mod test {
-    use crate::util::arena::{Arena, ArenaSet, Idx};
+    use crate::util::arena::{Arena, ArenaSet};
 
-    struct MyIndex(usize);
+    new_index_type!(TestIdx);
 
     #[test]
     fn basic() {
-        let mut arena: Arena<Idx<char>, char> = Default::default();
+        let mut arena: Arena<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
         assert_eq!(arena[ai], 'a');
@@ -277,7 +240,7 @@ mod test {
 
     #[test]
     fn pop() {
-        let mut arena: Arena<Idx<char>, char> = Default::default();
+        let mut arena: Arena<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
         arena.pop(ai);
@@ -287,7 +250,7 @@ mod test {
     #[test]
     #[should_panic]
     fn pop_twice() {
-        let mut arena: Arena<Idx<char>, char> = Default::default();
+        let mut arena: Arena<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         arena.push('b');
         arena.pop(ai);
@@ -296,7 +259,7 @@ mod test {
 
     #[test]
     fn duplicate() {
-        let mut arena: Arena<Idx<char>, char> = Default::default();
+        let mut arena: Arena<TestIdx, char> = Default::default();
         let ai0 = arena.push('a');
         let ai1 = arena.push('a');
         assert_eq!(arena[ai0], 'a');
@@ -306,7 +269,7 @@ mod test {
 
     #[test]
     fn basic_set() {
-        let mut arena: ArenaSet<Idx<char>, char> = Default::default();
+        let mut arena: ArenaSet<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
         assert_eq!(arena[ai], 'a');
@@ -315,7 +278,7 @@ mod test {
 
     #[test]
     fn duplicate_set() {
-        let mut arena: ArenaSet<Idx<char>, char> = Default::default();
+        let mut arena: ArenaSet<TestIdx, char> = Default::default();
         let ai0 = arena.push('a');
         let ai1 = arena.push('a');
         assert_eq!(arena[ai0], 'a');
@@ -324,7 +287,7 @@ mod test {
 
     #[test]
     fn pop_set() {
-        let mut arena: ArenaSet<Idx<char>, char> = Default::default();
+        let mut arena: ArenaSet<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
         arena.pop(ai);
@@ -334,7 +297,7 @@ mod test {
     #[test]
     #[should_panic]
     fn pop_twice_set() {
-        let mut arena: ArenaSet<Idx<char>, char> = Default::default();
+        let mut arena: ArenaSet<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         arena.push('b');
         assert_eq!(arena.pop(ai), 'a');
@@ -343,7 +306,7 @@ mod test {
 
     #[test]
     fn iter() {
-        let mut arena: Arena<Idx<char>, char> = Default::default();
+        let mut arena: Arena<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
 
@@ -351,15 +314,15 @@ mod test {
             (ai, &'a'),
             (bi, &'b'),
         ];
-        let mut actual: Vec<(Idx<char>, &char)> = arena.iter().collect();
-        actual.sort_by_key(|x| x.0.i);
+        let mut actual: Vec<(TestIdx, &char)> = arena.iter().collect();
+        actual.sort_by_key(|x| (x.0).0.i);
 
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn iter_set() {
-        let mut arena: ArenaSet<Idx<char>, char> = Default::default();
+        let mut arena: ArenaSet<TestIdx, char> = Default::default();
         let ai = arena.push('a');
         let bi = arena.push('b');
 
@@ -367,8 +330,8 @@ mod test {
             (ai, &'a'),
             (bi, &'b'),
         ];
-        let mut actual: Vec<(Idx<char>, &char)> = arena.iter().collect();
-        actual.sort_by_key(|x| x.0.i);
+        let mut actual: Vec<(TestIdx, &char)> = arena.iter().collect();
+        actual.sort_by_key(|x| (x.0).0.i);
 
         assert_eq!(actual, expected);
     }

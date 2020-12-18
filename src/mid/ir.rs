@@ -7,7 +7,7 @@ use crate::util::arena::{Arena, ArenaSet};
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
         $(
-        new_index_type!($node, $info);
+        new_index_type!($node);
         )*
 
         #[derive(Debug, Default)]
@@ -54,7 +54,7 @@ gen_node_and_program_accessors![
     [Data, DataInfo, define_data, get_data, get_data_mut, datas],
 ];
 
-new_index_type!(Type, TypeInfo);
+new_index_type!(Type);
 
 #[derive(Debug)]
 pub struct Program {
