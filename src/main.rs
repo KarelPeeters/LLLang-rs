@@ -204,9 +204,6 @@ enum Level {
 }
 
 fn main() -> Result<()> {
-    //better panic backtraces
-    color_backtrace::install();
-
     let opts: Opts = Opts::parse();
 
     let (file, do_run) = match opts.command {
