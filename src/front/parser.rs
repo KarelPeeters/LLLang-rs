@@ -2,7 +2,8 @@ use std::mem::swap;
 
 use TokenType as TT;
 
-use crate::front::{ast, FileId, Pos, Span};
+use crate::front::ast;
+use crate::front::pos::{Pos, FileId, Span};
 
 type Result<T> = std::result::Result<T, ParseError>;
 

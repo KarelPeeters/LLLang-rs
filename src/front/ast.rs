@@ -1,6 +1,6 @@
 use indexmap::map::IndexMap;
 
-use crate::front::Span;
+use crate::front::pos::Span;
 
 #[derive(Debug)]
 pub struct Type {
@@ -34,6 +34,7 @@ pub struct Path {
     pub id: Identifier,
 }
 
+//TODO remove
 #[derive(Debug)]
 pub struct Program {
     pub modules: IndexMap<String, Module>
