@@ -26,8 +26,26 @@ pub enum Error<'a> {
         expression: &'a ast::Expression,
         actual: TypeString,
     },
-    ExpectTypeGotItem {
-        path: &'a ast::Path,
+    ExpectStructOrTupleType {
+        expression: &'a ast::Expression,
+        actual: TypeString,
+    },
+
+    //dot indexing
+    WrongDotIndexType {
+        target: &'a ast::Expression,
+        target_type: TypeString,
+        index: &'a ast::DotIndexIndex,
+    },
+    StructFieldNotFound {
+        target: &'a ast::Expression,
+        target_type: TypeString,
+        index: &'a ast::Identifier,
+    },
+    TupleIndexOutOfBounds {
+        target: &'a ast::Expression,
+        target_type: TypeString,
+        index: u32,
     },
 
     //literals
@@ -42,8 +60,8 @@ pub enum Error<'a> {
     },
 
     //lrvalue
-    StoreIntoRValue(Span),
-    ReferenceOfLValue(Span),
+    StoreIntoRValue(&'a ast::Expression),
+    ReferenceOfLValue(&'a ast::Expression),
 
     //identifier
     UndeclaredIdentifier(&'a ast::Identifier),
@@ -57,7 +75,7 @@ pub enum Error<'a> {
     },
 
     //functions
-    MissingReturn(&'a ast::Function),
+    MissingReturn(&'a ast::Identifier),
     MissingFunctionBody(&'a ast::Function),
     WrongArgCount {
         call: &'a ast::Expression,
@@ -65,16 +83,22 @@ pub enum Error<'a> {
         actual: usize,
     },
 
-    //modules
-    ModuleNotFound {
-        module: &'a ast::Identifier,
-    },
-    ModuleNotUsed {
-        module: &'a ast::Identifier,
-    },
-
     //other
     NotInLoop {
         expr: &'a ast::Expression,
     },
+
+    UnexpectedItemType {
+        expected: ItemType,
+        actual: ItemType,
+        path: &'a ast::Path,
+    },
+}
+
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ItemType {
+    Module,
+    Type,
+    Value,
 }

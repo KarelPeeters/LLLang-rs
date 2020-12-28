@@ -4,6 +4,7 @@ use TokenType as TT;
 
 use crate::front::ast;
 use crate::front::pos::{Pos, FileId, Span};
+use crate::front::ast::{DotIndexIndex, Identifier};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -715,9 +716,14 @@ impl<'a> Parser<'a> {
                 TT::Dot => {
                     //dot indexing
                     self.pop()?;
-                    //TODO change this back to an identifier index
-                    // let index = self.identifier("index")?;
-                    let index = self.expect(TT::IntLit, "integer index")?.string;
+                    
+                    let index = self.expect_any(&[TT::IntLit, TT::Id], "dot index index")?;
+                    let index = match index.ty {
+                        //TODO proper IntLit parsing
+                        TT::IntLit => DotIndexIndex::Tuple { span: index.span, index: index.string },
+                        TT::Id => DotIndexIndex::Struct(Identifier { span: index.span, string: index.string }),
+                        _ => unreachable!(),
+                    };
 
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),

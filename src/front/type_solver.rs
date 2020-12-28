@@ -1,3 +1,4 @@
+//TODO actually start using this in lower_func!
 pub struct TypeProblem<T> {
     var_count: usize,
     known_constraints: Vec<(TypeVar, T)>,

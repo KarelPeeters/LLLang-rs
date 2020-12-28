@@ -174,10 +174,9 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
     },
 
-    //TODO for now we're indexing by integer index but we actually want to index by string instead
     DotIndex {
         target: Box<Expression>,
-        index: String,
+        index: DotIndexIndex,
     },
 
     Ternary {
@@ -221,4 +220,10 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Neg,
+}
+
+#[derive(Debug)]
+pub enum DotIndexIndex {
+    Tuple { span: Span, index: String },
+    Struct(Identifier),
 }

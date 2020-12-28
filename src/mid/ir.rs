@@ -279,7 +279,9 @@ pub enum InstructionInfo {
     //  possible solutions:
     //    * use "Cell" in program so we can create types on an immutable program?
     //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
-    StructSubPtr { base: Value, index: usize, result_ty: Type },
+    TupleFieldPtr { base: Value, index: u32, result_ty: Type },
+
+    //TODO add instruction to load tuple value directly instead of needing a pointer to it
 }
 
 //TODO what about signed and unsigned? type or operation?
@@ -318,7 +320,7 @@ impl InstructionInfo {
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::StructSubPtr { result_ty, .. } => *result_ty
+            InstructionInfo::TupleFieldPtr { result_ty, .. } => *result_ty
         }
     }
 }

@@ -1,150 +1,269 @@
-use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
 
-use indexmap::map::IndexMap;
 use itertools::Itertools;
 
-use crate::front;
-use crate::front::ast::{Declaration, Function, Struct, UseDecl};
+use crate::front::{ast, error};
+use crate::front::error::{Error, Result};
+use crate::front::lower_func::TypedValue;
 use crate::front::scope::Scope;
-use crate::mid::ir;
-use crate::mid::ir::{FunctionType, TupleType};
 use crate::util::arena::{Arena, ArenaSet};
 
-new_index_type!(pub Type);
-new_index_type!(pub StructType);
 new_index_type!(pub Module);
+new_index_type!(pub Type);
+new_index_type!(pub Function);
 
-#[derive(Debug, Default)]
-pub struct Store<'a> {
-    pub modules: Arena<Module, ModuleContent<'a>>,
-    pub types: ArenaSet<Type, TypeInfo<'a>>,
-    pub struct_types: Arena<StructType, StructTypeInfo<'a>>,
+#[derive(Debug)]
+pub struct TypeStore<'a> {
+    types: ArenaSet<Type, TypeInfo<'a>>,
+
+    ty_void: Type,
+    ty_bool: Type,
 }
 
-pub type Program<'a> = front::Program<Module>;
+impl<'a> TypeStore<'a> {
+    pub fn new() -> Self {
+        let mut types = ArenaSet::default();
+        let ty_void = types.push(TypeInfo::Void);
+        let ty_bool = types.push(TypeInfo::Bool);
+        Self { types, ty_void, ty_bool }
+    }
 
-impl<'a> Store<'a> {
-    ///Define the given (deduplicated) type.
+    pub fn type_void(&self) -> Type {
+        self.ty_void
+    }
+
+    pub fn type_bool(&self) -> Type {
+        self.ty_bool
+    }
+
     pub fn define_type(&mut self, info: TypeInfo<'a>) -> Type {
         self.types.push(info)
     }
 
-    ///Define a new distinct placeholder type
-    pub fn new_placeholder_type(&mut self) -> Type {
-        self.types.push(TypeInfo::PlaceHolder(self.types.len()))
+    pub fn define_type_ptr(&mut self, inner: Type) -> Type {
+        self.define_type(TypeInfo::Pointer(inner))
     }
 
-    ///Replace a previously created placeholder with a real type.
-    /// The new type must be distinct from all existing types.
-    pub fn fill_placeholder_type(&mut self, ty: Type, info: TypeInfo<'a>) {
-        let prev = self.types.replace(ty, info);
-        assert!(matches!(prev, TypeInfo::PlaceHolder(_)), "Tried to replace non-placeholder type {:?}", prev);
-    }
+    pub fn format_type(&self, ty: Type) -> impl Display + '_ {
+        struct Wrapped<'s> {
+            store: &'s TypeStore<'s>,
+            ty: Type,
+        }
 
-    //TODO maybe cache this mapping somewhere
-    //Convert the given [cst::Type] to a [ir::Type].
-    pub fn as_ir_type(&self, prog: &mut ir::Program, ty: Type) -> ir::Type {
-        match &self.types[ty] {
-            TypeInfo::Bool => prog.type_bool(),
-            TypeInfo::Int => prog.define_type_int(32),
-            TypeInfo::Void => prog.type_void(),
-            TypeInfo::Struct(StructTypeInfo { fields, .. }) => {
-                prog.define_type_tuple(TupleType {
-                    fields: fields.values()
-                        .map(|field| self.as_ir_type(prog, *field))
-                        .collect_vec()
-                })
+        fn write_tuple(store: &TypeStore, f: &mut Formatter<'_>, fields: &Vec<Type>) -> std::fmt::Result {
+            write!(f, "(")?;
+            for (i, &param_ty) in fields.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write!(f, "{}", store.format_type(param_ty))?;
             }
-            TypeInfo::Func(func_type_info) => {
-                prog.define_type_func(self.as_ir_type_func(prog, func_type_info))
-            }
-            TypeInfo::Tuple(fields) => {
-                prog.define_type_tuple(TupleType {
-                    fields: fields.iter()
-                        .map(|field| self.as_ir_type(prog, *field))
-                        .collect_vec()
-                })
-            }
-            TypeInfo::PlaceHolder(_) => {
-                panic!("Cannot convert placeholder type to ir type")
+            write!(f, ")")
+        }
+
+        impl Display for Wrapped<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                match &self.store[self.ty] {
+                    TypeInfo::Placeholder(_) => panic!("tried to format placeholder type"),
+                    TypeInfo::Void => write!(f, "void"),
+                    TypeInfo::Bool => write!(f, "bool"),
+                    TypeInfo::Byte => write!(f, "byte"),
+                    TypeInfo::Int => write!(f, "int"),
+                    TypeInfo::Pointer(inner) => write!(f, "&{}", self.store.format_type(*inner)),
+                    TypeInfo::Tuple(info) => write_tuple(&self.store, f, &info.fields),
+                    TypeInfo::Function(info) => {
+                        write_tuple(&self.store, f, &info.params)?;
+                        write!(f, " -> {}", self.store.format_type(info.ret))
+                    }
+                    TypeInfo::Struct(info) => write!(f, "{}", info.decl.id.string),
+                }
             }
         }
+
+        Wrapped { store: self, ty }
+    }
+}
+
+impl<'a> Index<Type> for TypeStore<'a> {
+    type Output = TypeInfo<'a>;
+
+    fn index(&self, index: Type) -> &Self::Output {
+        &self.types[index]
+    }
+}
+
+#[derive(Debug)]
+pub struct CollectedProgram<'a> {
+    pub modules: Arena<Module, CollectedModule>,
+    pub funcs: Arena<Function, FunctionDecl<'a>>,
+}
+
+#[derive(Debug)]
+pub struct CollectedModule {
+    //the module scope, including imports
+    pub scope: Scope<'static, ScopedItem>,
+    pub funcs: Vec<Function>,
+}
+
+impl<'a> CollectedProgram<'a> {
+    // Resolve a given path to a ScopedItem. This includes mapping primitive types.
+    pub fn resolve_path<'p>(&self, scope: &Scope<'static, ScopedItem>, store: &mut TypeStore, path: &'p ast::Path) -> Result<'p, ScopedItem> {
+        //TODO it would be nicer if primitive types were separate from paths, maybe change the parser
+        //primitive types
+        if path.parents.is_empty() {
+            match &*path.id.string {
+                "void" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Void))),
+                "bool" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Bool))),
+                "int" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Int))),
+                _ => {}
+            }
+        }
+
+        //real paths
+        let scope = path.parents.iter().try_fold(scope, |scope, id| {
+            let &item = scope.find(id)?;
+
+            if let ScopedItem::Module(module) = item {
+                Ok(&self.modules[module].scope)
+            } else {
+                Err(item.err_unexpected_kind(error::ItemType::Module, path))
+            }
+        })?;
+
+        scope.find(&path.id).map(|&v| v)
     }
 
-    //TODO comment
-    pub fn as_ir_type_func(&self, prog: &mut ir::Program, func: &FuncTypeInfo) -> ir::FunctionType {
-        FunctionType {
-            params: func.params.iter()
-                .map(|param| self.as_ir_type(prog, *param))
-                .collect_vec(),
-            ret: self.as_ir_type(prog, func.ret),
+    pub fn resolve_type(&self, scope: &Scope<'static, ScopedItem>, store: &mut TypeStore, ty: &'a ast::Type) -> Result<'a, Type> {
+        match &ty.kind {
+            ast::TypeKind::Path(path) => {
+                let item = self.resolve_path(scope, store, path)?;
+                if let ScopedItem::Type(ty) = item {
+                    Ok(ty)
+                } else {
+                    Err(item.err_unexpected_kind(error::ItemType::Type, path))
+                }
+            }
+            ast::TypeKind::Ref(inner) => {
+                let inner = self.resolve_type(scope, store, &*inner)?;
+                Ok(store.types.push(TypeInfo::Pointer(inner)))
+            }
+            ast::TypeKind::Tuple { fields } => {
+                let fields = fields.iter()
+                    .map(|field| self.resolve_type(scope, store, field))
+                    .try_collect()?;
+
+                Ok(store.types.push(TypeInfo::Tuple(TupleTypeInfo { fields })))
+            }
+            ast::TypeKind::Func { params, ret } => {
+                let params = params.iter()
+                    .map(|param| self.resolve_type(scope, store, param))
+                    .try_collect()?;
+                let ret = self.resolve_type(scope, store, ret)?;
+
+                Ok(store.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
+            }
         }
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum TypeInfo<'a, 'c> {
+#[derive(Debug, Copy, Clone)]
+pub enum ScopedItem {
+    Module(Module),
+    Type(Type),
+    Value(TypedValue),
+}
+
+impl ScopedItem {
+    pub fn err_unexpected_kind(self, expected: error::ItemType, path: &ast::Path) -> Error<'_> {
+        let actual = match self {
+            ScopedItem::Module(_) => error::ItemType::Module,
+            ScopedItem::Type(_) => error::ItemType::Type,
+            ScopedItem::Value(_) => error::ItemType::Value,
+        };
+
+        assert_ne!(actual, expected);
+
+        error::Error::UnexpectedItemType { expected, actual, path }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub enum TypeInfo<'a> {
+    Placeholder(usize),
+
     Void,
     Bool,
+    Byte,
     Int,
-    //TODO consistently introduce subtypes or not
-    Struct(StructTypeInfo),
-    Func(FuncTypeInfo),
-    Tuple(Vec<Type>),
-    //has an index field to prevent deduplication
-    PlaceHolder(usize),
+
+    Pointer(Type),
+
+    Tuple(TupleTypeInfo),
+    Function(FunctionTypeInfo),
+    Struct(StructTypeInfo<'a>),
 }
 
-#[derive(Debug, Clone)]
-pub struct StructTypeInfo<'a, 'c> {
-    pub decl: &'c StructDeclInfo<'a>,
-    pub fields: IndexMap<&'a str, Type>,
-}
+impl<'a> TypeInfo<'a> {
+    pub fn unwrap_ptr(&self) -> Option<Type> {
+        match self {
+            TypeInfo::Pointer(inner) => Some(*inner),
+            _ => None,
+        }
+    }
 
-impl PartialEq for StructTypeInfo<'_, '_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.decl.item == other.decl.item
+    pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo> {
+        match self {
+            TypeInfo::Function(inner) => Some(inner),
+            _ => None,
+        }
     }
 }
 
-impl Eq for StructTypeInfo<'_, '_> {}
-
-impl Hash for StructTypeInfo<'_, '_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.decl.item.hash(state)
-    }
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct TupleTypeInfo {
+    pub fields: Vec<Type>
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct FuncTypeInfo {
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct FunctionTypeInfo {
     pub params: Vec<Type>,
     pub ret: Type,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum ItemInfo {
-    //TODO what option should store what data here?
-    FunctionDef(),
-    TypeDef(Type),
-    ConstDef(),
+#[derive(Debug, Clone)]
+pub struct StructTypeInfo<'a> {
+    pub decl: &'a ast::Struct,
+    pub fields: Vec<(&'a str, Type)>,
 }
 
-#[derive(Debug, Default)]
-pub struct ModuleContent<'a> {
-    //TODO don't forget to add imported items to scope before actually lowering
-    //TODO populate this scope at some point
-    pub scope_defines: Scope<'a, ScopedItem>,
-    pub use_decls: Vec<&'a UseDecl>,
-    pub struct_decls: Vec<StructDeclInfo<'a>>,
-    pub func_decls: Vec<FuncDeclInfo<'a>>,
-    pub const_decls: Vec<ConstDeclInfo<'a>>,
+impl<'a> StructTypeInfo<'a> {
+    pub fn fiend_field(&self, index: &str) -> Option<(u32, Type)> {
+        self.fields.iter().enumerate()
+            .find(|(_, (id, _))| *id == index)
+            .map(|(i, (_, ty))| (i as u32, *ty))
+    }
 }
 
-//TODO
-pub enum ScopedItem {
-    Module(Module),
-    Type(Type),
-    Value(ir::Value),
+impl<'a> Hash for StructTypeInfo<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.decl, state)
+    }
+}
+
+impl<'a> PartialEq for StructTypeInfo<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.decl, other.decl)
+    }
+}
+
+impl<'a> Eq for StructTypeInfo<'a> {}
+
+//TODO we need to break this up for lifetime purposes
+#[derive(Debug)]
+pub struct FunctionDecl<'a> {
+    pub func: Function,
+    //TODO do we actually need a 'ty' field here at all?
+    pub ty: Type,
+    pub func_ty: FunctionTypeInfo,
+    pub ast: &'a ast::Function,
 }

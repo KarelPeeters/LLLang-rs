@@ -284,7 +284,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
 
     let result = match instr_info {
         InstructionInfo::Load { .. } => Lattice::Overdef,
-        InstructionInfo::StructSubPtr { .. } => Lattice::Overdef,
+        InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
             if let Value::Func(target) = *target {
