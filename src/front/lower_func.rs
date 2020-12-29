@@ -1,6 +1,6 @@
 use crate::front::{ast, cst, error};
 use crate::front::ast::DotIndexIndex;
-use crate::front::cst::{CollectedProgram, ScopedItem, TypeInfo};
+use crate::front::cst::{CollectedProgram, LRValue, ScopedItem, TypedValue, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::MappingTypeStore;
 use crate::front::scope::Scope;
@@ -40,19 +40,6 @@ fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value
         ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lte, left, right },
         ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lt, left, right },
     }
-}
-
-//TODO maybe move this higher up the module hierarchy
-#[derive(Debug, Copy, Clone)]
-pub struct TypedValue {
-    ty: cst::Type,
-    ir: ir::Value,
-}
-
-#[derive(Debug, Copy, Clone)]
-enum LRValue {
-    Left(TypedValue),
-    Right(TypedValue),
 }
 
 fn new_target(block: ir::Block) -> ir::Target {
@@ -191,7 +178,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
     fn append_expr(
         &mut self,
         flow: Flow,
-        scope: &Scope<LRValue>,
+        scope: &Scope<ScopedItem>,
         expr: &'a ast::Expression,
         expect_ty: Option<cst::Type>,
     ) -> Result<'a, (Flow, LRValue)> {
@@ -247,20 +234,12 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
                 panic!("string literals only supported in consts for now")
             }
             ast::ExpressionKind::Path(path) => {
-                //TODO this logic can be improved to allow eg. types defined in the local scope
-                //  for this scopes would have to be improved though
-                let value: LRValue = if path.parents.is_empty() {
-                    //first try local scope
-                    *scope.find(&path.id)?
-                } else {
-                    //fallback to global scope
-                    let item = self.cst.resolve_path(&self.module_scope, &mut self.store, path)?;
+                let item = self.cst.resolve_path(scope, &mut self.store, path)?;
 
-                    if let ScopedItem::Value(value) = item {
-                        LRValue::Right(value)
-                    } else {
-                        return Err(item.err_unexpected_kind(error::ItemType::Value, path));
-                    }
+                let value = if let ScopedItem::Value(value) = item {
+                    value
+                } else {
+                    return Err(item.err_unexpected_kind(error::ItemType::Value, path));
                 };
 
                 self.check_type_match(expr, expect_ty, self.type_of_lrvalue(value))?;
@@ -458,7 +437,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
                             (TypeInfo::Struct(target_ty_info), DotIndexIndex::Struct(id)) => {
                                 target_ty_info.fiend_field(&id.string)
                                     .ok_or_else(|| Error::StructFieldNotFound {
-                                        target: target,
+                                        target,
                                         target_type: self.store.format_type(target_value.ty).to_string(),
                                         index: id,
                                     })?
@@ -552,7 +531,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
     fn append_expr_loaded(
         &mut self,
         flow: Flow,
-        scope: &Scope<LRValue>,
+        scope: &Scope<ScopedItem>,
         expr: &'a ast::Expression,
         expect_ty: Option<cst::Type>,
     ) -> Result<'a, (Flow, TypedValue)> {
@@ -603,7 +582,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
         Ok(end_start)
     }
 
-    fn append_statement(&mut self, flow: Flow, scope: &mut Scope<LRValue>, stmt: &'a ast::Statement) -> Result<'a, Flow> {
+    fn append_statement(&mut self, flow: Flow, scope: &mut Scope<ScopedItem>, stmt: &'a ast::Statement) -> Result<'a, Flow> {
         match &stmt.kind {
             ast::StatementKind::Declaration(decl) => {
                 assert!(!decl.mutable, "everything is mutable for now");
@@ -625,7 +604,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
 
                 //define the slot
                 let slot = self.define_slot(ty_ir);
-                scope.declare(&decl.id, LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }))?;
+                let item = ScopedItem::Value(LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }));
+                scope.declare(&decl.id, item)?;
 
                 //optionally store the value
                 if let Some(value) = value {
@@ -714,7 +694,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
                 //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
-                index_scope.declare(&for_stmt.index, LRValue::Left(TypedValue { ty: index_ty_ptr, ir: index_slot }))?;
+                let item = ScopedItem::Value(LRValue::Left(TypedValue { ty: index_ty_ptr, ir: index_slot }));
+                index_scope.declare(&for_stmt.index, item)?;
 
                 //index = start
                 self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, value: start_value.ir });
@@ -765,7 +746,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
         }
     }
 
-    fn append_nested_block(&mut self, flow: Flow, scope: &Scope<LRValue>, block: &'a ast::Block) -> Result<'a, Flow> {
+    fn append_nested_block(&mut self, flow: Flow, scope: &Scope<ScopedItem>, block: &'a ast::Block) -> Result<'a, Flow> {
         let mut inner_scope = scope.nest();
 
         block.statements.iter()
@@ -778,9 +759,7 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
         let start = self.new_flow(true);
         self.prog.get_func_mut(self.ir_func).entry = start.block;
 
-        //TODO this scope needs to have the module scope as a parent!
-        //  also change resolve_path after this change
-        let mut scope: Scope<LRValue> = Default::default();
+        let mut scope = self.module_scope.nest();
 
         for (i, param) in decl.ast.params.iter().enumerate() {
             let ir_param = self.prog.get_func(self.ir_func).params[i];
@@ -797,7 +776,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
                 value: ir::Value::Param(ir_param),
             });
 
-            scope.declare(&param.id, LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }))?;
+            let item = ScopedItem::Value(LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }));
+            scope.declare(&param.id, item)?;
         }
 
         let body = decl.ast.body.as_ref().

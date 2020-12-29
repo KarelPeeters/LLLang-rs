@@ -6,8 +6,8 @@ use itertools::Itertools;
 
 use crate::front::{ast, error};
 use crate::front::error::{Error, Result};
-use crate::front::lower_func::TypedValue;
 use crate::front::scope::Scope;
+use crate::mid::ir;
 use crate::util::arena::{Arena, ArenaSet};
 
 new_index_type!(pub Module);
@@ -92,7 +92,7 @@ impl<'a> Index<Type> for TypeStore<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CollectedProgram<'a> {
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
@@ -107,7 +107,7 @@ pub struct CollectedModule {
 
 impl<'a> CollectedProgram<'a> {
     // Resolve a given path to a ScopedItem. This includes mapping primitive types.
-    pub fn resolve_path<'p>(&self, scope: &Scope<'static, ScopedItem>, store: &mut TypeStore, path: &'p ast::Path) -> Result<'p, ScopedItem> {
+    pub fn resolve_path<'p>(&self, scope: &Scope<ScopedItem>, store: &mut TypeStore, path: &'p ast::Path) -> Result<'p, ScopedItem> {
         //TODO it would be nicer if primitive types were separate from paths, maybe change the parser
         //primitive types
         if path.parents.is_empty() {
@@ -170,7 +170,19 @@ impl<'a> CollectedProgram<'a> {
 pub enum ScopedItem {
     Module(Module),
     Type(Type),
-    Value(TypedValue),
+    Value(LRValue),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum LRValue {
+    Left(TypedValue),
+    Right(TypedValue),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct TypedValue {
+    pub ty: Type,
+    pub ir: ir::Value,
 }
 
 impl ScopedItem {
