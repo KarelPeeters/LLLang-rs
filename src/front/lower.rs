@@ -4,10 +4,22 @@ use std::ops::{Deref, DerefMut};
 use crate::front;
 use crate::front::{ast, cst};
 use crate::front::collect::collect;
-use crate::front::cst::{FunctionTypeInfo, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::Result;
 use crate::front::lower_func::LowerFuncState;
 use crate::mid::ir;
+
+#[derive(Debug, Copy, Clone)]
+pub enum LRValue {
+    Left(TypedValue),
+    Right(TypedValue),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct TypedValue {
+    pub ty: cst::Type,
+    pub ir: ir::Value,
+}
 
 //TODO maybe move this structure somewhere else?
 pub struct MappingTypeStore<'a> {
@@ -84,7 +96,7 @@ impl<'a> MappingTypeStore<'a> {
 }
 
 
-pub fn lower(prog: &front::Program<Option<ast::Module>>) -> Result<ir::Program> {
+pub fn lower(prog: &front::Program<Option<ast::ModuleContent>>) -> Result<ir::Program> {
     let (store, cst) = collect(prog)?;
     let mut store = MappingTypeStore::wrap(store);
 
@@ -101,11 +113,19 @@ pub fn lower(prog: &front::Program<Option<ast::Module>>) -> Result<ir::Program> 
         (cst_func, ir_func)
     }).collect();
 
-    //TODO also create constants
+    let map_value = &|value: ScopedValue| -> LRValue {
+        match value {
+            ScopedValue::Function(func) => {
+                let ir_func = *all_funcs.get(&func).unwrap();
+                LRValue::Right(TypedValue { ty: cst.funcs[func].ty, ir: ir::Value::Func(ir_func) })
+            },
+            ScopedValue::Immediate(value) => value,
+        }
+    };
 
     //actually generate code
     for (_, module) in &cst.modules {
-        for &cst_func in &module.funcs {
+        for &cst_func in &module.codegen_funcs {
             let func_decl = &cst.funcs[cst_func];
             assert!(func_decl.ast.body.is_some(), "TODO implement extern funcs without body again");
 
@@ -116,6 +136,7 @@ pub fn lower(prog: &front::Program<Option<ast::Module>>) -> Result<ir::Program> 
                 cst: &cst,
                 module_scope: &module.scope,
                 store: &mut store,
+                map_value,
 
                 ret_ty: func_decl.func_ty.ret,
                 ir_func,

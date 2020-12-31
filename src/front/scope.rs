@@ -22,14 +22,30 @@ impl<V> Scope<'_, V> {
         }
     }
 
-    pub fn find<'a>(&self, id: &'a ast::Identifier) -> Result<'a, &V> {
+    /// Declare a value with the given id. Panics if the id already exists in this scope.
+    pub fn declare_str(&mut self, id: &str, var: V) {
+        let prev = self.values.insert(id.to_owned(), var);
+        assert!(matches!(prev, None), "Id '{}' already exists in this scope", id)
+    }
+
+    /// Find the given identifier in this scope.
+    /// Walks up into the parent scopes until a scope without a parent is found,
+    /// then looks in the `root` scope. If no value is found returns `Err`.
+    pub fn find<'a, 's>(&'s self, root: Option<&'s Self>, id: &'a ast::Identifier) -> Result<'a, &V> {
         if let Some(s) = self.values.get(&id.string) {
             Ok(s)
         } else if let Some(p) = self.parent {
-            p.find(id)
+            p.find(root, id)
+        } else if let Some(root) = root {
+            root.find(None, id)
         } else {
             Err(Error::UndeclaredIdentifier(id))
         }
+    }
+
+    /// The amount of values declared in this scope without taking the parent scope into account.
+    pub fn size(&self) -> usize {
+        self.values.len()
     }
 }
 

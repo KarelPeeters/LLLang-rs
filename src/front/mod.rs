@@ -18,6 +18,7 @@ pub mod lower_func;
 pub mod type_solver;
 
 //TODO rename <- why is this comment here?
+//TODO inline generic arg? are there multiple actually used?
 #[derive(Debug, Default)]
 pub struct Program<C> {
     pub root: Module<C>,
@@ -33,6 +34,7 @@ impl<C> Program<C> {
     }
 }
 
+//TODO maybe remove all of this crap?
 impl<C> Program<C> {
     ///Recursively map module contents to return a new, transformed program
     pub fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s C) -> Result<R, E>) -> Result<Program<R>, E> {

@@ -1,5 +1,3 @@
-use indexmap::map::IndexMap;
-
 use crate::front::pos::Span;
 
 #[derive(Debug)]
@@ -34,14 +32,8 @@ pub struct Path {
     pub id: Identifier,
 }
 
-//TODO remove
 #[derive(Debug)]
-pub struct Program {
-    pub modules: IndexMap<String, Module>
-}
-
-#[derive(Debug)]
-pub struct Module {
+pub struct ModuleContent {
     pub items: Vec<Item>
 }
 
@@ -56,7 +48,7 @@ pub enum Item {
 #[derive(Debug)]
 pub struct UseDecl {
     pub span: Span,
-    pub module: Identifier,
+    pub path: Path,
 }
 
 #[derive(Debug)]

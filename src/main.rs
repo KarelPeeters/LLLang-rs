@@ -12,11 +12,11 @@ use std::process::Command;
 
 use clap::Clap;
 use derive_more::From;
+use itertools::Itertools;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::front::ast;
 use crate::front::parser::ParseError;
-use itertools::Itertools;
 use crate::front::pos::FileId;
 
 #[macro_use]
@@ -40,10 +40,10 @@ enum CompileError {
 type Result<T> = std::result::Result<T, CompileError>;
 
 fn parse_and_add_module_if_ll(
-    prog: &mut front::Program<Option<ast::Module>>,
+    prog: &mut front::Program<Option<ast::ModuleContent>>,
     file_count: &mut usize,
     entry: DirEntry,
-    skip_path_components: usize
+    skip_path_components: usize,
 ) -> Result<()> {
     let path = entry.path();
 
@@ -86,7 +86,7 @@ fn parse_and_add_module_if_ll(
 
 /// Parse the main file and all of the lib files into a single program
 //TODO change to return front::Program
-fn parse_all(ll_path: &Path) -> Result<front::Program<Option<ast::Module>>> {
+fn parse_all(ll_path: &Path) -> Result<front::Program<Option<ast::ModuleContent>>> {
     let mut prog = front::Program::default();
     let mut file_count: usize = 0;
 

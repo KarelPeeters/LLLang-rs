@@ -6,8 +6,8 @@ use itertools::Itertools;
 
 use crate::front::{ast, error};
 use crate::front::error::{Error, Result};
+use crate::front::lower::LRValue;
 use crate::front::scope::Scope;
-use crate::mid::ir;
 use crate::util::arena::{Arena, ArenaSet};
 
 new_index_type!(pub Module);
@@ -20,22 +20,45 @@ pub struct TypeStore<'a> {
 
     ty_void: Type,
     ty_bool: Type,
+    ty_byte: Type,
+    ty_int: Type,
 }
 
-impl<'a> TypeStore<'a> {
-    pub fn new() -> Self {
+impl<'a> Default for TypeStore<'a> {
+    fn default() -> Self {
         let mut types = ArenaSet::default();
         let ty_void = types.push(TypeInfo::Void);
         let ty_bool = types.push(TypeInfo::Bool);
-        Self { types, ty_void, ty_bool }
+        let ty_byte = types.push(TypeInfo::Byte);
+        let ty_int = types.push(TypeInfo::Int);
+        Self { types, ty_void, ty_bool, ty_byte, ty_int }
     }
+}
 
+impl<'a> TypeStore<'a> {
     pub fn type_void(&self) -> Type {
         self.ty_void
     }
 
     pub fn type_bool(&self) -> Type {
         self.ty_bool
+    }
+
+    pub fn type_byte(&self) -> Type {
+        self.ty_byte
+    }
+
+    pub fn type_int(&self) -> Type {
+        self.ty_int
+    }
+
+    pub fn new_placeholder(&mut self) -> Type {
+        self.types.push(TypeInfo::Placeholder(self.types.len()))
+    }
+
+    pub fn replace_placeholder(&mut self, ph: Type, info: TypeInfo<'a>) {
+        let old_info = self.types.replace(ph, info);
+        assert!(matches!(old_info, TypeInfo::Placeholder(_)), "tried to replace non-placeholder type {:?}", old_info)
     }
 
     pub fn define_type(&mut self, info: TypeInfo<'a>) -> Type {
@@ -52,7 +75,7 @@ impl<'a> TypeStore<'a> {
             ty: Type,
         }
 
-        fn write_tuple(store: &TypeStore, f: &mut Formatter<'_>, fields: &Vec<Type>) -> std::fmt::Result {
+        fn write_tuple(store: &TypeStore, f: &mut Formatter<'_>, fields: &[Type]) -> std::fmt::Result {
             write!(f, "(")?;
             for (i, &param_ty) in fields.iter().enumerate() {
                 if i > 0 { write!(f, ", ")?; }
@@ -94,49 +117,83 @@ impl<'a> Index<Type> for TypeStore<'a> {
 
 #[derive(Debug, Default)]
 pub struct CollectedProgram<'a> {
+    pub root_scope: Scope<'static, ScopedItem>,
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
 }
 
-#[derive(Debug)]
+//TODO check which fields are actually necessary and comment them
+
+#[derive(Debug, Default)]
 pub struct CollectedModule {
-    //the module scope, including imports
+    /// The scope that only contains items actually defined in this module. 
+    /// Should only be used as intermediate result while constructing the cst. 
+    pub local_scope: Scope<'static, ScopedItem>,
+
+    /// The real module scope, including top level modules, imports and locally defined items
     pub scope: Scope<'static, ScopedItem>,
-    pub funcs: Vec<Function>,
+
+    /// The set of functions defined in this module that need to have code generated
+    pub codegen_funcs: Vec<Function>,
+}
+
+
+#[derive(Debug, Copy, Clone)]
+pub enum ScopeKind {
+    Local,
+    Real,
 }
 
 impl<'a> CollectedProgram<'a> {
     // Resolve a given path to a ScopedItem. This includes mapping primitive types.
-    pub fn resolve_path<'p>(&self, scope: &Scope<ScopedItem>, store: &mut TypeStore, path: &'p ast::Path) -> Result<'p, ScopedItem> {
+    pub fn resolve_path<'p>(
+        &self,
+        scope_kind: ScopeKind,
+        scope: &Scope<ScopedItem>,
+        store: &mut TypeStore,
+        path: &'p ast::Path,
+    ) -> Result<'p, ScopedItem> {
         //TODO it would be nicer if primitive types were separate from paths, maybe change the parser
         //primitive types
         if path.parents.is_empty() {
             match &*path.id.string {
-                "void" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Void))),
-                "bool" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Bool))),
-                "int" => return Ok(ScopedItem::Type(store.types.push(TypeInfo::Int))),
+                "void" => return Ok(ScopedItem::Type(store.ty_void)),
+                "bool" => return Ok(ScopedItem::Type(store.ty_bool)),
+                "byte" => return Ok(ScopedItem::Type(store.ty_byte)),
+                "int" => return Ok(ScopedItem::Type(store.ty_int)),
                 _ => {}
             }
         }
 
         //real paths
         let scope = path.parents.iter().try_fold(scope, |scope, id| {
-            let &item = scope.find(id)?;
+            let &item = scope.find(Some(&self.root_scope), id)?;
 
             if let ScopedItem::Module(module) = item {
-                Ok(&self.modules[module].scope)
+                let module = &self.modules[module];
+                let next_scope = match scope_kind {
+                    ScopeKind::Local => &module.local_scope,
+                    ScopeKind::Real => &module.scope,
+                };
+                Ok(next_scope)
             } else {
                 Err(item.err_unexpected_kind(error::ItemType::Module, path))
             }
         })?;
 
-        scope.find(&path.id).map(|&v| v)
+        scope.find(Some(&self.root_scope), &path.id).map(|&v| v)
     }
 
-    pub fn resolve_type(&self, scope: &Scope<'static, ScopedItem>, store: &mut TypeStore, ty: &'a ast::Type) -> Result<'a, Type> {
+    pub fn resolve_type(
+        &self,
+        scope_kind: ScopeKind,
+        scope: &Scope<'static, ScopedItem>,
+        store: &mut TypeStore,
+        ty: &'a ast::Type,
+    ) -> Result<'a, Type> {
         match &ty.kind {
             ast::TypeKind::Path(path) => {
-                let item = self.resolve_path(scope, store, path)?;
+                let item = self.resolve_path(scope_kind, scope, store, path)?;
                 if let ScopedItem::Type(ty) = item {
                     Ok(ty)
                 } else {
@@ -144,21 +201,21 @@ impl<'a> CollectedProgram<'a> {
                 }
             }
             ast::TypeKind::Ref(inner) => {
-                let inner = self.resolve_type(scope, store, &*inner)?;
+                let inner = self.resolve_type(scope_kind, scope, store, &*inner)?;
                 Ok(store.types.push(TypeInfo::Pointer(inner)))
             }
             ast::TypeKind::Tuple { fields } => {
                 let fields = fields.iter()
-                    .map(|field| self.resolve_type(scope, store, field))
+                    .map(|field| self.resolve_type(scope_kind, scope, store, field))
                     .try_collect()?;
 
                 Ok(store.types.push(TypeInfo::Tuple(TupleTypeInfo { fields })))
             }
             ast::TypeKind::Func { params, ret } => {
                 let params = params.iter()
-                    .map(|param| self.resolve_type(scope, store, param))
+                    .map(|param| self.resolve_type(scope_kind, scope, store, param))
                     .try_collect()?;
-                let ret = self.resolve_type(scope, store, ret)?;
+                let ret = self.resolve_type(scope_kind, scope, store, ret)?;
 
                 Ok(store.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
             }
@@ -170,19 +227,16 @@ impl<'a> CollectedProgram<'a> {
 pub enum ScopedItem {
     Module(Module),
     Type(Type),
-    Value(LRValue),
+    Value(ScopedValue),
 }
 
+//TODO document this struct
 #[derive(Debug, Copy, Clone)]
-pub enum LRValue {
-    Left(TypedValue),
-    Right(TypedValue),
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct TypedValue {
-    pub ty: Type,
-    pub ir: ir::Value,
+pub enum ScopedValue {
+    Function(Function),
+    //TODO implement const again
+    //Const(),
+    Immediate(LRValue),
 }
 
 impl ScopedItem {
@@ -270,10 +324,10 @@ impl<'a> PartialEq for StructTypeInfo<'a> {
 
 impl<'a> Eq for StructTypeInfo<'a> {}
 
-//TODO we need to break this up for lifetime purposes
 #[derive(Debug)]
 pub struct FunctionDecl<'a> {
-    pub func: Function,
+    //TODO was there ever a reason to have a func field here?
+    // pub func: Function,
     //TODO do we actually need a 'ty' field here at all?
     pub ty: Type,
     pub func_ty: FunctionTypeInfo,

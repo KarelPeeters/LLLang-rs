@@ -3,8 +3,8 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::ast;
-use crate::front::pos::{Pos, FileId, Span};
 use crate::front::ast::{DotIndexIndex, Identifier};
+use crate::front::pos::{FileId, Pos, Span};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -436,9 +436,9 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn module(&mut self) -> Result<ast::Module> {
+    fn module(&mut self) -> Result<ast::ModuleContent> {
         let (_, items) = self.list(TT::Eof, None, Self::item)?;
-        Ok(ast::Module { items })
+        Ok(ast::ModuleContent { items })
     }
 
     fn item(&mut self) -> Result<ast::Item> {
@@ -455,12 +455,12 @@ impl<'a> Parser<'a> {
             }
             TT::Use => {
                 self.pop()?;
-                let module = self.identifier("module name")?;
+                let path = self.path()?;
                 self.expect(TT::Semi, "end of item")?;
 
                 Ok(ast::Item::UseDecl(ast::UseDecl {
-                    span: Span::new(start, module.span.end),
-                    module,
+                    span: Span::new(start, path.span.end),
+                    path,
                 }))
             }
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fun, TT::Extern, TT::Const, TT::Use], "start of item"))
@@ -840,7 +840,8 @@ impl<'a> Parser<'a> {
             id = self.identifier("path element")?;
         }
 
-        Ok(ast::Path { span: Span::new(id.span.start, self.last_popped_end), parents, id })
+        let span = Span::new(id.span.start, self.last_popped_end);
+        Ok(ast::Path { span, parents, id })
     }
 
     fn identifier(&mut self, description: &'static str) -> Result<ast::Identifier> {
@@ -900,7 +901,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse_module(file: FileId, input: &str) -> Result<ast::Module> {
+pub fn parse_module(file: FileId, input: &str) -> Result<ast::ModuleContent> {
     let mut parser = Parser {
         tokenizer: Tokenizer::new(file, input)?,
         last_popped_end: Pos { file, line: 1, col: 1 },

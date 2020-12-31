@@ -1,8 +1,8 @@
 use crate::front::{ast, cst, error};
 use crate::front::ast::DotIndexIndex;
-use crate::front::cst::{CollectedProgram, LRValue, ScopedItem, TypedValue, TypeInfo};
+use crate::front::cst::{CollectedProgram, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
-use crate::front::lower::MappingTypeStore;
+use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::mid::ir;
 
@@ -13,12 +13,13 @@ pub struct LoopInfo {
 }
 
 //TODO think about field order
-pub struct LowerFuncState<'m, 'a, 'c> {
-    pub prog: &'m mut ir::Program,
-    pub cst: &'c CollectedProgram<'a>,
-    pub store: &'c mut MappingTypeStore<'a>,
+pub struct LowerFuncState<'ir, 'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
+    pub prog: &'ir mut ir::Program,
+    pub cst: &'cst CollectedProgram<'ast>,
+    pub store: &'cst mut MappingTypeStore<'ast>,
+    pub map_value: F,
 
-    pub module_scope: &'c Scope<'static, ScopedItem>,
+    pub module_scope: &'cst Scope<'static, ScopedItem>,
 
     pub ir_func: ir::Function,
     pub ret_ty: cst::Type,
@@ -66,9 +67,9 @@ struct Flow {
     needs_return: bool,
 }
 
-impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
+impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     fn resolve_type(&mut self, ty: &'a ast::Type) -> Result<'a, cst::Type> {
-        self.cst.resolve_type(&self.module_scope, &mut self.store.inner, ty)
+        self.cst.resolve_type(ScopeKind::Real, &self.module_scope, &mut self.store.inner, ty)
     }
 
     fn type_of_lrvalue(&self, value: LRValue) -> cst::Type {
@@ -234,10 +235,10 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
                 panic!("string literals only supported in consts for now")
             }
             ast::ExpressionKind::Path(path) => {
-                let item = self.cst.resolve_path(scope, &mut self.store, path)?;
+                let item = self.cst.resolve_path(ScopeKind::Real, scope, &mut self.store, path)?;
 
                 let value = if let ScopedItem::Value(value) = item {
-                    value
+                    (self.map_value)(value)
                 } else {
                     return Err(item.err_unexpected_kind(error::ItemType::Value, path));
                 };
@@ -604,7 +605,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
 
                 //define the slot
                 let slot = self.define_slot(ty_ir);
-                let item = ScopedItem::Value(LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }));
+                let slot_value = LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) });
+                let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.declare(&decl.id, item)?;
 
                 //optionally store the value
@@ -694,7 +696,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
                 //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
-                let item = ScopedItem::Value(LRValue::Left(TypedValue { ty: index_ty_ptr, ir: index_slot }));
+                let index_slot_value = LRValue::Left(TypedValue { ty: index_ty_ptr, ir: index_slot });
+                let item = ScopedItem::Value(ScopedValue::Immediate(index_slot_value));
                 index_scope.declare(&for_stmt.index, item)?;
 
                 //index = start
@@ -776,7 +779,8 @@ impl<'m, 'a, 'c> LowerFuncState<'m, 'a, 'c> {
                 value: ir::Value::Param(ir_param),
             });
 
-            let item = ScopedItem::Value(LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) }));
+            let slot_value = LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) });
+            let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
             scope.declare(&param.id, item)?;
         }
 
