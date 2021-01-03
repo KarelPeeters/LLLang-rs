@@ -86,14 +86,16 @@ fn parse_and_add_module_if_ll(
 
 /// Parse the main file and all of the lib files into a single program
 //TODO change to return front::Program
-fn parse_all(ll_path: &Path) -> Result<front::Program<Option<ast::ModuleContent>>> {
+fn parse_all(ll_path: &Path, include_std: bool) -> Result<front::Program<Option<ast::ModuleContent>>> {
     let mut prog = front::Program::default();
     let mut file_count: usize = 0;
 
     //add stdlib files
-    //TODO this is brittle, ship the lib files with the exe instead
-    for file in WalkDir::new("lib") {
-        parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, 1)?;
+    if include_std {
+        //TODO this is brittle, ship the lib files with the exe instead
+        for file in WalkDir::new("lib") {
+            parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, 1)?;
+        }
     }
 
     //add project files
@@ -121,15 +123,23 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
     }
 }
 
-fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
     println!("----Parse------");
-    let ast_program = parse_all(ll_path)?;
+    let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
     File::create(&ast_file)?
         .write_fmt(format_args!("{:#?}", ast_program))?;
 
+    //TODO maybe introduce an extra struct eg "CollectResult", or maybe rename CollectedProgram
+    println!("----Collect----");
+    let (store, cst, main_func) = front::collect::collect(&ast_program)
+        .expect("failed to collect"); //TODO ? instead of panic here
+    let cst_file = ll_path.with_extension("cst");
+    File::create(&cst_file)?
+        .write_fmt(format_args!("{:#?}\n\n{:#?}", store, cst))?;
+
     println!("----Lower------");
-    let mut ir_program = front::lower::lower(&ast_program)
+    let mut ir_program = front::lower::lower(store, cst, main_func)
         .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file)?
@@ -191,8 +201,11 @@ fn run_exe(exe_path: &Path) -> std::io::Result<()> {
 
 #[derive(Clap, Debug)]
 struct Opts {
+    #[clap(long)]
+    no_std: bool,
+
     #[clap(subcommand)]
-    command: SubCommand
+    command: SubCommand,
 }
 
 #[derive(Clap, Debug)]
@@ -233,7 +246,7 @@ fn main() -> Result<()> {
     };
 
     let asm_path = match level {
-        Level::LL => compile_ll_to_asm(&path)?,
+        Level::LL => compile_ll_to_asm(&path, !opts.no_std)?,
         Level::ASM => path,
     };
 
