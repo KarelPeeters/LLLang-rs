@@ -60,7 +60,7 @@ impl<'a> MappingTypeStore<'a> {
         }
 
         let ir_ty = match &self.inner[ty] {
-            TypeInfo::Placeholder(_) => panic!("tried to map placeholder type"),
+            ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
             TypeInfo::Void => prog.type_void(),
             TypeInfo::Bool => prog.type_bool(),
             TypeInfo::Byte => prog.define_type_int(8),

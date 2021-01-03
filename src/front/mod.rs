@@ -37,12 +37,12 @@ impl<C> Program<C> {
 //TODO maybe remove all of this crap?
 impl<C> Program<C> {
     ///Recursively map module contents to return a new, transformed program
-    pub fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s C) -> Result<R, E>) -> Result<Program<R>, E> {
+    pub fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s Module<C>) -> Result<R, E>) -> Result<Program<R>, E> {
         Ok(Program { root: self.root.try_map(f)? })
     }
 
     ///Run some code for each module in this program
-    pub fn try_for_each<'s, E>(&'s self, f: &mut impl FnMut(&'s C) -> Result<(), E>) -> Result<(), E> {
+    pub fn try_for_each<'s, E>(&'s self, f: &mut impl FnMut(&'s Module<C>) -> Result<(), E>) -> Result<(), E> {
         self.root.try_for_each(f)
     }
 }
@@ -55,20 +55,21 @@ pub struct Module<C> {
     pub content: C,
 }
 
+//TODO move the call to f before the child calls, that's more elegant
 impl<C> Module<C> {
-    fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s C) -> Result<R, E>) -> Result<Module<R>, E> where C: 's {
+    fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s Self) -> Result<R, E>) -> Result<Module<R>, E> where C: 's {
         //TODO is there a way to collect into map without rehashing?
         Ok(Module {
             submodules: self.submodules.iter()
                 .map(|(k, v)| Ok((k.clone(), v.try_map(f)?)))
                 .try_collect()?,
-            content: f(&self.content)?,
+            content: f(self)?,
         })
     }
 
-    fn try_for_each<'s, E>(&'s self, f: &mut impl FnMut(&'s C) -> Result<(), E>) -> Result<(), E> {
+    fn try_for_each<'s, E>(&'s self, f: &mut impl FnMut(&'s Module<C>) -> Result<(), E>) -> Result<(), E> {
         self.submodules.values().try_for_each(|v| v.try_for_each(f))?;
-        f(&self.content)?;
+        f(self)?;
         Ok(())
     }
 }

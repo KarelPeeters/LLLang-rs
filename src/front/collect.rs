@@ -10,6 +10,9 @@ use crate::front::error::{Error, Result};
 
 //TODO split this behemoth into multiple functions
 
+//TODO should you be allowed to import stuff from your own module? no, right? should we explicitly disallow it?
+//  what actually happens if you try currently?
+
 /// Collect all items in the program into a format more suitable for codegen.
 pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Result<(TypeStore, CollectedProgram<'a>, cst::Function)> {
     let mut store = TypeStore::default();
@@ -19,10 +22,14 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
     let mut struct_map: HashMap<*const ast::Struct, cst::Type> = Default::default();
 
     //first pass: collect all declared items into local_scope
-    let mapped_prog = prog.try_map(&mut |content| {
+    let mapped_prog = prog.try_map(&mut |module| {
         let mut collected_module = CollectedModule::default();
 
-        if let Some(content) = content {
+        let item_count = module.content.as_ref().map_or(0, |content| content.items.len());
+        let child_count = module.submodules.len();
+        println!("First pass for {} with {} items and {} children", collected.modules.len(), item_count, child_count);
+
+        if let Some(content) = &module.content {
             for item in &content.items {
                 match item {
                     Item::Struct(struct_ast) => {
@@ -52,21 +59,40 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
             }
         }
 
-        Ok((content, collected.modules.push(collected_module)))
+        let module_id = collected.modules.push(collected_module);
+        Ok((&module.content, module_id))
     })?;
 
-    //populate the root scope with op level modules
+    //populate the root scope with top level modules
     //this separate scope allows those modules to be overridden by locally defined items
     for (name, module) in &mapped_prog.root.submodules {
         collected.root_scope.declare_str(name, ScopedItem::Module(module.content.1))
     }
 
-    //second pass: fill in placeholder types and construct the real modules scopes
-    mapped_prog.try_for_each(&mut |&(content, module)| {
-        assert_eq!(0, collected.modules[module].scope.size(), "scope should still be empty at this point");
+    //second pass: add child modules to parent module scope
+    mapped_prog.try_for_each(&mut |module| {
+        let module_id = module.content.1;
+        let scope = &mut collected.modules[module_id].local_scope;
 
-        //TODO should you be allowed to import stuff from your own module? no, right? should we explicitly disallow it?
-        //  what actually happens if you try currently?
+        for (name, child) in &module.submodules {
+            let child_id = child.content.1;
+            scope.declare_str(&*name, ScopedItem::Module(child_id));
+        }
+
+        Ok(())
+    })?;
+
+    //third pass: fill in placeholder types and construct the final, real modules scopes
+    mapped_prog.try_for_each(&mut |module| {
+        let (content, module_id) = module.content;
+        assert_eq!(0, collected.modules[module_id].scope.size(), "scope should still be empty at this point");
+
+        //add child modules to scope
+        let scope = &mut collected.modules[module_id].scope;
+        for (name, child) in &module.submodules {
+            let child_id = child.content.1;
+            scope.declare_str(&*name, ScopedItem::Module(child_id));
+        }
 
         if let Some(content) = content {
             //add items to local scope, in order of appearance for nicer error messages
@@ -88,7 +114,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     Item::Const(_) => todo!("implement consts again"),
                 };
 
-                collected.modules[module].scope.declare(id, item)?;
+                collected.modules[module_id].scope.declare(id, item)?;
             }
 
             // fill in placeholder types
@@ -98,7 +124,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     Item::UseDecl(_) => {}
                     Item::Struct(struct_ast) => {
                         let fields: Vec<(&str, cst::Type)> = struct_ast.fields.iter().map(|field| {
-                            let ty = collected.resolve_type(ScopeKind::Real, &collected.modules[module].scope, &mut store, &field.ty)?;
+                            let ty = collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, &field.ty)?;
                             Ok((&*field.id.string, ty))
                         }).try_collect()?;
 
@@ -109,12 +135,12 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     }
                     Item::Function(func_ast) => {
                         let params: Vec<cst::Type> = func_ast.params.iter().map(|param| {
-                            collected.resolve_type(ScopeKind::Real, &collected.modules[module].scope, &mut store, &param.ty)
+                            collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, &param.ty)
                         }).try_collect()?;
 
                         let ret = func_ast.ret_ty.as_ref()
                             .map(|ret| {
-                                collected.resolve_type(ScopeKind::Real, &collected.modules[module].scope, &mut store, ret)
+                                collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, ret)
                             }).transpose()?
                             .unwrap_or(store.type_void());
 
@@ -122,6 +148,8 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
 
                         let func = *func_map.get(&(func_ast as *const _)).unwrap();
                         let func = &mut collected.funcs[func];
+
+                        println!("Replacing types for {}", func.ast.id.string);
 
                         func.func_ty = info.clone();
                         func.ty = store.define_type(TypeInfo::Function(info));
@@ -152,12 +180,12 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
             return Err(Error::MainFunctionWrongType {
                 expected: store.format_type(expected_ty).to_string(),
                 actual: store.format_type(actual_ty).to_string(),
-            })
+            });
         }
 
         main_func
     } else {
-        return Err(Error::MainWrongItem)
+        return Err(Error::MainWrongItem);
     };
 
 

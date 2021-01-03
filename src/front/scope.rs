@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use indexmap::map::IndexMap;
 
 use crate::front::ast;
@@ -9,7 +11,7 @@ pub struct Scope<'p, V> {
     values: IndexMap<String, V>,
 }
 
-impl<V> Scope<'_, V> {
+impl<V: Debug> Scope<'_, V> {
     pub fn nest(&self) -> Scope<V> {
         Scope { parent: Some(self), values: Default::default() }
     }
@@ -25,7 +27,10 @@ impl<V> Scope<'_, V> {
     /// Declare a value with the given id. Panics if the id already exists in this scope.
     pub fn declare_str(&mut self, id: &str, var: V) {
         let prev = self.values.insert(id.to_owned(), var);
-        assert!(matches!(prev, None), "Id '{}' already exists in this scope", id)
+
+        if let Some(prev) = prev {
+            panic!("Id '{}' already exists in this scope with value {:?}", id, prev)
+        }
     }
 
     /// Find the given identifier in this scope.
