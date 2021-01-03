@@ -1,13 +1,14 @@
 //TODO should handles be int or &void?
-
+/*
 //process
 extern fun _ExitProcess@4(exitCode: int);
 
 //io
-const GENERIC_READ_HALF: int = 1073741824; //0x80000000 / 2
-const FILE_APPEND_DATA: int = 4; //0x0004
-const OPEN_ALWAYS: int = 4; //4
-const FILE_ATTRIBUTE_NORMAL: int = 128; //0x00000080
+//TODO uncomment these
+//const GENERIC_READ_HALF: int = 1073741824; //0x80000000 / 2
+//const FILE_APPEND_DATA: int = 4; //0x0004
+//const OPEN_ALWAYS: int = 4; //4
+//const FILE_ATTRIBUTE_NORMAL: int = 128; //0x00000080
 
 extern fun _GetStdHandle@4(nStdHandle: int) -> int;
 
@@ -56,3 +57,4 @@ extern fun _WaitForMultipleObjects@16(
 extern fun _GetPhysicallyInstalledSystemMemory@4(
   TotalMemoryInKilobytes: &int,
 ) -> bool;
+*/

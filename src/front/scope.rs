@@ -43,6 +43,11 @@ impl<V> Scope<'_, V> {
         }
     }
 
+    /// Find the given identifier in this scope without looking at the parent scope.
+    pub fn find_immediate_str(&self, id: &str) -> Option<&V> {
+        self.values.get(id)
+    }
+
     /// The amount of values declared in this scope without taking the parent scope into account.
     pub fn size(&self) -> usize {
         self.values.len()

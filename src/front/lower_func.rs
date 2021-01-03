@@ -5,6 +5,7 @@ use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::mid::ir;
+use crate::mid::ir::ParameterInfo;
 
 pub struct LoopInfo {
     cond: ir::Block,
@@ -75,7 +76,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     fn type_of_lrvalue(&self, value: LRValue) -> cst::Type {
         match value {
             LRValue::Left(value) => self.store[value.ty].unwrap_ptr()
-                .expect("Left should have pointer type"),
+                .unwrap_or_else(|| panic!("Left({:?}) should have pointer type", value)),
             LRValue::Right(value) => value.ty,
         }
     }
@@ -413,9 +414,17 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
 
                 let (after_target, target_value) = self.append_expr(flow, scope, target, None)?;
 
+
                 match target_value {
                     LRValue::Left(target_value) => {
-                        let (index, result_inner_ty) = match (&self.store[target_value.ty], index) {
+                        let target_inner_ty = self.store[target_value.ty]
+                            .unwrap_ptr()
+                            .ok_or_else(|| Error::ExpectPointerType {
+                                expression: &*target,
+                                actual: self.store.format_type(target_value.ty).to_string(),
+                            })?;
+
+                        let (index, result_inner_ty) = match (&self.store[target_inner_ty], index) {
                             (TypeInfo::Tuple(target_ty_info), DotIndexIndex::Tuple { span, index }) => {
                                 let index: u32 = index.parse().map_err(|_| {
                                     Error::InvalidLiteral {
@@ -601,11 +610,12 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 //figure out the type
                 let value_ty = value.map(|v| v.ty);
                 let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
+                let ty_ptr = self.store.define_type_ptr(ty);
                 let ty_ir = self.store.map_type(&mut self.prog, ty);
 
                 //define the slot
                 let slot = self.define_slot(ty_ir);
-                let slot_value = LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) });
+                let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.declare(&decl.id, item)?;
 
@@ -765,10 +775,14 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
         let mut scope = self.module_scope.nest();
 
         for (i, param) in decl.ast.params.iter().enumerate() {
-            let ir_param = self.prog.get_func(self.ir_func).params[i];
-
+            // get all of the types
             let ty = decl.func_ty.params[i];
-            let ty_ir = self.store.map_type(&mut self.prog, ty);
+            let ty_ir = self.prog.get_func(self.ir_func).func_ty.params[i];
+            let ty_ptr = self.store.define_type_ptr(ty);
+
+            //create the param
+            let ir_param = self.prog.define_param(ParameterInfo { ty: ty_ir });
+            self.prog.get_func_mut(self.ir_func).params.push(ir_param);
 
             //allocate a slot for the parameter so its address can be taken
             let slot = self.define_slot(ty_ir);
@@ -779,7 +793,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 value: ir::Value::Param(ir_param),
             });
 
-            let slot_value = LRValue::Left(TypedValue { ty, ir: ir::Value::Slot(slot) });
+            let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
             scope.declare(&param.id, item)?;
         }

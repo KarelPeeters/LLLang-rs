@@ -68,7 +68,9 @@ pub enum Error<'a> {
     IdentifierDeclaredTwice(&'a ast::Identifier),
 
     //main
+    NoMainModule,
     NoMainFunction,
+    MainWrongItem,
     MainFunctionWrongType {
         expected: TypeString,
         actual: TypeString,

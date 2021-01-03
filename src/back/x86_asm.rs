@@ -224,12 +224,12 @@ impl AsmBuilder<'_> {
                 InstructionInfo::TupleFieldPtr { base, index, result_ty: _ } => {
                     let tuple_ty = self.prog.get_type(self.prog.type_of_value(*base)).unwrap_ptr()
                         .and_then(|ty| self.prog.get_type(ty).unwrap_tuple())
-                        .expect("structSubPtr target should have tuple pointer type");
+                        .expect("TupleFieldPtr target should have tuple pointer type");
                     let field_offset: i32 = tuple_ty.fields[0..*index as usize].iter()
                         .map(|&ty| type_size_in_bytes(self.prog, self.prog.get_type(ty)))
                         .sum();
 
-                    self.append_instr(";structsubptr");
+                    self.append_instr(";TupleFieldPtr");
                     self.append_value_to_reg("eax", base, 0);
                     self.append_instr(&format!("add eax, {}", field_offset));
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));

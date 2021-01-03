@@ -6,12 +6,12 @@ use crate::front;
 use crate::front::{ast, cst};
 use crate::front::ast::Item;
 use crate::front::cst::{CollectedModule, CollectedProgram, FunctionDecl, FunctionTypeInfo, ScopedItem, ScopedValue, ScopeKind, StructTypeInfo, TypeInfo, TypeStore};
-use crate::front::error::Result;
+use crate::front::error::{Error, Result};
 
 //TODO split this behemoth into multiple functions
 
 /// Collect all items in the program into a format more suitable for codegen.
-pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Result<(TypeStore, CollectedProgram<'a>)> {
+pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Result<(TypeStore, CollectedProgram<'a>, cst::Function)> {
     let mut store = TypeStore::default();
     let mut collected = CollectedProgram::default();
 
@@ -41,10 +41,11 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         };
 
                         let func = collected.funcs.push(decl);
+                        collected_module.codegen_funcs.push(func);
                         collected_module.local_scope.declare(&func_ast.id, ScopedItem::Value(ScopedValue::Function(func)))?;
                         func_map.insert(func_ast, func);
                     }
-                    Item::Const(_) => todo!("implement consts again"),
+                    Item::Const(_) => todo!("Implement consts again"),
                     //handled in a later pass
                     Item::UseDecl(_) => {}
                 }
@@ -133,5 +134,32 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
         Ok(())
     })?;
 
-    Ok((store, collected))
+    //find the main function
+    let main_module = mapped_prog.root.submodules.get("main")
+        .ok_or(Error::NoMainModule)?;
+
+    let main_item = collected.modules[main_module.content.1].local_scope.find_immediate_str("main")
+        .ok_or(Error::NoMainFunction)?;
+
+    let main_func = if let &ScopedItem::Value(ScopedValue::Function(main_func)) = main_item {
+        let actual_ty = collected.funcs[main_func].ty;
+        let expected_ty = store.define_type(TypeInfo::Function(FunctionTypeInfo {
+            params: vec![],
+            ret: store.type_int(),
+        }));
+
+        if actual_ty != expected_ty {
+            return Err(Error::MainFunctionWrongType {
+                expected: store.format_type(expected_ty).to_string(),
+                actual: store.format_type(actual_ty).to_string(),
+            })
+        }
+
+        main_func
+    } else {
+        return Err(Error::MainWrongItem)
+    };
+
+
+    Ok((store, collected, main_func))
 }

@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
-use crate::front;
-use crate::front::{ast, cst};
-use crate::front::collect::collect;
-use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst;
+use crate::front::cst::{CollectedProgram, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::Result;
 use crate::front::lower_func::LowerFuncState;
 use crate::mid::ir;
@@ -96,8 +94,7 @@ impl<'a> MappingTypeStore<'a> {
 }
 
 
-pub fn lower(prog: &front::Program<Option<ast::ModuleContent>>) -> Result<ir::Program> {
-    let (store, cst) = collect(prog)?;
+pub fn lower<'a>(store: TypeStore<'a>, cst: CollectedProgram<'a>, main_func: cst::Function) -> Result<'a, ir::Program> {
     let mut store = MappingTypeStore::wrap(store);
 
     let mut ir_prog = ir::Program::default();
@@ -113,12 +110,16 @@ pub fn lower(prog: &front::Program<Option<ast::ModuleContent>>) -> Result<ir::Pr
         (cst_func, ir_func)
     }).collect();
 
+    //set main function
+    ir_prog.main = *all_funcs.get(&main_func).unwrap();
+
+    //mapping from cst values to ir values
     let map_value = &|value: ScopedValue| -> LRValue {
         match value {
             ScopedValue::Function(func) => {
                 let ir_func = *all_funcs.get(&func).unwrap();
                 LRValue::Right(TypedValue { ty: cst.funcs[func].ty, ir: ir::Value::Func(ir_func) })
-            },
+            }
             ScopedValue::Immediate(value) => value,
         }
     };
