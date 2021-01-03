@@ -443,28 +443,36 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<ast::Item> {
         let token = self.peek();
-        let start = token.span.start;
 
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
-            TT::Const => {
-                let decl = self.variable_declaration(TT::Const)?;
-                self.expect(TT::Semi, "end of item")?;
-                Ok(ast::Item::Const(decl))
-            }
-            TT::Use => {
-                self.pop()?;
-                let path = self.path()?;
-                self.expect(TT::Semi, "end of item")?;
-
-                Ok(ast::Item::UseDecl(ast::UseDecl {
-                    span: Span::new(start, path.span.end),
-                    path,
-                }))
-            }
+            TT::Const => self.const_().map(ast::Item::Const),
+            TT::Use => self.use_decl().map(ast::Item::UseDecl),
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fun, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
+    }
+
+    fn const_(&mut self) -> Result<ast::Const> {
+        let start_pos = self.expect(TT::Const, "start of const item")?.span.start;
+        let id = self.identifier("const name")?;
+        self.expect(TT::Colon, "const type")?;
+        let ty = self.type_decl()?;
+        self.expect(TT::Eq, "initializer")?;
+        let init = self.expression()?;
+        self.expect(TT::Semi, "end of item")?;
+
+        let span = Span::new(start_pos, self.last_popped_end);
+        Ok(ast::Const { span, id, ty, init })
+    }
+
+    fn use_decl(&mut self) -> Result<ast::UseDecl> {
+        let start_pos = self.expect(TT::Use, "start of use decl")?.span.start;
+        let path = self.path()?;
+        self.expect(TT::Semi, "end of item")?;
+
+        let span = Span::new(start_pos, path.span.end);
+        Ok(ast::UseDecl { span, path })
     }
 
     fn struct_(&mut self) -> Result<ast::Struct> {

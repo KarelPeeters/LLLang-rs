@@ -42,7 +42,15 @@ pub enum Item {
     UseDecl(UseDecl),
     Struct(Struct),
     Function(Function),
-    Const(Declaration),
+    Const(Const),
+}
+
+#[derive(Debug)]
+pub struct Const {
+    pub span: Span,
+    pub id: Identifier,
+    pub ty: Type,
+    pub init: Expression,
 }
 
 #[derive(Debug)]

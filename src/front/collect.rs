@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front;
 use crate::front::{ast, cst};
 use crate::front::ast::Item;
-use crate::front::cst::{CollectedModule, CollectedProgram, FunctionDecl, FunctionTypeInfo, ScopedItem, ScopedValue, ScopeKind, StructTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{CollectedModule, CollectedProgram, ConstDecl, FunctionDecl, FunctionTypeInfo, ScopedItem, ScopedValue, ScopeKind, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 
 //TODO split this behemoth into multiple functions
@@ -16,9 +16,12 @@ use crate::front::error::{Error, Result};
 /// Collect all items in the program into a format more suitable for codegen.
 pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Result<(TypeStore, CollectedProgram<'a>, cst::Function)> {
     let mut store = TypeStore::default();
+    let common_ph_type = store.new_placeholder();
+
     let mut collected = CollectedProgram::default();
 
     let mut func_map: HashMap<*const ast::Function, cst::Function> = Default::default();
+    let mut cst_map: HashMap<*const ast::Const, cst::Const> = Default::default();
     let mut struct_map: HashMap<*const ast::Struct, cst::Type> = Default::default();
 
     //first pass: collect all declared items into local_scope
@@ -38,12 +41,10 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         struct_map.insert(struct_ast, ph);
                     }
                     Item::Function(func_ast) => {
-                        let ph = store.new_placeholder();
-
                         //construct a decl with placeholder types, will be filled in during the second pass
                         let decl = FunctionDecl {
-                            ty: ph,
-                            func_ty: FunctionTypeInfo { params: vec![], ret: ph },
+                            ty: common_ph_type,
+                            func_ty: FunctionTypeInfo { params: vec![], ret: common_ph_type },
                             ast: func_ast,
                         };
 
@@ -52,7 +53,16 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         collected_module.local_scope.declare(&func_ast.id, ScopedItem::Value(ScopedValue::Function(func)))?;
                         func_map.insert(func_ast, func);
                     }
-                    Item::Const(_) => todo!("Implement consts again"),
+                    Item::Const(cst_ast) => {
+                        let decl = ConstDecl {
+                            inner_ty: common_ph_type,
+                            ast: cst_ast,
+                        };
+
+                        let cst = collected.consts.push(decl);
+                        collected_module.local_scope.declare(&cst_ast.id, ScopedItem::Value(ScopedValue::Const(cst)))?;
+                        cst_map.insert(cst_ast, cst);
+                    }
                     //handled in a later pass
                     Item::UseDecl(_) => {}
                 }
@@ -82,7 +92,8 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
         Ok(())
     })?;
 
-    //third pass: fill in placeholder types and construct the final, real modules scopes
+    //third pass: by this point all items will have been put into the local_scope of their module
+    //now we replace placeholder types with the proper types and construct the final modules scopes
     mapped_prog.try_for_each(&mut |module| {
         let (content, module_id) = module.content;
         assert_eq!(0, collected.modules[module_id].scope.size(), "scope should still be empty at this point");
@@ -95,7 +106,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
         }
 
         if let Some(content) = content {
-            //add items to local scope, in order of appearance for nicer error messages
+            //add items to scope, in order of appearance for nicer error messages
             for item in &content.items {
                 let (id, item) = match item {
                     Item::UseDecl(use_ast) => {
@@ -111,11 +122,17 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         let item = ScopedItem::Value(ScopedValue::Function(func));
                         (&func_ast.id, item)
                     }
-                    Item::Const(_) => todo!("implement consts again"),
+                    Item::Const(cst_ast) => {
+                        let cst = *cst_map.get(&(cst_ast as *const _)).unwrap();
+                        let item = ScopedItem::Value(ScopedValue::Const(cst));
+                        (&cst_ast.id, item)
+                    },
                 };
 
                 collected.modules[module_id].scope.declare(id, item)?;
             }
+
+            let module_scope = &collected.modules[module_id].scope;
 
             // fill in placeholder types
             for item in &content.items {
@@ -124,7 +141,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     Item::UseDecl(_) => {}
                     Item::Struct(struct_ast) => {
                         let fields: Vec<(&str, cst::Type)> = struct_ast.fields.iter().map(|field| {
-                            let ty = collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, &field.ty)?;
+                            let ty = collected.resolve_type(ScopeKind::Real, module_scope, &mut store, &field.ty)?;
                             Ok((&*field.id.string, ty))
                         }).try_collect()?;
 
@@ -135,12 +152,12 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     }
                     Item::Function(func_ast) => {
                         let params: Vec<cst::Type> = func_ast.params.iter().map(|param| {
-                            collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, &param.ty)
+                            collected.resolve_type(ScopeKind::Real, module_scope, &mut store, &param.ty)
                         }).try_collect()?;
 
                         let ret = func_ast.ret_ty.as_ref()
                             .map(|ret| {
-                                collected.resolve_type(ScopeKind::Real, &collected.modules[module_id].scope, &mut store, ret)
+                                collected.resolve_type(ScopeKind::Real, module_scope, &mut store, ret)
                             }).transpose()?
                             .unwrap_or(store.type_void());
 
@@ -149,12 +166,15 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         let func = *func_map.get(&(func_ast as *const _)).unwrap();
                         let func = &mut collected.funcs[func];
 
-                        println!("Replacing types for {}", func.ast.id.string);
-
                         func.func_ty = info.clone();
                         func.ty = store.define_type(TypeInfo::Function(info));
                     }
-                    Item::Const(_) => todo!("implement consts again"),
+                    Item::Const(cst_ast) => {
+                        let ty = collected.resolve_type(ScopeKind::Real, module_scope, &mut store, &cst_ast.ty)?;
+
+                        let cst = *cst_map.get(&(cst_ast as *const _)).unwrap();
+                        collected.consts[cst].inner_ty = ty;
+                    },
                 };
             }
         }

@@ -13,6 +13,7 @@ use crate::util::arena::{Arena, ArenaSet};
 new_index_type!(pub Module);
 new_index_type!(pub Type);
 new_index_type!(pub Function);
+new_index_type!(pub Const);
 
 #[derive(Debug)]
 pub struct TypeStore<'a> {
@@ -120,6 +121,7 @@ pub struct CollectedProgram<'a> {
     pub root_scope: Scope<'static, ScopedItem>,
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
+    pub consts: Arena<Const, ConstDecl<'a>>,
 }
 
 //TODO check which fields are actually necessary and comment them
@@ -234,8 +236,7 @@ pub enum ScopedItem {
 #[derive(Debug, Copy, Clone)]
 pub enum ScopedValue {
     Function(Function),
-    //TODO implement const again
-    //Const(),
+    Const(Const),
     Immediate(LRValue),
 }
 
@@ -326,10 +327,13 @@ impl<'a> Eq for StructTypeInfo<'a> {}
 
 #[derive(Debug)]
 pub struct FunctionDecl<'a> {
-    //TODO was there ever a reason to have a func field here?
-    // pub func: Function,
-    //TODO do we actually need a 'ty' field here at all?
     pub ty: Type,
     pub func_ty: FunctionTypeInfo,
     pub ast: &'a ast::Function,
+}
+
+#[derive(Debug)]
+pub struct ConstDecl<'a> {
+    pub inner_ty: Type,
+    pub ast: &'a ast::Const,
 }

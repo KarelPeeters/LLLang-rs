@@ -403,6 +403,7 @@ impl Value {
 #[derive(Debug)]
 pub struct DataInfo {
     pub ty: Type,
+    pub inner_ty: Type,
     pub bytes: Vec<u8>,
 }
 
