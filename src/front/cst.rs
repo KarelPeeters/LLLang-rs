@@ -334,6 +334,6 @@ pub struct FunctionDecl<'a> {
 
 #[derive(Debug)]
 pub struct ConstDecl<'a> {
-    pub inner_ty: Type,
+    pub ty: Type,
     pub ast: &'a ast::Const,
 }

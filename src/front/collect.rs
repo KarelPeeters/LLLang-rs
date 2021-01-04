@@ -55,7 +55,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                     }
                     Item::Const(cst_ast) => {
                         let decl = ConstDecl {
-                            inner_ty: common_ph_type,
+                            ty: common_ph_type,
                             ast: cst_ast,
                         };
 
@@ -173,7 +173,7 @@ pub fn collect<'a>(prog: &'a front::Program<Option<ast::ModuleContent>>) -> Resu
                         let ty = collected.resolve_type(ScopeKind::Real, module_scope, &mut store, &cst_ast.ty)?;
 
                         let cst = *cst_map.get(&(cst_ast as *const _)).unwrap();
-                        collected.consts[cst].inner_ty = ty;
+                        collected.consts[cst].ty = ty;
                     },
                 };
             }

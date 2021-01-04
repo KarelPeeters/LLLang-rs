@@ -290,32 +290,38 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 (end_start, LRValue::Right(TypedValue { ty, ir: result_value }))
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let expect_ty = match kind {
+                let (expect_ty, result_bool) = match kind {
                     ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul |
                     ast::BinaryOp::Div | ast::BinaryOp::Mod => {
-                        expect_ty
+                        (expect_ty, false)
                     }
                     ast::BinaryOp::Eq | ast::BinaryOp::Neq |
                     ast::BinaryOp::Gte | ast::BinaryOp::Gt |
                     ast::BinaryOp::Lte | ast::BinaryOp::Lt => {
                         self.check_type_match(expr, expect_ty, self.store.type_bool())?;
-                        None
+                        (None, true)
                     }
                 };
 
                 let (after_left, value_left) =
                     self.append_expr_loaded(flow, scope, left, expect_ty)?;
-                let ty = value_left.ty;
-                self.check_integer_type(left, ty)?;
+                let operand_ty = value_left.ty;
+                self.check_integer_type(left, operand_ty)?;
+
+                let result_ty = if result_bool {
+                    self.store.type_bool()
+                } else {
+                    operand_ty
+                };
 
                 //infer the left type for the right type, TODO improve this when there is proper inference
                 let (after_right, value_right) =
-                    self.append_expr_loaded(after_left, scope, right, Some(ty))?;
+                    self.append_expr_loaded(after_left, scope, right, Some(operand_ty))?;
 
                 let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
                 let instr = self.append_instr(after_right.block, instr);
 
-                (after_right, LRValue::Right(TypedValue { ty, ir: ir::Value::Instr(instr) }))
+                (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: ir::Value::Instr(instr) }))
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
