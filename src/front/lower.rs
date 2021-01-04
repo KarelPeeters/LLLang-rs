@@ -102,26 +102,21 @@ pub fn lower<'a>(store: TypeStore<'a>, cst: CollectedProgram<'a>, main_func: cst
     let mut ir_prog = ir::Program::default();
 
     //create ir function for each cst function
-    let all_funcs: HashMap<cst::Function, (ir::Function, LRValue)> = cst.funcs.iter().map(|(cst_func, decl)| {
-        assert!(!decl.ast.ext, "TODO implement extern funcs again");
-
-        let ir_ty = store.map_type_func(&mut ir_prog, &decl.func_ty);
-        let ir_func = ir::FunctionInfo::new(ir_ty, &mut ir_prog);
-        let ir_func = ir_prog.define_func(ir_func);
-
-        let lr = LRValue::Right(TypedValue { ty: decl.ty, ir: ir::Value::Func(ir_func) });
-        (cst_func, (ir_func, lr))
-    }).collect();
+    let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = cst.funcs.iter()
+        .map(|(cst_func, decl)| {
+            let r = map_function(&mut store, &mut ir_prog, &decl)?;
+            Ok((cst_func, r))
+        }).try_collect()?;
 
     //create ir data for each cst const
     let all_consts: HashMap<cst::Const, LRValue> = cst.consts.iter()
         .map(|(cst_const, decl)| {
-            let lr = create_constant(&mut store, &mut ir_prog, decl)?;
+            let lr = map_constant(&mut store, &mut ir_prog, decl)?;
             Ok((cst_const, lr))
         }).try_collect()?;
 
     //set main function
-    ir_prog.main = all_funcs.get(&main_func).unwrap().0;
+    ir_prog.main = all_funcs.get(&main_func).unwrap().0.ok_or(Error::MainFunctionMustHaveBody)?;
 
     //mapping from cst values to ir values
     let map_value = &|value: ScopedValue| -> LRValue {
@@ -137,27 +132,63 @@ pub fn lower<'a>(store: TypeStore<'a>, cst: CollectedProgram<'a>, main_func: cst
     for (_, module) in &cst.modules {
         for &cst_func in &module.codegen_funcs {
             let func_decl = &cst.funcs[cst_func];
-            assert!(func_decl.ast.body.is_some(), "TODO implement extern funcs without body again");
 
-            let mut lower = LowerFuncState {
-                prog: &mut ir_prog,
-                cst: &cst,
-                module_scope: &module.scope,
-                store: &mut store,
-                map_value,
+            if let Some(ir_func) = all_funcs.get(&cst_func).unwrap().0 {
+                let mut lower = LowerFuncState {
+                    prog: &mut ir_prog,
+                    cst: &cst,
+                    module_scope: &module.scope,
+                    store: &mut store,
+                    map_value,
 
-                ret_ty: func_decl.func_ty.ret,
-                ir_func: all_funcs.get(&cst_func).unwrap().0,
-                loop_stack: vec![],
-            };
-            lower.append_func(func_decl)?;
+                    ret_ty: func_decl.func_ty.ret,
+                    ir_func,
+                    loop_stack: vec![],
+                };
+                lower.append_func(func_decl)?;
+            }
         }
     }
 
     Ok(ir_prog)
 }
 
-fn create_constant<'a>(store: &mut MappingTypeStore<'a>, ir_prog: &mut ir::Program, decl: &cst::ConstDecl<'a>) -> Result<'a, LRValue> {
+fn map_function<'a>(
+    store: &mut MappingTypeStore,
+    prog: &mut ir::Program,
+    decl: &cst::FunctionDecl<'a>,
+) -> Result<'a, (Option<ir::Function>, LRValue)> {
+    let ty_func_ir = store.map_type_func(prog, &decl.func_ty);
+
+    let (func_ir, value_ir) = match (decl.ast.ext, decl.ast.body.is_some()) {
+        (false, false) => Err(Error::MissingFunctionBody(decl.ast)),
+        (true, false) => {
+            let ir_ty = prog.define_type_func(ty_func_ir);
+            let ext = ir::ExternInfo {
+                name: decl.ast.id.string.clone(),
+                ty: ir_ty,
+            };
+            Ok((None, ir::Value::Extern(prog.define_ext(ext))))
+        }
+        (ext, true) => {
+            let mut func_ir = ir::FunctionInfo::new(ty_func_ir, prog);
+            if ext {
+                func_ir.global_name = Some(decl.ast.id.string.clone())
+            }
+            let func_ir = prog.define_func(func_ir);
+
+            Ok((Some(func_ir), ir::Value::Func(func_ir)))
+        }
+    }?;
+
+    Ok((func_ir, LRValue::Right(TypedValue { ty: decl.ty, ir: value_ir })))
+}
+
+fn map_constant<'a>(
+    store: &mut MappingTypeStore<'a>,
+    ir_prog: &mut ir::Program,
+    decl: &cst::ConstDecl<'a>,
+) -> Result<'a, LRValue> {
     let ty = decl.ty;
     let init = &decl.ast.init;
 

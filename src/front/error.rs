@@ -75,6 +75,7 @@ pub enum Error<'a> {
         expected: TypeString,
         actual: TypeString,
     },
+    MainFunctionMustHaveBody,
 
     //functions
     MissingReturn(&'a ast::Identifier),
