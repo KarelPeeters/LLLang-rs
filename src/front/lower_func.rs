@@ -232,8 +232,21 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
 
                 (flow, LRValue::Right(TypedValue { ty, ir: cst }))
             }
-            ast::ExpressionKind::StringLit { .. } => {
-                panic!("string literals only supported in consts for now")
+            ast::ExpressionKind::StringLit { value } => {
+                let ty_byte = self.store.type_byte();
+                let ty_byte_ptr = self.store.define_type_ptr(ty_byte);
+
+                self.check_type_match(expr, expect_ty, ty_byte_ptr)?;
+
+                let data = ir::DataInfo {
+                    ty: self.store.map_type(&mut self.prog, ty_byte_ptr),
+                    inner_ty: self.store.map_type(&mut self.prog, ty_byte),
+                    bytes: value.bytes().collect(),
+                };
+                let data = self.prog.define_data(data);
+                let data = ir::Value::Data(data);
+
+                (flow, LRValue::Right(TypedValue { ty: ty_byte_ptr, ir: data }))
             }
             ast::ExpressionKind::Path(path) => {
                 let item = self.cst.resolve_path(ScopeKind::Real, scope, &mut self.store, path)?;
