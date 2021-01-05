@@ -197,10 +197,10 @@ impl UseInfo {
 
     //TODO figure out a way to make all of this a lot more typesafe
     pub fn replace_usages(&self, prog: &mut Program, old: Value, new: Value) -> usize {
-        debug_assert_ne!(old, new);
+        assert_ne!(old, new);
 
         fn repl(count: &mut usize, field: &mut Value, old: Value, new: Value) {
-            debug_assert!(maybe_repl(count, field, old, new))
+            assert!(maybe_repl(count, field, old, new));
         }
 
         fn maybe_repl(count: &mut usize, field: &mut Value, old: Value, new: Value) -> bool {
@@ -259,7 +259,7 @@ impl UseInfo {
                             let mut replaced_any = false;
                             replaced_any |= maybe_repl(count, left, old, new);
                             replaced_any |= maybe_repl(count, right, old, new);
-                            debug_assert!(replaced_any);
+                            assert!(replaced_any);
                         }
                         _ => unreachable!()
                     }
