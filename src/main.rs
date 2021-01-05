@@ -73,8 +73,10 @@ fn parse_and_add_module_if_ll(
     }
 
     //increment the file id
-    let id = FileId { id: *file_count };
+    let id = FileId(*file_count);
     *file_count += 1;
+
+    println!("File {:?}: {:?}", id, path);
 
     //load and parse the source code
     let src = read_to_string(path)?;
@@ -85,7 +87,6 @@ fn parse_and_add_module_if_ll(
 }
 
 /// Parse the main file and all of the lib files into a single program
-//TODO change to return front::Program
 fn parse_all(ll_path: &Path, include_std: bool) -> Result<front::Program<Option<ast::ModuleContent>>> {
     let mut prog = front::Program::default();
     let mut file_count: usize = 0;
