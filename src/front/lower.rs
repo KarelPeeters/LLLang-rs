@@ -5,7 +5,7 @@ use itertools::Itertools;
 
 use crate::front::{ast, cst};
 use crate::front::ast::ExpressionKind;
-use crate::front::cst::{CollectedProgram, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::mid::ir;
@@ -96,27 +96,27 @@ impl<'a> MappingTypeStore<'a> {
     }
 }
 
-pub fn lower<'a>(store: TypeStore<'a>, cst: CollectedProgram<'a>, main_func: cst::Function) -> Result<'a, ir::Program> {
-    let mut store = MappingTypeStore::wrap(store);
+pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
+    let mut types = MappingTypeStore::wrap(prog.types);
 
     let mut ir_prog = ir::Program::default();
 
     //create ir function for each cst function
-    let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = cst.funcs.iter()
+    let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()
         .map(|(cst_func, decl)| {
-            let r = map_function(&mut store, &mut ir_prog, &decl)?;
+            let r = map_function(&mut types, &mut ir_prog, &decl)?;
             Ok((cst_func, r))
         }).try_collect()?;
 
     //create ir data for each cst const
-    let all_consts: HashMap<cst::Const, LRValue> = cst.consts.iter()
+    let all_consts: HashMap<cst::Const, LRValue> = prog.items.consts.iter()
         .map(|(cst_const, decl)| {
-            let lr = map_constant(&mut store, &mut ir_prog, decl)?;
+            let lr = map_constant(&mut types, &mut ir_prog, decl)?;
             Ok((cst_const, lr))
         }).try_collect()?;
 
     //set main function
-    ir_prog.main = all_funcs.get(&main_func).unwrap().0.ok_or(Error::MainFunctionMustHaveBody)?;
+    ir_prog.main = all_funcs.get(&prog.main_func).unwrap().0.ok_or(Error::MainFunctionMustHaveBody)?;
 
     //mapping from cst values to ir values
     let map_value = &|value: ScopedValue| -> LRValue {
@@ -129,16 +129,18 @@ pub fn lower<'a>(store: TypeStore<'a>, cst: CollectedProgram<'a>, main_func: cst
     };
 
     //actually generate code
-    for (_, module) in &cst.modules {
+    for (_, module) in &prog.items.modules {
         for &cst_func in &module.codegen_funcs {
-            let func_decl = &cst.funcs[cst_func];
+            let func_decl = &prog.items.funcs[cst_func];
 
             if let Some(ir_func) = all_funcs.get(&cst_func).unwrap().0 {
                 let mut lower = LowerFuncState {
                     prog: &mut ir_prog,
-                    cst: &cst,
+
+                    items: &prog.items,
+                    types: &mut types,
+
                     module_scope: &module.scope,
-                    store: &mut store,
                     map_value,
 
                     ret_ty: func_decl.func_ty.ret,
@@ -222,14 +224,14 @@ fn map_constant<'a>(
             let data = ir::DataInfo { ty: ty_byte_ptr_ir, inner_ty: ty_byte_ir, bytes };
             let data = ir_prog.define_data(data);
             LRValue::Right(TypedValue { ty, ir: ir::Value::Data(data) })
-        },
+        }
         ExpressionKind::Null => {
             check_ptr_type(&store, init, ty)?;
             let ty_ir = store.map_type(ir_prog, ty);
 
             let cst = ir::Const { ty: ty_ir, value: 0 };
             LRValue::Right(TypedValue { ty, ir: ir::Value::Const(cst) })
-        },
+        }
         _ => todo!("for now only simple literal constants are supported"),
     };
 

@@ -49,7 +49,7 @@ fn parse_and_add_module_if_ll(
 
     //check that this is a .ll file
     if !entry.metadata()?.is_file() || path.extension() != Some(OsStr::new("ll")) {
-        return Ok(())
+        return Ok(());
     }
 
     //convert the file path to a proper module path
@@ -69,11 +69,11 @@ fn parse_and_add_module_if_ll(
 
     //if this module already has content that means it's declared twice
     if module.content.is_some() {
-        return Err(CompileError::DuplicateModule(module_name))
+        return Err(CompileError::DuplicateModule(module_name));
     }
 
     //increment the file id
-    let id = FileId {  id: *file_count };
+    let id = FileId { id: *file_count };
     *file_count += 1;
 
     //load and parse the source code
@@ -132,14 +132,14 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
 
     //TODO maybe introduce an extra struct eg "CollectResult", or maybe rename CollectedProgram
     println!("----Collect----");
-    let (store, cst, main_func) = front::collect::collect(&ast_program)
+    let resolved = front::resolve::resolve(&ast_program)
         .expect("failed to collect"); //TODO ? instead of panic here
     let cst_file = ll_path.with_extension("cst");
     File::create(&cst_file)?
-        .write_fmt(format_args!("{:#?}\n\n{:#?}", store, cst))?;
+        .write_fmt(format_args!("{:#?}", resolved))?;
 
     println!("----Lower------");
-    let mut ir_program = front::lower::lower(store, cst, main_func)
+    let mut ir_program = front::lower::lower(resolved)
         .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file)?

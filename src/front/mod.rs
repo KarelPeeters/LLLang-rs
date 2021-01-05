@@ -12,7 +12,7 @@ pub mod error;
 pub mod scope;
 
 pub mod parser;
-pub mod collect;
+pub mod resolve;
 pub mod lower;
 pub mod lower_func;
 pub mod type_solver;

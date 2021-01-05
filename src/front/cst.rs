@@ -16,6 +16,13 @@ new_index_type!(pub Function);
 new_index_type!(pub Const);
 
 #[derive(Debug)]
+pub struct ResolvedProgram<'a> {
+    pub types: TypeStore<'a>,
+    pub items: ItemStore<'a>,
+    pub main_func: Function,
+}
+
+#[derive(Debug)]
 pub struct TypeStore<'a> {
     types: ArenaSet<Type, TypeInfo<'a>>,
 
@@ -117,19 +124,18 @@ impl<'a> Index<Type> for TypeStore<'a> {
 }
 
 #[derive(Debug, Default)]
-pub struct CollectedProgram<'a> {
+pub struct ItemStore<'a> {
     pub root_scope: Scope<'static, ScopedItem>,
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
     pub consts: Arena<Const, ConstDecl<'a>>,
 }
 
-//TODO check which fields are actually necessary and comment them
 
 #[derive(Debug, Default)]
 pub struct CollectedModule {
-    /// The scope that only contains items actually defined in this module. 
-    /// Should only be used as intermediate result while constructing the cst. 
+    /// The scope that only contains items actually defined in this module.
+    /// Should only be used as intermediate result while constructing the cst.
     pub local_scope: Scope<'static, ScopedItem>,
 
     /// The real module scope, including top level modules, imports and locally defined items
@@ -139,14 +145,13 @@ pub struct CollectedModule {
     pub codegen_funcs: Vec<Function>,
 }
 
-
 #[derive(Debug, Copy, Clone)]
 pub enum ScopeKind {
     Local,
     Real,
 }
 
-impl<'a> CollectedProgram<'a> {
+impl<'a> ItemStore<'a> {
     // Resolve a given path to a ScopedItem. This includes mapping primitive types.
     pub fn resolve_path<'p>(
         &self,

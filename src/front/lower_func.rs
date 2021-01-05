@@ -1,6 +1,6 @@
 use crate::front::{ast, cst, error};
 use crate::front::ast::DotIndexIndex;
-use crate::front::cst::{CollectedProgram, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
+use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
@@ -16,11 +16,12 @@ pub struct LoopInfo {
 //TODO think about field order
 pub struct LowerFuncState<'ir, 'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
     pub prog: &'ir mut ir::Program,
-    pub cst: &'cst CollectedProgram<'ast>,
-    pub store: &'cst mut MappingTypeStore<'ast>,
-    pub map_value: F,
+
+    pub items: &'cst ItemStore<'ast>,
+    pub types: &'cst mut MappingTypeStore<'ast>,
 
     pub module_scope: &'cst Scope<'static, ScopedItem>,
+    pub map_value: F,
 
     pub ir_func: ir::Function,
     pub ret_ty: cst::Type,
@@ -70,12 +71,12 @@ struct Flow {
 
 impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     fn resolve_type(&mut self, ty: &'a ast::Type) -> Result<'a, cst::Type> {
-        self.cst.resolve_type(ScopeKind::Real, &self.module_scope, &mut self.store.inner, ty)
+        self.items.resolve_type(ScopeKind::Real, &self.module_scope, &mut self.types.inner, ty)
     }
 
     fn type_of_lrvalue(&self, value: LRValue) -> cst::Type {
         match value {
-            LRValue::Left(value) => self.store[value.ty].unwrap_ptr()
+            LRValue::Left(value) => self.types[value.ty].unwrap_ptr()
                 .unwrap_or_else(|| panic!("Left({:?}) should have pointer type", value)),
             LRValue::Right(value) => value.ty,
         }
@@ -86,8 +87,8 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             if expected != actual {
                 return Err(Error::TypeMismatch {
                     expression: expr,
-                    expected: self.store.format_type(expected).to_string(),
-                    actual: self.store.format_type(actual).to_string(),
+                    expected: self.types.format_type(expected).to_string(),
+                    actual: self.types.format_type(actual).to_string(),
                 });
             }
         }
@@ -95,11 +96,11 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     }
 
     fn check_integer_type(&self, expr: &'a ast::Expression, actual: cst::Type) -> Result<'a, ()> {
-        match self.store[actual] {
+        match self.types[actual] {
             TypeInfo::Byte | TypeInfo::Int => Ok(()),
             _ => Err(Error::ExpectIntegerType {
                 expression: expr,
-                actual: self.store.format_type(actual).to_string(),
+                actual: self.types.format_type(actual).to_string(),
             }),
         }
     }
@@ -130,7 +131,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     fn append_load(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
             LRValue::Left(value) => {
-                let inner_ty = self.store[value.ty].unwrap_ptr()
+                let inner_ty = self.types[value.ty].unwrap_ptr()
                     .expect("Left should have pointer type");
                 let load_instr = self.append_instr(block, ir::InstructionInfo::Load { addr: value.ir });
                 TypedValue { ty: inner_ty, ir: ir::Value::Instr(load_instr) }
@@ -144,9 +145,9 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     #[must_use]
     fn never_value(&mut self, expect_ty: Option<cst::Type>) -> LRValue {
         //TODO replace this with actual "never" value
-        let ty_void = self.store.type_void();
-        let ty = expect_ty.unwrap_or_else(|| self.store.define_type_ptr(ty_void));
-        let ty_ir = self.store.map_type(&mut self.prog, ty);
+        let ty_void = self.types.type_void();
+        let ty = expect_ty.unwrap_or_else(|| self.types.define_type_ptr(ty_void));
+        let ty_ir = self.types.map_type(&mut self.prog, ty);
 
         return LRValue::Left(TypedValue { ty, ir: ir::Value::Undef(ty_ir) });
     }
@@ -188,18 +189,18 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             ast::ExpressionKind::Null => {
                 // flexible, null can take on any pointer type
                 let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
-                self.store[ty].unwrap_ptr()
+                self.types[ty].unwrap_ptr()
                     .ok_or(Error::ExpectPointerType {
                         expression: expr,
-                        actual: self.store.format_type(ty).to_string(),
+                        actual: self.types.format_type(ty).to_string(),
                     })?;
-                let ir_ty = self.store.map_type(&mut self.prog, ty);
+                let ir_ty = self.types.map_type(&mut self.prog, ty);
 
                 let cst = ir::Value::Const(ir::Const { ty: ir_ty, value: 0 });
                 (flow, LRValue::Right(TypedValue { ty, ir: cst }))
             }
             ast::ExpressionKind::BoolLit { value } => {
-                let ty_bool = self.store.type_bool();
+                let ty_bool = self.types.type_bool();
                 let ty_bool_ir = self.prog.type_bool();
 
                 self.check_type_match(expr, expect_ty, ty_bool)?;
@@ -209,12 +210,12 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             ast::ExpressionKind::IntLit { value } => {
                 let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
 
-                let size_in_bits = match self.store[ty] {
+                let size_in_bits = match self.types[ty] {
                     TypeInfo::Byte => Ok(8),
                     TypeInfo::Int => Ok(32),
                     _ => Err(Error::ExpectIntegerType {
                         expression: expr,
-                        actual: self.store.format_type(ty).to_string(),
+                        actual: self.types.format_type(ty).to_string(),
                     }),
                 }?;
 
@@ -225,7 +226,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                     .map_err(|_| Error::InvalidLiteral {
                         span: expr.span,
                         lit: value.clone(),
-                        ty: self.store.format_type(ty).to_string(),
+                        ty: self.types.format_type(ty).to_string(),
                     })?;
 
                 let cst = ir::Value::Const(ir::Const { ty: ty_ir, value });
@@ -233,14 +234,14 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 (flow, LRValue::Right(TypedValue { ty, ir: cst }))
             }
             ast::ExpressionKind::StringLit { value } => {
-                let ty_byte = self.store.type_byte();
-                let ty_byte_ptr = self.store.define_type_ptr(ty_byte);
+                let ty_byte = self.types.type_byte();
+                let ty_byte_ptr = self.types.define_type_ptr(ty_byte);
 
                 self.check_type_match(expr, expect_ty, ty_byte_ptr)?;
 
                 let data = ir::DataInfo {
-                    ty: self.store.map_type(&mut self.prog, ty_byte_ptr),
-                    inner_ty: self.store.map_type(&mut self.prog, ty_byte),
+                    ty: self.types.map_type(&mut self.prog, ty_byte_ptr),
+                    inner_ty: self.types.map_type(&mut self.prog, ty_byte),
                     bytes: value.bytes().collect(),
                 };
                 let data = self.prog.define_data(data);
@@ -249,7 +250,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 (flow, LRValue::Right(TypedValue { ty: ty_byte_ptr, ir: data }))
             }
             ast::ExpressionKind::Path(path) => {
-                let item = self.cst.resolve_path(ScopeKind::Real, scope, &mut self.store, path)?;
+                let item = self.items.resolve_path(ScopeKind::Real, scope, &mut self.types, path)?;
 
                 let value = if let ScopedItem::Value(value) = item {
                     (self.map_value)(value)
@@ -263,11 +264,11 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             ast::ExpressionKind::Ternary { condition, then_value, else_value } => {
                 //TODO remove this once there is better type inference
                 let ty = expect_ty.ok_or(Error::CannotInferType(expr.span))?;
-                let ty_ir = self.store.map_type(&mut self.prog, ty);
+                let ty_ir = self.types.map_type(&mut self.prog, ty);
 
                 let result_slot = self.define_slot(ty_ir);
                 let (after_cond, cond) =
-                    self.append_expr_loaded(flow, scope, condition, Some(self.store.type_bool()))?;
+                    self.append_expr_loaded(flow, scope, condition, Some(self.types.type_bool()))?;
 
                 //TODO is it possible to do append_expr here instead? is an LValue ternary operator useful?
                 //  and how does this interact with LRValue? we need to propagate the LR-ness
@@ -311,7 +312,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                     ast::BinaryOp::Eq | ast::BinaryOp::Neq |
                     ast::BinaryOp::Gte | ast::BinaryOp::Gt |
                     ast::BinaryOp::Lte | ast::BinaryOp::Lt => {
-                        self.check_type_match(expr, expect_ty, self.store.type_bool())?;
+                        self.check_type_match(expr, expect_ty, self.types.type_bool())?;
                         (None, true)
                     }
                 };
@@ -322,7 +323,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 self.check_integer_type(left, operand_ty)?;
 
                 let result_ty = if result_bool {
-                    self.store.type_bool()
+                    self.types.type_bool()
                 } else {
                     operand_ty
                 };
@@ -342,11 +343,11 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                         //error if expect_ty is not a pointer, otherwise unwrap it
                         let expect_ty_inner = expect_ty
                             .map(|ty| {
-                                self.store[ty]
+                                self.types[ty]
                                     .unwrap_ptr()
                                     .ok_or_else(|| Error::ExpectPointerType {
                                         expression: expr,
-                                        actual: self.store.format_type(ty).to_string(),
+                                        actual: self.types.format_type(ty).to_string(),
                                     })
                             }).transpose()?;
 
@@ -362,7 +363,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                         (flow, inner)
                     }
                     ast::UnaryOp::Deref => {
-                        let expect_ty_inner = expect_ty.map(|ty| self.store.define_type_ptr(ty));
+                        let expect_ty_inner = expect_ty.map(|ty| self.types.define_type_ptr(ty));
 
                         //load to get the value and wrap as lvalue again
                         let (after_value, value) =
@@ -373,7 +374,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                         let (after_inner, inner) =
                             self.append_expr_loaded(flow, scope, inner, expect_ty)?;
                         let ty = inner.ty;
-                        let ty_ir = self.store.map_type(&mut self.prog, ty);
+                        let ty_ir = self.types.map_type(&mut self.prog, ty);
 
                         self.check_integer_type(expr, ty)?;
 
@@ -392,10 +393,10 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
 
                 //check that the target is a function
                 let target_ty = target.ty;
-                let target_ty = self.store[target_ty].unwrap_func()
+                let target_ty = self.types[target_ty].unwrap_func()
                     .ok_or_else(|| Error::ExpectFunctionType {
                         expression: expr,
-                        actual: self.store.format_type(target_ty).to_string(),
+                        actual: self.types.format_type(target_ty).to_string(),
                     })?;
                 let ret_ty = target_ty.ret;
 
@@ -436,14 +437,14 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
 
                 match target_value {
                     LRValue::Left(target_value) => {
-                        let target_inner_ty = self.store[target_value.ty]
+                        let target_inner_ty = self.types[target_value.ty]
                             .unwrap_ptr()
                             .ok_or_else(|| Error::ExpectPointerType {
                                 expression: &*target,
-                                actual: self.store.format_type(target_value.ty).to_string(),
+                                actual: self.types.format_type(target_value.ty).to_string(),
                             })?;
 
-                        let (index, result_inner_ty) = match (&self.store[target_inner_ty], index) {
+                        let (index, result_inner_ty) = match (&self.types[target_inner_ty], index) {
                             (TypeInfo::Tuple(target_ty_info), DotIndexIndex::Tuple { span, index }) => {
                                 let index: u32 = index.parse().map_err(|_| {
                                     Error::InvalidLiteral {
@@ -456,7 +457,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                                 if index > target_ty_info.fields.len() as u32 {
                                     return Err(Error::TupleIndexOutOfBounds {
                                         target,
-                                        target_type: self.store.format_type(target_value.ty).to_string(),
+                                        target_type: self.types.format_type(target_value.ty).to_string(),
                                         index,
                                     });
                                 }
@@ -467,23 +468,23 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                                 target_ty_info.fiend_field(&id.string)
                                     .ok_or_else(|| Error::StructFieldNotFound {
                                         target,
-                                        target_type: self.store.format_type(target_value.ty).to_string(),
+                                        target_type: self.types.format_type(target_value.ty).to_string(),
                                         index: id,
                                     })?
                             }
                             (TypeInfo::Tuple(_), _) | (TypeInfo::Struct(_), _) => return Err(Error::WrongDotIndexType {
                                 target,
-                                target_type: self.store.format_type(target_value.ty).to_string(),
+                                target_type: self.types.format_type(target_value.ty).to_string(),
                                 index,
                             }),
                             (_, _) => return Err(Error::ExpectStructOrTupleType {
                                 expression: expr,
-                                actual: self.store.format_type(target_value.ty).to_string(),
+                                actual: self.types.format_type(target_value.ty).to_string(),
                             })
                         };
 
-                        let result_ty = self.store.define_type_ptr(result_inner_ty);
-                        let result_ty_ir = self.store.map_type(&mut self.prog, result_ty);
+                        let result_ty = self.types.define_type_ptr(result_inner_ty);
+                        let result_ty_ir = self.types.map_type(&mut self.prog, result_ty);
 
                         let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr { base: target_value.ir, index, result_ty: result_ty_ir };
                         let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
@@ -504,7 +505,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                     self.append_expr_loaded(flow, scope, value, Some(ret_ty))?
                 } else {
                     //check that function return type is indeed void
-                    let ty_void = self.store.type_void();
+                    let ty_void = self.types.type_void();
                     self.check_type_match(expr, Some(ret_ty), ty_void)?;
                     (flow, TypedValue { ty: ty_void, ir: ir::Value::Undef(self.prog.type_void()) })
                 };
@@ -629,8 +630,8 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 //figure out the type
                 let value_ty = value.map(|v| v.ty);
                 let ty = expect_ty.or(value_ty).ok_or(Error::CannotInferType(decl.span))?;
-                let ty_ptr = self.store.define_type_ptr(ty);
-                let ty_ir = self.store.map_type(&mut self.prog, ty);
+                let ty_ptr = self.types.define_type_ptr(ty);
+                let ty_ir = self.types.map_type(&mut self.prog, ty);
 
                 //define the slot
                 let slot = self.define_slot(ty_ir);
@@ -651,7 +652,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
 
                 match addr {
                     LRValue::Left(addr) => {
-                        let inner_ty = self.store[addr.ty].unwrap_ptr()
+                        let inner_ty = self.types[addr.ty].unwrap_ptr()
                             .expect("Left should have pointer type");
 
                         let (after_value, value) =
@@ -667,7 +668,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             }
             ast::StatementKind::If(if_stmt) => {
                 let (cond_end, cond) =
-                    self.append_expr_loaded(flow, scope, &if_stmt.cond, Some(self.store.type_bool()))?;
+                    self.append_expr_loaded(flow, scope, &if_stmt.cond, Some(self.types.type_bool()))?;
 
                 self.append_if(
                     cond_end,
@@ -685,7 +686,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 )
             }
             ast::StatementKind::While(while_stmt) => {
-                let ty_bool = self.store.type_bool();
+                let ty_bool = self.types.type_bool();
                 self.append_loop(
                     flow,
                     |s: &mut Self, cond_start: Flow| {
@@ -711,8 +712,8 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 let (flow, start_value) =
                     self.append_expr_loaded(flow, scope, &for_stmt.start, index_ty)?;
                 let index_ty = start_value.ty;
-                let index_ty_ptr = self.store.define_type_ptr(index_ty);
-                let index_ty_ir = self.store.map_type(&mut self.prog, index_ty);
+                let index_ty_ptr = self.types.define_type_ptr(index_ty);
+                let index_ty_ir = self.types.map_type(&mut self.prog, index_ty);
                 self.check_integer_type(&for_stmt.start, index_ty)?;
 
                 let (flow, end_value) =
@@ -797,7 +798,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
             // get all of the types
             let ty = decl.func_ty.params[i];
             let ty_ir = self.prog.get_func(self.ir_func).func_ty.params[i];
-            let ty_ptr = self.store.define_type_ptr(ty);
+            let ty_ptr = self.types.define_type_ptr(ty);
 
             //create the param
             let ir_param = self.prog.define_param(ParameterInfo { ty: ty_ir });
@@ -822,7 +823,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
         let end = self.append_nested_block(start, &mut scope, body)?;
 
         if end.needs_return {
-            if self.ret_ty == self.store.type_void() {
+            if self.ret_ty == self.types.type_void() {
                 //automatically insert return
                 let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.type_void()) };
                 self.prog.get_block_mut(end.block).terminator = ret;
