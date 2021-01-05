@@ -76,7 +76,7 @@ fn parse_and_add_module_if_ll(
     let id = FileId(*file_count);
     *file_count += 1;
 
-    println!("File {:?}: {:?}", id, path);
+    println!("{:?}: {:?}", id, path);
 
     //load and parse the source code
     let src = read_to_string(path)?;
@@ -131,7 +131,6 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
     File::create(&ast_file)?
         .write_fmt(format_args!("{:#?}", ast_program))?;
 
-    //TODO maybe introduce an extra struct eg "CollectResult", or maybe rename CollectedProgram
     println!("----Collect----");
     let resolved = front::resolve::resolve(&ast_program)
         .expect("failed to collect"); //TODO ? instead of panic here

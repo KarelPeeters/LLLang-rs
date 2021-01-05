@@ -14,7 +14,6 @@ type CstProgram<'a> = front::Program<(&'a Option<ModuleContent>, cst::Module)>;
 /// Resolve all items in the program into a format more suitable for codegen.
 pub fn resolve(ast: &front::Program<Option<ast::ModuleContent>>) -> Result<ResolvedProgram> {
     let (mut state, mapped) = first_pass(ast)?;
-
     second_pass(&mut state, &mapped)?;
     third_pass(&mut state, &mapped)?;
 
@@ -37,9 +36,7 @@ struct ResolveState<'a> {
     struct_map: HashMap<*const ast::Struct, cst::Type>,
 }
 
-//TODO proper doc comments
-
-//first pass: collect all declared items into local_scope
+/// Collect all declared items into local_scope and populate the maps.
 fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'a>)> {
     let mut store = TypeStore::default();
     let common_ph_type = store.new_placeholder();
@@ -52,10 +49,6 @@ fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'
 
     let mapped = ast.try_map(&mut |module| {
         let mut collected_module = CollectedModule::default();
-
-        let item_count = module.content.as_ref().map_or(0, |content| content.items.len());
-        let child_count = module.submodules.len();
-        println!("First pass for {} with {} items and {} children", cst.modules.len(), item_count, child_count);
 
         if let Some(content) = &module.content {
             for item in &content.items {
@@ -108,9 +101,7 @@ fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'
     Ok((state, mapped))
 }
 
-//second pass: add child modules to parent module scope
-//populate the root scope with top level modules
-//this separate scope allows those modules to be overridden by locally defined items
+/// Add child modules to the parent root scope and populate the root scope with the root modules.
 fn second_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, ()> {
     for (name, module) in &mapped.root.submodules {
         state.items.root_scope.declare_str(name, ScopedItem::Module(module.content.1))
@@ -129,8 +120,7 @@ fn second_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Res
     })
 }
 
-//third pass: by this point all items will have been put into the local_scope of their module
-//now we replace placeholder types with the proper types and construct the final modules scopes
+/// Replace the placeholder types for declared items with the real types.
 fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, ()> {
     mapped.try_for_each(&mut |module| {
         let (content, module_id) = module.content;
@@ -224,8 +214,8 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
     })
 }
 
+/// Find the main function, the function called `main` in the root module `main` that must have type `() -> int`.
 fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, cst::Function> {
-    //find the main function
     let main_module = mapped.root.submodules.get("main")
         .ok_or(Error::NoMainModule)?;
 

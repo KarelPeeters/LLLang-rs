@@ -7,26 +7,27 @@ use crate::front::scope::Scope;
 use crate::mid::ir;
 use crate::mid::ir::ParameterInfo;
 
-pub struct LoopInfo {
-    cond: ir::Block,
-    end: ir::Block,
-    end_needs_return: bool,
-}
-
-//TODO think about field order
+/// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
     pub prog: &'ir mut ir::Program,
 
     pub items: &'cst ItemStore<'ast>,
     pub types: &'cst mut MappingTypeStore<'ast>,
+    pub map_value: F,
 
     pub module_scope: &'cst Scope<'static, ScopedItem>,
-    pub map_value: F,
 
     pub ir_func: ir::Function,
     pub ret_ty: cst::Type,
 
     pub loop_stack: Vec<LoopInfo>,
+}
+
+/// Information about the innermost loop, used for `break` and `continue` statements.
+pub struct LoopInfo {
+    cond: ir::Block,
+    end: ir::Block,
+    end_needs_return: bool,
 }
 
 fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
@@ -356,7 +357,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                         let inner = match inner {
                             //ref turns an lvalue into an rvalue
                             LRValue::Left(inner) => LRValue::Right(inner),
-                            //TODO maybe this should be changed to create a new temporary variable instead?
+                            //we could create a temporary slot and return a reference to that, but that gets confusing
                             LRValue::Right(_) => return Err(Error::ReferenceOfLValue(expr)),
                         };
 

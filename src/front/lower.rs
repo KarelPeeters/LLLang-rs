@@ -10,19 +10,26 @@ use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::mid::ir;
 
+/// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
+/// is an LValue of RValue. LValues are values that can appear on the right side of assignments, RValues are those that cannot.
+/// This concept is orthogonal to mutability.
+/// It's also possible to think of an LValue as a pointer that looks like it has the dereferenced type and it
+/// dereferenced automatically when required.
 #[derive(Debug, Copy, Clone)]
 pub enum LRValue {
     Left(TypedValue),
     Right(TypedValue),
 }
 
+/// A `ir::Value` with its corresponding `cst::Type`. The `ir::Value` itself doesn't contain enough information because
+/// type information is lost when converting `cst::Type` to `ir::Type`.
 #[derive(Debug, Copy, Clone)]
 pub struct TypedValue {
     pub ty: cst::Type,
     pub ir: ir::Value,
 }
 
-//TODO maybe move this structure somewhere else?
+/// A wrapped around `TypeStore` that can convert `cst::Type` to `ir::Type` and keeps a cache of this mapping.
 pub struct MappingTypeStore<'a> {
     pub inner: TypeStore<'a>,
     map: HashMap<cst::Type, ir::Type>,
@@ -57,7 +64,6 @@ impl<'a> MappingTypeStore<'a> {
     }
 
     pub fn map_type(&mut self, prog: &mut ir::Program, ty: cst::Type) -> ir::Type {
-        //TODO is there a way to avoid the clones here?
         if let Some(ir_ty) = self.map.get(&ty) {
             return *ir_ty;
         }
@@ -96,6 +102,7 @@ impl<'a> MappingTypeStore<'a> {
     }
 }
 
+/// The main entry point of the lowering pass that generates the `ir` code for a given `ResolvedProgram`.
 pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let mut types = MappingTypeStore::wrap(prog.types);
 
@@ -232,7 +239,7 @@ fn map_constant<'a>(
             let cst = ir::Const { ty: ty_ir, value: 0 };
             LRValue::Right(TypedValue { ty, ir: ir::Value::Const(cst) })
         }
-        _ => todo!("for now only simple literal constants are supported"),
+        _ => panic!("for now only simple literal constants are supported"),
     };
 
     Ok(lr)

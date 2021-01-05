@@ -125,7 +125,10 @@ impl<'a> Index<Type> for TypeStore<'a> {
 
 #[derive(Debug, Default)]
 pub struct ItemStore<'a> {
+    /// The root scope of the program, contains all top level modules. This scope is separate from the normal module
+    /// scopes so items declared in those modules can shadow the root modules.
     pub root_scope: Scope<'static, ScopedItem>,
+
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
     pub consts: Arena<Const, ConstDecl<'a>>,
@@ -221,6 +224,7 @@ impl<'a> ItemStore<'a> {
     }
 }
 
+/// Any item that can be found in a scope.
 #[derive(Debug, Copy, Clone)]
 pub enum ScopedItem {
     Module(Module),
@@ -228,7 +232,9 @@ pub enum ScopedItem {
     Value(ScopedValue),
 }
 
-//TODO document this struct
+/// A value that can be found in a scope. All possible values should be convertible to an `LRValue`,
+/// but there is an extra step of indirection because scopes are build before an `ir::Program` is created so the
+/// corresponding values for functions and consts cannot be created yet.
 #[derive(Debug, Copy, Clone)]
 pub enum ScopedValue {
     Function(Function),
@@ -237,6 +243,7 @@ pub enum ScopedValue {
 }
 
 impl ScopedItem {
+    /// Return an error because this item is not of the expected kind.
     pub fn err_unexpected_kind(self, expected: error::ItemType, path: &ast::Path) -> Error<'_> {
         let actual = match self {
             ScopedItem::Module(_) => error::ItemType::Module,
