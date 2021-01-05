@@ -1,6 +1,4 @@
-use indexmap::map::IndexMap;
-
-use crate::front::Span;
+use crate::front::pos::Span;
 
 #[derive(Debug)]
 pub struct Type {
@@ -35,12 +33,7 @@ pub struct Path {
 }
 
 #[derive(Debug)]
-pub struct Program {
-    pub modules: IndexMap<String, Module>
-}
-
-#[derive(Debug)]
-pub struct Module {
+pub struct ModuleContent {
     pub items: Vec<Item>
 }
 
@@ -49,13 +42,21 @@ pub enum Item {
     UseDecl(UseDecl),
     Struct(Struct),
     Function(Function),
-    Const(Declaration),
+    Const(Const),
+}
+
+#[derive(Debug)]
+pub struct Const {
+    pub span: Span,
+    pub id: Identifier,
+    pub ty: Type,
+    pub init: Expression,
 }
 
 #[derive(Debug)]
 pub struct UseDecl {
     pub span: Span,
-    pub module: Identifier,
+    pub path: Path,
 }
 
 #[derive(Debug)]
@@ -173,10 +174,9 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
     },
 
-    //TODO for now we're indexing by integer index but we actually want to index by string instead
     DotIndex {
         target: Box<Expression>,
-        index: String,
+        index: DotIndexIndex,
     },
 
     Ternary {
@@ -220,4 +220,10 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Neg,
+}
+
+#[derive(Debug)]
+pub enum DotIndexIndex {
+    Tuple { span: Span, index: String },
+    Struct(Identifier),
 }

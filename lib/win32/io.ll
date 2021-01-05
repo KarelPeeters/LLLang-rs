@@ -1,9 +1,7 @@
-//TODO should handles be int or &void?
+const STD_INPUT_HANDLE_NEG: int = 10;
+const STD_OUTPUT_HANDLE_NEG: int = 11;
+const STD_ERROR_HANDLE_NEG: int = 12;
 
-//process
-extern fun _ExitProcess@4(exitCode: int);
-
-//io
 const GENERIC_READ_HALF: int = 1073741824; //0x80000000 / 2
 const FILE_APPEND_DATA: int = 4; //0x0004
 const OPEN_ALWAYS: int = 4; //4
@@ -27,32 +25,4 @@ extern fun _WriteFile@20(
     nNumberOfBytesToWrite: int,
     lpNumberOfBytesWritten: &int,
     lpOverlapped: &void,
-) -> bool;
-
-//threads
-extern fun _CreateThread@24(
-  lpThreadAttributes: &void,
-  dwStackSize: int,
-  lpStartAddress: (&int) -> int,
-  lpParameter: &int,
-  dwCreationFlags: int,
-  lpThreadI: &int,
-) -> int;
-
-//sync
-extern fun _WaitForSingleObject@8(
-  hHandle: int,
-  dwMilliseconds: int,
-) -> int;
-
-extern fun _WaitForMultipleObjects@16(
-  nCount: int,
-  lpHandles: &int,
-  bWaitAll: bool,
-  dwMilliseconds: int,
-) -> int;
-
-//info
-extern fun _GetPhysicallyInstalledSystemMemory@4(
-  TotalMemoryInKilobytes: &int,
 ) -> bool;

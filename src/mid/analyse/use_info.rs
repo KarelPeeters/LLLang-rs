@@ -107,7 +107,7 @@ pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
             f(left, Usage::BinaryOperand { func, block, instr });
             f(right, Usage::BinaryOperand { func, block, instr });
         }
-        &InstructionInfo::StructSubPtr { base, index: _, result_ty: _ } => {
+        &InstructionInfo::TupleFieldPtr { base, index: _, result_ty: _ } => {
             f(base, Usage::SubPtrTarget { func, instr, block });
         }
     }
@@ -266,7 +266,7 @@ impl UseInfo {
                 }
                 Usage::SubPtrTarget { instr, .. } => {
                     match prog.get_instr_mut(instr) {
-                        InstructionInfo::StructSubPtr { base, .. } =>
+                        InstructionInfo::TupleFieldPtr { base, .. } =>
                             repl(count, base, old, new),
                         _ => unreachable!()
                     }

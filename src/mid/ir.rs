@@ -7,7 +7,7 @@ use crate::util::arena::{Arena, ArenaSet};
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
         $(
-        new_index_type!($node);
+        new_index_type!(pub $node);
         )*
 
         #[derive(Debug, Default)]
@@ -54,7 +54,7 @@ gen_node_and_program_accessors![
     [Data, DataInfo, define_data, get_data, get_data_mut, datas],
 ];
 
-new_index_type!(Type);
+new_index_type!(pub Type);
 
 #[derive(Debug)]
 pub struct Program {
@@ -68,12 +68,14 @@ pub struct Program {
     ty_bool: Type,
     ty_void: Type,
 
+    //TODO change program to have multiple possible entries with arbitrary signatures instead
+    //  partly for elegance but also because thi is too limiting, all extern functions should be considered entry points
     pub main: Function,
 }
 
-impl Program {
-    // Return the program representing `fn main() -> int { unreachable(); }`
-    pub fn new() -> Self {
+impl Default for Program {
+    /// Return the program representing `fn main() -> int { unreachable(); }`
+    fn default() -> Self {
         let mut types = ArenaSet::default();
         let mut nodes = Arenas::default();
 
@@ -90,7 +92,9 @@ impl Program {
 
         Program { nodes, types, ty_bool, ty_void, main }
     }
+}
 
+impl Program {
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)
     }
@@ -275,7 +279,9 @@ pub enum InstructionInfo {
     //  possible solutions:
     //    * use "Cell" in program so we can create types on an immutable program?
     //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
-    StructSubPtr { base: Value, index: usize, result_ty: Type },
+    TupleFieldPtr { base: Value, index: u32, result_ty: Type },
+
+    //TODO add instruction to load tuple value directly instead of needing a pointer to it
 }
 
 //TODO what about signed and unsigned? type or operation?
@@ -314,7 +320,7 @@ impl InstructionInfo {
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::StructSubPtr { result_ty, .. } => *result_ty
+            InstructionInfo::TupleFieldPtr { result_ty, .. } => *result_ty
         }
     }
 }
@@ -397,6 +403,7 @@ impl Value {
 #[derive(Debug)]
 pub struct DataInfo {
     pub ty: Type,
+    pub inner_ty: Type,
     pub bytes: Vec<u8>,
 }
 

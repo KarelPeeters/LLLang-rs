@@ -4,12 +4,12 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-use indexmap::map::IndexMap;
+use indexmap::map::{IndexMap, Entry};
 
 macro_rules! new_index_type {
-    ($name:ident) => {
+    ($vis:vis $name:ident) => {
         #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-        pub struct $name(crate::util::arena::Idx);
+        $vis struct $name(crate::util::arena::Idx);
 
         //trick to make the imports not leak outside of the macro
         const _: () = {
@@ -75,6 +75,11 @@ impl<K: IndexType, T> Arena<K, T> {
 
     pub fn pop(&mut self, index: K) -> T {
         self.map.remove(&index.idx().i)
+            .unwrap_or_else(|| panic!("Value {:?} not found", index))
+    }
+
+    pub fn replace(&mut self, index: K, new_value: T) -> T {
+        self.map.insert(index.idx().i, new_value)
             .unwrap_or_else(|| panic!("Value {:?} not found", index))
     }
 
@@ -150,7 +155,7 @@ pub struct ArenaSet<K: IndexType, T: Eq + Hash + Clone> {
     ph: PhantomData<K>,
 }
 
-impl<K: IndexType, T: Eq + Hash + Clone> ArenaSet<K, T> {
+impl<K: IndexType, T: Eq + Hash + Clone + Debug> ArenaSet<K, T> {
     pub fn push(&mut self, value: T) -> K {
         if let Some(&i) = self.map_back.get(&value) {
             K::new(Idx::new(i))
@@ -168,6 +173,28 @@ impl<K: IndexType, T: Eq + Hash + Clone> ArenaSet<K, T> {
             .unwrap_or_else(|| panic!("Value {:?} not found", index));
         self.map_back.remove(&value);
         value
+    }
+
+    ///Replace the value for the given index with the new value. This new value must be distinct
+    ///from all existing values in this set.
+    pub fn replace(&mut self, index: K, new_value: T) -> T {
+        match self.map_back.entry(new_value.clone()) {
+            Entry::Occupied(_) => panic!("already contains value {:?}", new_value),
+            Entry::Vacant(entry) => entry.insert(index.idx().i),
+        };
+
+        let old_value = self.map_fwd.insert(index.idx().i, new_value)
+            .unwrap_or_else(|| panic!("Value {:?} not found", index));
+
+        let old_index = self.map_back.remove(&old_value);
+        debug_assert_eq!(Some(index.idx().i), old_index);
+
+        old_value
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.map_fwd.len(), self.map_back.len());
+        self.map_fwd.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item=(K, &T)> {

@@ -1,18 +1,23 @@
 #![allow(dead_code)]
 #![deny(unused_must_use)]
 
+//TODO enable this warning
+//#![warn(missing_debug_implementations)]
+
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, read_dir, read_to_string};
+use std::fs::{File, read_to_string};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Clap;
 use derive_more::From;
-use indexmap::map::IndexMap;
+use itertools::Itertools;
+use walkdir::{DirEntry, WalkDir};
 
-use crate::front::FileId;
+use crate::front::ast;
 use crate::front::parser::ParseError;
+use crate::front::pos::FileId;
 
 #[macro_use]
 mod util;
@@ -23,8 +28,9 @@ mod mid;
 #[derive(Debug, From)]
 enum CompileError {
     IO(std::io::Error),
+    Walk(walkdir::Error),
     InvalidFileName(OsString),
-    DuplicateModuleName(String),
+    DuplicateModule(String),
     Parse(ParseError),
     Lower,
     Assemble,
@@ -33,70 +39,74 @@ enum CompileError {
 
 type Result<T> = std::result::Result<T, CompileError>;
 
-#[derive(Default)]
-struct ModuleCollector {
-    modules: IndexMap<String, front::ast::Module>,
-    next_file_id: usize,
-}
+fn parse_and_add_module_if_ll(
+    prog: &mut front::Program<Option<ast::ModuleContent>>,
+    file_count: &mut usize,
+    entry: DirEntry,
+    skip_path_components: usize,
+) -> Result<()> {
+    let path = entry.path();
 
-impl ModuleCollector {
-    fn add_module_file(&mut self, path: &Path, root: bool) -> Result<()> {
-        if root {
-            assert!(!self.modules.contains_key(""), "root can only be added once")
-        }
-
-        let id = self.next_file_id;
-        self.next_file_id += 1;
-
-        let name = if root {
-            ""
-        } else {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| CompileError::InvalidFileName(path.as_os_str().to_owned()))?
-        };
-
-        let src = read_to_string(path)?;
-        let module = front::parser::parse_module(FileId { id }, &src)?;
-
-        if self.modules.insert(name.to_owned(), module).is_some() {
-            Err(CompileError::DuplicateModuleName(name.to_owned()))
-        } else {
-            Ok(())
-        }
+    //check that this is a .ll file
+    if !entry.metadata()?.is_file() || path.extension() != Some(OsStr::new("ll")) {
+        return Ok(())
     }
+
+    //convert the file path to a proper module path
+    let clean_path = path.with_extension("");
+    let path_vec: Vec<_> = clean_path.components().skip(skip_path_components)
+        .map(|c| {
+            let s = c.as_os_str();
+            s.to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| CompileError::InvalidFileName(s.to_os_string()))
+        })
+        .try_collect()?;
+
+    //find the module
+    let module_name = path_vec.last().unwrap().clone();
+    let module = prog.find_or_create_module(path_vec);
+
+    //if this module already has content that means it's declared twice
+    if module.content.is_some() {
+        return Err(CompileError::DuplicateModule(module_name))
+    }
+
+    //increment the file id
+    let id = FileId {  id: *file_count };
+    *file_count += 1;
+
+    //load and parse the source code
+    let src = read_to_string(path)?;
+    let module_ast = front::parser::parse_module(id, &src)?;
+
+    module.content = Some(module_ast);
+    Ok(())
 }
 
 /// Parse the main file and all of the lib files into a single program
-fn parse_all(ll_path: &Path) -> Result<front::ast::Program> {
-    let mut collector = ModuleCollector::default();
+//TODO change to return front::Program
+fn parse_all(ll_path: &Path, include_std: bool) -> Result<front::Program<Option<ast::ModuleContent>>> {
+    let mut prog = front::Program::default();
+    let mut file_count: usize = 0;
 
-    //main file
-    collector.add_module_file(ll_path, true)?;
-
-    //lib files
-    //TODO this is brittle, ship the lib files with the exe instead
-    for entry in read_dir("lib")? {
-        let path = entry?.path();
-
-        if path.extension() == Some(OsStr::new("ll")) {
-            collector.add_module_file(&path, false)?;
+    //add stdlib files
+    if include_std {
+        //TODO this is brittle, ship the lib files with the exe instead
+        for file in WalkDir::new("lib") {
+            parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, 1)?;
         }
     }
 
-    //files in the same folder as the main file
-    if let Some(parent_path) = ll_path.parent() {
-        for sibling in parent_path.read_dir()? {
-            let sibling_path = sibling?.path();
-            if sibling_path == ll_path { continue; }
+    //add project files
+    let parent = ll_path.parent().expect("input file should be in folder");
+    let parent_component_count = parent.components().count();
 
-            if sibling_path.extension() == Some(OsStr::new("ll")) {
-                collector.add_module_file(&sibling_path, false)?;
-            }
-        }
+    for file in WalkDir::new(parent) {
+        parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, parent_component_count)?;
     }
 
-    Ok(front::ast::Program { modules: collector.modules })
+    Ok(prog)
 }
 
 fn run_optimizations(prog: &mut mid::ir::Program) {
@@ -113,15 +123,23 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
     }
 }
 
-fn compile_ll_to_asm(ll_path: &Path) -> Result<PathBuf> {
-    println!("----Parser-----");
-    let ast_program = parse_all(ll_path)?;
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
+    println!("----Parse------");
+    let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
     File::create(&ast_file)?
         .write_fmt(format_args!("{:#?}", ast_program))?;
 
+    //TODO maybe introduce an extra struct eg "CollectResult", or maybe rename CollectedProgram
+    println!("----Collect----");
+    let (store, cst, main_func) = front::collect::collect(&ast_program)
+        .expect("failed to collect"); //TODO ? instead of panic here
+    let cst_file = ll_path.with_extension("cst");
+    File::create(&cst_file)?
+        .write_fmt(format_args!("{:#?}\n\n{:#?}", store, cst))?;
+
     println!("----Lower------");
-    let mut ir_program = front::lower::lower(&ast_program)
+    let mut ir_program = front::lower::lower(store, cst, main_func)
         .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file)?
@@ -183,8 +201,11 @@ fn run_exe(exe_path: &Path) -> std::io::Result<()> {
 
 #[derive(Clap, Debug)]
 struct Opts {
+    #[clap(long)]
+    no_std: bool,
+
     #[clap(subcommand)]
-    command: SubCommand
+    command: SubCommand,
 }
 
 #[derive(Clap, Debug)]
@@ -213,6 +234,8 @@ fn main() -> Result<()> {
 
     let path = Path::new(&file).to_path_buf();
 
+    //TODO change main so you have to pass the project folder instead of the source name
+    //  hmm, that's not entirely great, maybe add a mode for single-file projects too?
     let level = match path.extension().and_then(|os| os.to_str()) {
         Some("ll") => Level::LL,
         Some("asm") => Level::ASM,
@@ -223,7 +246,7 @@ fn main() -> Result<()> {
     };
 
     let asm_path = match level {
-        Level::LL => compile_ll_to_asm(&path)?,
+        Level::LL => compile_ll_to_asm(&path, !opts.no_std)?,
         Level::ASM => path,
     };
 

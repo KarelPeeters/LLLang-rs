@@ -2,7 +2,9 @@ use std::mem::swap;
 
 use TokenType as TT;
 
-use crate::front::{ast, FileId, Pos, Span};
+use crate::front::ast;
+use crate::front::ast::{DotIndexIndex, Identifier};
+use crate::front::pos::{FileId, Pos, Span};
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -434,35 +436,43 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn module(&mut self) -> Result<ast::Module> {
+    fn module(&mut self) -> Result<ast::ModuleContent> {
         let (_, items) = self.list(TT::Eof, None, Self::item)?;
-        Ok(ast::Module { items })
+        Ok(ast::ModuleContent { items })
     }
 
     fn item(&mut self) -> Result<ast::Item> {
         let token = self.peek();
-        let start = token.span.start;
 
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
             TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
-            TT::Const => {
-                let decl = self.variable_declaration(TT::Const)?;
-                self.expect(TT::Semi, "end of item")?;
-                Ok(ast::Item::Const(decl))
-            }
-            TT::Use => {
-                self.pop()?;
-                let module = self.identifier("module name")?;
-                self.expect(TT::Semi, "end of item")?;
-
-                Ok(ast::Item::UseDecl(ast::UseDecl {
-                    span: Span::new(start, module.span.end),
-                    module,
-                }))
-            }
+            TT::Const => self.const_().map(ast::Item::Const),
+            TT::Use => self.use_decl().map(ast::Item::UseDecl),
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fun, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
+    }
+
+    fn const_(&mut self) -> Result<ast::Const> {
+        let start_pos = self.expect(TT::Const, "start of const item")?.span.start;
+        let id = self.identifier("const name")?;
+        self.expect(TT::Colon, "const type")?;
+        let ty = self.type_decl()?;
+        self.expect(TT::Eq, "initializer")?;
+        let init = self.expression()?;
+        self.expect(TT::Semi, "end of item")?;
+
+        let span = Span::new(start_pos, self.last_popped_end);
+        Ok(ast::Const { span, id, ty, init })
+    }
+
+    fn use_decl(&mut self) -> Result<ast::UseDecl> {
+        let start_pos = self.expect(TT::Use, "start of use decl")?.span.start;
+        let path = self.path()?;
+        self.expect(TT::Semi, "end of item")?;
+
+        let span = Span::new(start_pos, path.span.end);
+        Ok(ast::UseDecl { span, path })
     }
 
     fn struct_(&mut self) -> Result<ast::Struct> {
@@ -714,9 +724,14 @@ impl<'a> Parser<'a> {
                 TT::Dot => {
                     //dot indexing
                     self.pop()?;
-                    //TODO change this back to an identifier index
-                    // let index = self.identifier("index")?;
-                    let index = self.expect(TT::IntLit, "integer index")?.string;
+                    
+                    let index = self.expect_any(&[TT::IntLit, TT::Id], "dot index index")?;
+                    let index = match index.ty {
+                        //TODO proper IntLit parsing
+                        TT::IntLit => DotIndexIndex::Tuple { span: index.span, index: index.string },
+                        TT::Id => DotIndexIndex::Struct(Identifier { span: index.span, string: index.string }),
+                        _ => unreachable!(),
+                    };
 
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),
@@ -833,7 +848,8 @@ impl<'a> Parser<'a> {
             id = self.identifier("path element")?;
         }
 
-        Ok(ast::Path { span: Span::new(id.span.start, self.last_popped_end), parents, id })
+        let span = Span::new(id.span.start, self.last_popped_end);
+        Ok(ast::Path { span, parents, id })
     }
 
     fn identifier(&mut self, description: &'static str) -> Result<ast::Identifier> {
@@ -893,7 +909,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse_module(file: FileId, input: &str) -> Result<ast::Module> {
+pub fn parse_module(file: FileId, input: &str) -> Result<ast::ModuleContent> {
     let mut parser = Parser {
         tokenizer: Tokenizer::new(file, input)?,
         last_popped_end: Pos { file, line: 1, col: 1 },
