@@ -146,11 +146,11 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
     #[must_use]
     fn never_value(&mut self, expect_ty: Option<cst::Type>) -> LRValue {
         //TODO replace this with actual "never" value
-        let ty_void = self.types.type_void();
-        let ty = expect_ty.unwrap_or_else(|| self.types.define_type_ptr(ty_void));
-        let ty_ir = self.types.map_type(&mut self.prog, ty);
+        let ty = expect_ty.unwrap_or_else(|| self.types.type_void());
+        let ty_ptr = self.types.define_type_ptr(ty);
+        let ty_ptr_ir = self.types.map_type(&mut self.prog, ty_ptr);
 
-        return LRValue::Left(TypedValue { ty, ir: ir::Value::Undef(ty_ir) });
+        LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Undef(ty_ptr_ir) })
     }
 
     fn append_if<
