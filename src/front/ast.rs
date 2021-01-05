@@ -8,6 +8,10 @@ pub struct Type {
 
 #[derive(Debug)]
 pub enum TypeKind {
+    Void,
+    Bool,
+    Byte,
+    Int,
     Path(Path),
     Ref(Box<Type>),
     Func {

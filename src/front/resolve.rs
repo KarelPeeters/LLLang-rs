@@ -151,7 +151,7 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
             for item in &content.items {
                 let (id, item) = match item {
                     Item::UseDecl(use_ast) => {
-                        let item = items.resolve_path(ScopeKind::Local, &items.root_scope, types, &use_ast.path)?;
+                        let item = items.resolve_path(ScopeKind::Local, &items.root_scope, &use_ast.path)?;
                         (&use_ast.path.id, item)
                     }
                     Item::Struct(struct_ast) => {

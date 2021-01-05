@@ -1,8 +1,12 @@
 use std::fmt::{Debug, Formatter};
 
 #[derive(Copy, Clone)]
-pub struct FileId {
-    pub id: usize,
+pub struct FileId(pub usize);
+
+impl Debug for FileId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("[{}]", self.0))
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -14,7 +18,7 @@ pub struct Pos {
 
 impl Debug for Pos {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("[{}]{}:{}", self.file.id, self.line, self.col))
+        f.write_fmt(format_args!("{:?}{}:{}", self.file, self.line, self.col))
     }
 }
 

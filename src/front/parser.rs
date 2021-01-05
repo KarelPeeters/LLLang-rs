@@ -44,7 +44,11 @@ declare_tokens![
     IntLit,
     StringLit,
 
-    //TODO remove these as tokens and just handle them as paths?
+    Void("void"),
+    Bool("bool"),
+    Byte("byte"),
+    Int("int"),
+
     True("true"),
     False("false"),
     Null("null"),
@@ -865,7 +869,12 @@ impl<'a> Parser<'a> {
 
     fn type_decl(&mut self) -> Result<ast::Type> {
         let start_pos = self.peek().span.start;
+
         match self.peek().ty {
+            TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
+            TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
+            TT::Byte => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Byte }),
+            TT::Int => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int }),
             TT::Ampersand => {
                 self.pop()?;
                 let inner = self.type_decl()?;

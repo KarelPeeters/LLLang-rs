@@ -250,7 +250,7 @@ impl<'m, 'a, 'c, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'m, 'a, 'c, F> {
                 (flow, LRValue::Right(TypedValue { ty: ty_byte_ptr, ir: data }))
             }
             ast::ExpressionKind::Path(path) => {
-                let item = self.items.resolve_path(ScopeKind::Real, scope, &mut self.types, path)?;
+                let item = self.items.resolve_path(ScopeKind::Real, scope, path)?;
 
                 let value = if let ScopedItem::Value(value) = item {
                     (self.map_value)(value)

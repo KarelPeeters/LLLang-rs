@@ -157,21 +157,8 @@ impl<'a> ItemStore<'a> {
         &self,
         scope_kind: ScopeKind,
         scope: &Scope<ScopedItem>,
-        store: &mut TypeStore,
         path: &'p ast::Path,
     ) -> Result<'p, ScopedItem> {
-        //TODO it would be nicer if primitive types were separate from paths, maybe change the parser
-        //primitive types
-        if path.parents.is_empty() {
-            match &*path.id.string {
-                "void" => return Ok(ScopedItem::Type(store.ty_void)),
-                "bool" => return Ok(ScopedItem::Type(store.ty_bool)),
-                "byte" => return Ok(ScopedItem::Type(store.ty_byte)),
-                "int" => return Ok(ScopedItem::Type(store.ty_int)),
-                _ => {}
-            }
-        }
-
         //real paths
         let scope = path.parents.iter().try_fold(scope, |scope, id| {
             let &item = scope.find(Some(&self.root_scope), id)?;
@@ -195,12 +182,16 @@ impl<'a> ItemStore<'a> {
         &self,
         scope_kind: ScopeKind,
         scope: &Scope<'static, ScopedItem>,
-        store: &mut TypeStore,
+        types: &mut TypeStore,
         ty: &'a ast::Type,
     ) -> Result<'a, Type> {
         match &ty.kind {
+            ast::TypeKind::Void => Ok(types.ty_void),
+            ast::TypeKind::Bool => Ok(types.ty_bool),
+            ast::TypeKind::Byte => Ok(types.ty_byte),
+            ast::TypeKind::Int => Ok(types.ty_int),
             ast::TypeKind::Path(path) => {
-                let item = self.resolve_path(scope_kind, scope, store, path)?;
+                let item = self.resolve_path(scope_kind, scope, path)?;
                 if let ScopedItem::Type(ty) = item {
                     Ok(ty)
                 } else {
@@ -208,23 +199,23 @@ impl<'a> ItemStore<'a> {
                 }
             }
             ast::TypeKind::Ref(inner) => {
-                let inner = self.resolve_type(scope_kind, scope, store, &*inner)?;
-                Ok(store.types.push(TypeInfo::Pointer(inner)))
+                let inner = self.resolve_type(scope_kind, scope, types, &*inner)?;
+                Ok(types.types.push(TypeInfo::Pointer(inner)))
             }
             ast::TypeKind::Tuple { fields } => {
                 let fields = fields.iter()
-                    .map(|field| self.resolve_type(scope_kind, scope, store, field))
+                    .map(|field| self.resolve_type(scope_kind, scope, types, field))
                     .try_collect()?;
 
-                Ok(store.types.push(TypeInfo::Tuple(TupleTypeInfo { fields })))
+                Ok(types.types.push(TypeInfo::Tuple(TupleTypeInfo { fields })))
             }
             ast::TypeKind::Func { params, ret } => {
                 let params = params.iter()
-                    .map(|param| self.resolve_type(scope_kind, scope, store, param))
+                    .map(|param| self.resolve_type(scope_kind, scope, types, param))
                     .try_collect()?;
-                let ret = self.resolve_type(scope_kind, scope, store, ret)?;
+                let ret = self.resolve_type(scope_kind, scope, types, ret)?;
 
-                Ok(store.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
+                Ok(types.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
             }
         }
     }
