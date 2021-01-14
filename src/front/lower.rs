@@ -54,7 +54,7 @@ impl<'a> MappingTypeStore<'a> {
         Self { inner: store, map: Default::default() }
     }
 
-    pub fn map_type_func(&mut self, prog: &mut ir::Program, ty: &FunctionTypeInfo) -> ir::FunctionType {
+    pub fn map_type_func(&mut self, prog: &mut ir::Program, ty: &FunctionTypeInfo<cst::Type>) -> ir::FunctionType {
         let params = ty.params.iter()
             .map(|&p| self.map_type(prog, p))
             .collect();

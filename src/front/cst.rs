@@ -22,9 +22,11 @@ pub struct ResolvedProgram<'a> {
     pub main_func: Function,
 }
 
+type BasicTypeInfo<'a> = TypeInfo<Type, StructTypeInfo<'a>>;
+
 #[derive(Debug)]
 pub struct TypeStore<'a> {
-    types: ArenaSet<Type, TypeInfo<'a>>,
+    types: ArenaSet<Type, BasicTypeInfo<'a>>,
 
     ty_void: Type,
     ty_bool: Type,
@@ -64,12 +66,12 @@ impl<'a> TypeStore<'a> {
         self.types.push(TypeInfo::Placeholder(self.types.len()))
     }
 
-    pub fn replace_placeholder(&mut self, ph: Type, info: TypeInfo<'a>) {
+    pub fn replace_placeholder(&mut self, ph: Type, info: BasicTypeInfo<'a>) {
         let old_info = self.types.replace(ph, info);
         assert!(matches!(old_info, TypeInfo::Placeholder(_)), "tried to replace non-placeholder type {:?}", old_info)
     }
 
-    pub fn define_type(&mut self, info: TypeInfo<'a>) -> Type {
+    pub fn define_type(&mut self, info: BasicTypeInfo<'a>) -> Type {
         self.types.push(info)
     }
 
@@ -116,7 +118,7 @@ impl<'a> TypeStore<'a> {
 }
 
 impl<'a> Index<Type> for TypeStore<'a> {
-    type Output = TypeInfo<'a>;
+    type Output = BasicTypeInfo<'a>;
 
     fn index(&self, index: Type) -> &Self::Output {
         &self.types[index]
@@ -258,7 +260,7 @@ impl ScopedItem {
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub enum TypeInfo<'a> {
+pub enum TypeInfo<T, S> {
     Placeholder(usize),
 
     Void,
@@ -266,22 +268,24 @@ pub enum TypeInfo<'a> {
     Byte,
     Int,
 
-    Pointer(Type),
+    Pointer(T),
 
-    Tuple(TupleTypeInfo),
-    Function(FunctionTypeInfo),
-    Struct(StructTypeInfo<'a>),
+    Tuple(TupleTypeInfo<T>),
+    Function(FunctionTypeInfo<T>),
+    Struct(S),
 }
 
-impl<'a> TypeInfo<'a> {
-    pub fn unwrap_ptr(&self) -> Option<Type> {
+impl<T: Copy, S> TypeInfo<T, S> {
+    pub fn unwrap_ptr(&self) -> Option<T> {
         match self {
             TypeInfo::Pointer(inner) => Some(*inner),
             _ => None,
         }
     }
+}
 
-    pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo> {
+impl<T, S> TypeInfo<T, S> {
+    pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo<T>> {
         match self {
             TypeInfo::Function(inner) => Some(inner),
             _ => None,
@@ -290,14 +294,14 @@ impl<'a> TypeInfo<'a> {
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct TupleTypeInfo {
-    pub fields: Vec<Type>
+pub struct TupleTypeInfo<T> {
+    pub fields: Vec<T>
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct FunctionTypeInfo {
-    pub params: Vec<Type>,
-    pub ret: Type,
+pub struct FunctionTypeInfo<T> {
+    pub params: Vec<T>,
+    pub ret: T,
 }
 
 #[derive(Debug, Clone)]
@@ -331,7 +335,7 @@ impl<'a> Eq for StructTypeInfo<'a> {}
 #[derive(Debug)]
 pub struct FunctionDecl<'a> {
     pub ty: Type,
-    pub func_ty: FunctionTypeInfo,
+    pub func_ty: FunctionTypeInfo<Type>,
     pub ast: &'a ast::Function,
 }
 
