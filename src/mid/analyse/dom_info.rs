@@ -1,6 +1,7 @@
 use fixedbitset::FixedBitSet;
 
 use crate::mid::ir::{Block, Function, Program};
+use crate::util::IndexMutTwice;
 
 #[derive(Debug)]
 pub struct DomInfo {
@@ -51,8 +52,7 @@ impl DomInfo {
                     //going trough won't change anything, so just skip it
                     if bi == si { continue; }
 
-                    let (block_dom, succ_dom) =
-                        index_mut_twice(&mut dominated_by, bi, si);
+                    let (block_dom, succ_dom) = dominated_by.index_mut_twice(bi, si).unwrap();
 
                     let count_before = succ_dom.count_ones(..);
 
@@ -158,16 +158,5 @@ impl DomInfo {
         (0..self.blocks.len())
             .filter(move |&pi| self.successors[pi][bi])
             .map(move |pi| self.blocks[pi])
-    }
-}
-
-fn index_mut_twice<T>(slice: &mut [T], index_a: usize, index_b: usize) -> (&mut T, &mut T) {
-    assert_ne!(index_a, index_b, "indices must be distinct");
-
-    unsafe {
-        (
-            &mut *(&mut slice[index_a] as *mut _),
-            &mut *(&mut slice[index_b] as *mut _),
-        )
     }
 }
