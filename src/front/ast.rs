@@ -8,10 +8,13 @@ pub struct Type {
 
 #[derive(Debug)]
 pub enum TypeKind {
+    Wildcard,
+
     Void,
     Bool,
     Byte,
     Int,
+
     Path(Path),
     Ref(Box<Type>),
     Func {
@@ -228,6 +231,6 @@ pub enum UnaryOp {
 
 #[derive(Debug)]
 pub enum DotIndexIndex {
-    Tuple { span: Span, index: String },
+    Tuple { span: Span, index: u32 },
     Struct(Identifier),
 }

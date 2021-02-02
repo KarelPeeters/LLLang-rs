@@ -69,6 +69,7 @@ declare_tokens![
     Break("break"),
     Continue("continue"),
 
+    Underscore("_"),
     Arrow("->"),
     DoubleDot(".."),
 
@@ -728,12 +729,18 @@ impl<'a> Parser<'a> {
                 TT::Dot => {
                     //dot indexing
                     self.pop()?;
-                    
+
                     let index = self.expect_any(&[TT::IntLit, TT::Id], "dot index index")?;
                     let index = match index.ty {
                         //TODO proper IntLit parsing
-                        TT::IntLit => DotIndexIndex::Tuple { span: index.span, index: index.string },
-                        TT::Id => DotIndexIndex::Struct(Identifier { span: index.span, string: index.string }),
+                        TT::IntLit => DotIndexIndex::Tuple {
+                            span: index.span,
+                            index: index.string.parse().unwrap(),
+                        },
+                        TT::Id => DotIndexIndex::Struct(Identifier {
+                            span: index.span,
+                            string: index.string,
+                        }),
                         _ => unreachable!(),
                     };
 
@@ -871,6 +878,7 @@ impl<'a> Parser<'a> {
         let start_pos = self.peek().span.start;
 
         match self.peek().ty {
+            TT::Underscore => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Wildcard }),
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
             TT::Byte => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Byte }),

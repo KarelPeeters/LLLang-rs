@@ -9,12 +9,14 @@ pub mod cst;
 
 pub mod error;
 pub mod scope;
+pub mod type_solver;
 
 pub mod parser;
 pub mod resolve;
 pub mod lower;
+pub mod type_func;
 pub mod lower_func;
-pub mod type_solver;
+
 
 #[derive(Debug, Default)]
 pub struct Program<C> {
