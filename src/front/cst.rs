@@ -1,4 +1,4 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
 
@@ -8,6 +8,7 @@ use crate::front::{ast, error};
 use crate::front::error::{Error, Result};
 use crate::front::lower::LRValue;
 use crate::front::scope::Scope;
+use crate::front::type_solver::TypeVar;
 use crate::util::arena::{Arena, ArenaSet};
 
 new_index_type!(pub Module);
@@ -22,24 +23,38 @@ pub struct ResolvedProgram<'a> {
     pub main_func: Function,
 }
 
-#[derive(Debug)]
-pub struct TypeStore<'a> {
-    types: ArenaSet<Type, TypeInfo<'a>>,
+type BasicTypeInfo<'a> = TypeInfo<Type, StructTypeInfo<'a>>;
 
+pub struct TypeStore<'a> {
+    types: ArenaSet<Type, BasicTypeInfo<'a>>,
+
+    ty_wildcard: Type,
     ty_void: Type,
     ty_bool: Type,
     ty_byte: Type,
     ty_int: Type,
 }
 
+impl<'a> Debug for TypeStore<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "TypeStore {{")?;
+        for (ty, _) in &self.types {
+            writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?;
+        }
+        writeln!(f, "}}")?;
+        Ok(())
+    }
+}
+
 impl<'a> Default for TypeStore<'a> {
     fn default() -> Self {
         let mut types = ArenaSet::default();
+        let ty_wildcard = types.push(TypeInfo::Wildcard);
         let ty_void = types.push(TypeInfo::Void);
         let ty_bool = types.push(TypeInfo::Bool);
         let ty_byte = types.push(TypeInfo::Byte);
         let ty_int = types.push(TypeInfo::Int);
-        Self { types, ty_void, ty_bool, ty_byte, ty_int }
+        Self { types, ty_wildcard, ty_void, ty_bool, ty_byte, ty_int }
     }
 }
 
@@ -64,12 +79,12 @@ impl<'a> TypeStore<'a> {
         self.types.push(TypeInfo::Placeholder(self.types.len()))
     }
 
-    pub fn replace_placeholder(&mut self, ph: Type, info: TypeInfo<'a>) {
+    pub fn replace_placeholder(&mut self, ph: Type, info: BasicTypeInfo<'a>) {
         let old_info = self.types.replace(ph, info);
         assert!(matches!(old_info, TypeInfo::Placeholder(_)), "tried to replace non-placeholder type {:?}", old_info)
     }
 
-    pub fn define_type(&mut self, info: TypeInfo<'a>) -> Type {
+    pub fn define_type(&mut self, info: BasicTypeInfo<'a>) -> Type {
         self.types.push(info)
     }
 
@@ -95,7 +110,8 @@ impl<'a> TypeStore<'a> {
         impl Display for Wrapped<'_> {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 match &self.store[self.ty] {
-                    TypeInfo::Placeholder(_) => panic!("tried to format placeholder type"),
+                    TypeInfo::Placeholder(i) => write!(f, "placeholder({})", i),
+                    TypeInfo::Wildcard => write!(f, "_"),
                     TypeInfo::Void => write!(f, "void"),
                     TypeInfo::Bool => write!(f, "bool"),
                     TypeInfo::Byte => write!(f, "byte"),
@@ -116,7 +132,7 @@ impl<'a> TypeStore<'a> {
 }
 
 impl<'a> Index<Type> for TypeStore<'a> {
-    type Output = TypeInfo<'a>;
+    type Output = BasicTypeInfo<'a>;
 
     fn index(&self, index: Type) -> &Self::Output {
         &self.types[index]
@@ -184,11 +200,12 @@ impl<'a> ItemStore<'a> {
     pub fn resolve_type(
         &self,
         scope_kind: ScopeKind,
-        scope: &Scope<'static, ScopedItem>,
+        scope: &Scope<ScopedItem>,
         types: &mut TypeStore,
         ty: &'a ast::Type,
     ) -> Result<'a, Type> {
         match &ty.kind {
+            ast::TypeKind::Wildcard => Ok(types.ty_wildcard),
             ast::TypeKind::Void => Ok(types.ty_void),
             ast::TypeKind::Bool => Ok(types.ty_bool),
             ast::TypeKind::Byte => Ok(types.ty_byte),
@@ -240,6 +257,7 @@ pub enum ScopedValue {
     Function(Function),
     Const(Const),
     Immediate(LRValue),
+    TypeVar(TypeVar),
 }
 
 impl ScopedItem {
@@ -257,31 +275,36 @@ impl ScopedItem {
     }
 }
 
+//TODO can S just be replaced by StructTypeInfo? is someone using it for something else?
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub enum TypeInfo<'a> {
+pub enum TypeInfo<T, S> {
+    //TODO is it possible to get rid of this built-in None variant?
     Placeholder(usize),
+    Wildcard,
 
     Void,
     Bool,
     Byte,
     Int,
 
-    Pointer(Type),
+    Pointer(T),
 
-    Tuple(TupleTypeInfo),
-    Function(FunctionTypeInfo),
-    Struct(StructTypeInfo<'a>),
+    Tuple(TupleTypeInfo<T>),
+    Function(FunctionTypeInfo<T>),
+    Struct(S),
 }
 
-impl<'a> TypeInfo<'a> {
-    pub fn unwrap_ptr(&self) -> Option<Type> {
+impl<T: Copy, S> TypeInfo<T, S> {
+    pub fn unwrap_ptr(&self) -> Option<T> {
         match self {
             TypeInfo::Pointer(inner) => Some(*inner),
             _ => None,
         }
     }
+}
 
-    pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo> {
+impl<T, S> TypeInfo<T, S> {
+    pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo<T>> {
         match self {
             TypeInfo::Function(inner) => Some(inner),
             _ => None,
@@ -289,15 +312,38 @@ impl<'a> TypeInfo<'a> {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct TupleTypeInfo {
-    pub fields: Vec<Type>
+impl<'ast, T> TypeInfo<T, StructTypeInfo<'ast>> {
+    /// Map the representation for nested types while keeping the structure.
+    pub fn map_ty<R>(&self, f: &mut impl FnMut(&T) -> R) -> TypeInfo<R, StructTypeInfo<'ast>> {
+        match self {
+            TypeInfo::Placeholder(_) => unreachable!(),
+            TypeInfo::Wildcard => TypeInfo::Wildcard,
+            TypeInfo::Void => TypeInfo::Void,
+            TypeInfo::Bool => TypeInfo::Bool,
+            TypeInfo::Byte => TypeInfo::Byte,
+            TypeInfo::Int => TypeInfo::Int,
+            TypeInfo::Pointer(inner) => TypeInfo::Pointer(f(inner)),
+            TypeInfo::Tuple(info) => TypeInfo::Tuple(TupleTypeInfo {
+                fields: info.fields.iter().map(f).collect()
+            }),
+            TypeInfo::Function(info) => TypeInfo::Function(FunctionTypeInfo {
+                ret: f(&info.ret),
+                params: info.params.iter().map(f).collect(),
+            }),
+            TypeInfo::Struct(info) => TypeInfo::Struct(info.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct FunctionTypeInfo {
-    pub params: Vec<Type>,
-    pub ret: Type,
+pub struct TupleTypeInfo<T> {
+    pub fields: Vec<T>
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct FunctionTypeInfo<T> {
+    pub params: Vec<T>,
+    pub ret: T,
 }
 
 #[derive(Debug, Clone)]
@@ -331,7 +377,7 @@ impl<'a> Eq for StructTypeInfo<'a> {}
 #[derive(Debug)]
 pub struct FunctionDecl<'a> {
     pub ty: Type,
-    pub func_ty: FunctionTypeInfo,
+    pub func_ty: FunctionTypeInfo<Type>,
     pub ast: &'a ast::Function,
 }
 

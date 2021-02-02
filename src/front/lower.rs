@@ -5,9 +5,10 @@ use itertools::Itertools;
 
 use crate::front::{ast, cst};
 use crate::front::ast::ExpressionKind;
-use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, Type, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
+use crate::front::type_func::TypeFuncState;
 use crate::mid::ir;
 
 /// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
@@ -19,6 +20,18 @@ use crate::mid::ir;
 pub enum LRValue {
     Left(TypedValue),
     Right(TypedValue),
+}
+
+impl LRValue {
+    /// Get the type of this value as seen by the end user, taking into account that LValues are automatically
+    /// dereferenced.
+    pub fn ty(self, types: &TypeStore) -> Type {
+        match self {
+            LRValue::Left(value) => types[value.ty].unwrap_ptr()
+                .unwrap_or_else(|| panic!("LRValue::Left({:?}) should have pointer type", value)),
+            LRValue::Right(value) => value.ty,
+        }
+    }
 }
 
 /// A `ir::Value` with its corresponding `cst::Type`. The `ir::Value` itself doesn't contain enough information because
@@ -54,7 +67,7 @@ impl<'a> MappingTypeStore<'a> {
         Self { inner: store, map: Default::default() }
     }
 
-    pub fn map_type_func(&mut self, prog: &mut ir::Program, ty: &FunctionTypeInfo) -> ir::FunctionType {
+    pub fn map_type_func(&mut self, prog: &mut ir::Program, ty: &FunctionTypeInfo<cst::Type>) -> ir::FunctionType {
         let params = ty.params.iter()
             .map(|&p| self.map_type(prog, p))
             .collect();
@@ -70,6 +83,7 @@ impl<'a> MappingTypeStore<'a> {
 
         let ir_ty = match &self.inner[ty] {
             ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
+            TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
             TypeInfo::Void => prog.type_void(),
             TypeInfo::Bool => prog.type_bool(),
             TypeInfo::Byte => prog.define_type_int(8),
@@ -127,21 +141,50 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
 
     //mapping from cst values to ir values
     let map_value = &|value: ScopedValue| -> LRValue {
-        match
-        value {
+        match value {
             ScopedValue::Function(func) => all_funcs.get(&func).unwrap().1,
             ScopedValue::Const(cst) => *all_consts.get(&cst).unwrap(),
             ScopedValue::Immediate(value) => value,
+            ScopedValue::TypeVar(_) => panic!("tried to map TypeVar value to placeholder"),
         }
     };
 
-    //actually generate code
+    //type inference and code generation
     for (_, module) in &prog.items.modules {
         for &cst_func in &module.codegen_funcs {
             let func_decl = &prog.items.funcs[cst_func];
 
+
             if let Some(ir_func) = all_funcs.get(&cst_func).unwrap().0 {
-                let mut lower = LowerFuncState {
+                //build the type problem for expressions within the function
+                let mut type_state = TypeFuncState {
+                    items: &prog.items,
+                    types: &mut types,
+
+                    module_scope: &module.scope,
+                    map_value,
+
+                    ret_ty: func_decl.func_ty.ret,
+                    ir_func,
+
+                    expr_type_map: Default::default(),
+                    decl_type_map: Default::default(),
+                    problem: Default::default(),
+                };
+                type_state.visit_func(func_decl)?;
+
+                let TypeFuncState {
+                    problem,
+                    expr_type_map,
+                    decl_type_map,
+                    ..
+                } = type_state;
+
+                //solve the problem
+                let solution = problem.solve(&mut *types);
+
+                //actually generate code
+                LowerFuncState {
                     prog: &mut ir_prog,
 
                     items: &prog.items,
@@ -153,8 +196,11 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
                     ret_ty: func_decl.func_ty.ret,
                     ir_func,
                     loop_stack: vec![],
-                };
-                lower.append_func(func_decl)?;
+
+                    expr_type_map: &expr_type_map,
+                    decl_type_map: &decl_type_map,
+                    type_solution: solution,
+                }.lower_func(func_decl)?;
             }
         }
     }
