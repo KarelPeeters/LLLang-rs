@@ -59,9 +59,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.ty_bool()
             }
             ast::ExpressionKind::IntLit { .. } => {
-                let ty = self.problem.unknown();
-                self.problem.require_int(ty);
-                ty
+                self.problem.unknown_int()
             }
             ast::ExpressionKind::StringLit { .. } => {
                 self.problem.known(TypeInfo::Pointer(self.problem.ty_byte()))
@@ -89,7 +87,8 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let value_ty = self.problem.unknown();
+                let value_ty = self.problem.unknown_int();
+
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
                 self.problem.equal(value_ty, left_ty);
@@ -118,9 +117,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         deref_ty
                     }
                     ast::UnaryOp::Neg => {
+                        let value_ty = self.problem.unknown_int();
                         let inner_ty = self.visit_expr(scope, inner)?;
-                        self.problem.require_int(inner_ty);
-                        inner_ty
+                        self.problem.equal(value_ty, inner_ty);
+                        value_ty
                     }
                 }
             }
@@ -163,10 +163,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let ret_ty = self.problem.fully_known(&self.types, self.ret_ty);
                 self.problem.equal(ret_ty, value_ty);
 
-                self.problem.unknown_with_default_void()
+                self.problem.unknown_default_void()
             }
-            ast::ExpressionKind::Continue => self.problem.unknown_with_default_void(),
-            ast::ExpressionKind::Break => self.problem.unknown_with_default_void(),
+            ast::ExpressionKind::Continue => self.problem.unknown_default_void(),
+            ast::ExpressionKind::Break => self.problem.unknown_default_void(),
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);
@@ -235,6 +235,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 let start_ty = self.visit_expr(scope, &for_stmt.start)?;
                 let end_ty = self.visit_expr(scope, &for_stmt.end)?;
+
+                let unknown_int = self.problem.unknown_int();
+                self.problem.equal(index_ty, unknown_int);
                 self.problem.equal(index_ty, start_ty);
                 self.problem.equal(index_ty, end_ty);
 

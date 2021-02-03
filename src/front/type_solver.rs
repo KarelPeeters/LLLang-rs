@@ -13,18 +13,21 @@ type KnownTypeInfo<'ast> = cst::TypeInfo<Type, StructTypeInfo<'ast>>;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct TypeVar(usize);
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Property {
+    Unknown,
+    AnyInt,
+    DefaultVoid,
+}
+
 //TODO don't assert anywhere, return an error instead. look at unwrap, expect, panic, ...
 //TODO print out an instance once, to see how much duplicate noise there is
 pub struct TypeProblem<'ast> {
-    state: Vec<Option<VarTypeInfo<'ast>>>,
+    state: Vec<(Option<VarTypeInfo<'ast>>, Property)>,
 
     matches: VecDeque<(TypeVar, TypeVar)>,
     struct_index: VecDeque<(TypeVar, &'ast str, TypeVar)>,
     tuple_index: VecDeque<(TypeVar, u32, TypeVar)>,
-
-    //TODO consider changing these into some properties on the state vec instead
-    default_void: Vec<bool>,
-    any_int: Vec<TypeVar>,
 
     //basic types
     ty_void: TypeVar,
@@ -40,11 +43,9 @@ impl<'ast> Default for TypeProblem<'ast> {
     fn default() -> Self {
         let mut result = TypeProblem {
             state: Default::default(),
-            default_void: Default::default(),
             matches: Default::default(),
             struct_index: Default::default(),
             tuple_index: Default::default(),
-            any_int: Default::default(),
 
             ty_void: TypeVar(0),
             ty_bool: TypeVar(0),
@@ -58,10 +59,9 @@ impl<'ast> Default for TypeProblem<'ast> {
 }
 
 impl<'ast> TypeProblem<'ast> {
-    fn new_var(&mut self, default_void: bool) -> TypeVar {
+    fn new_var(&mut self, prop: Property) -> TypeVar {
         let i = self.state.len();
-        self.state.push(None);
-        self.default_void.push(default_void);
+        self.state.push((None, prop));
         TypeVar(i)
     }
 
@@ -77,15 +77,20 @@ impl<'ast> TypeProblem<'ast> {
         self.ty_byte
     }
 
-    /// Create a new TypeVar without any associated information
+    /// Create a new TypeVar without any known type information.
     pub fn unknown(&mut self) -> TypeVar {
-        self.new_var(false)
+        self.new_var(Property::Unknown)
     }
 
-    /// Create a new TypeVar without a known type, but that gets assigned the void type after inference is finished and
-    /// the type is still not known.
-    pub fn unknown_with_default_void(&mut self) -> TypeVar {
-        self.new_var(true)
+    /// Create a new TypeVar without a known type, but that gets assigned the void type if at the end of inference this
+    /// type still has no inferred type.
+    pub fn unknown_default_void(&mut self) -> TypeVar {
+        self.new_var(Property::DefaultVoid)
+    }
+
+    /// Create a new TypeVar that can be assigned any integer type.
+    pub fn unknown_int(&mut self) -> TypeVar {
+        self.new_var(Property::AnyInt)
     }
 
     /// Create a new TypeVar with a known type pattern
@@ -97,7 +102,7 @@ impl<'ast> TypeProblem<'ast> {
             return var;
         }
 
-        self.state[var.0] = Some(info);
+        self.state[var.0].0 = Some(info);
         var
     }
 
@@ -105,16 +110,6 @@ impl<'ast> TypeProblem<'ast> {
     pub fn fully_known(&mut self, types: &cst::TypeStore<'ast>, ty: Type) -> TypeVar {
         let info = types[ty].map_ty(&mut |&child_ty| self.fully_known(types, child_ty));
         self.known(info)
-    }
-
-    /// Require that the given TypeVar has an integer type.
-    pub fn require_int(&mut self, var: TypeVar) {
-        self.any_int.push(var);
-    }
-
-    /// Require that two types match
-    pub fn equal(&mut self, left: TypeVar, right: TypeVar) {
-        self.matches.push_back((left, right))
     }
 
     /// Create a new TypeVar representing the type of a tuple index expression.
@@ -130,6 +125,11 @@ impl<'ast> TypeProblem<'ast> {
         self.struct_index.push_back((target, index, var));
         var
     }
+
+    /// Require that two types match
+    pub fn equal(&mut self, left: TypeVar, right: TypeVar) {
+        self.matches.push_back((left, right))
+    }
 }
 
 /// Solver implementation
@@ -144,14 +144,15 @@ impl<'ast> TypeProblem<'ast> {
 
         //map types back to cst types (and check that all types were indeed inferred)
         let state = (0..self.state.len()).map(|i| {
-            self.get_solution(types, TypeVar(i))
-        }).collect_vec();
+            let ty = self.get_solution(types, TypeVar(i));
 
-        //check that integer requirements are met
-        for var in self.any_int {
-            let info = self.state[var.0].as_ref().unwrap();
-            assert!(matches!(info, TypeInfo::Byte | TypeInfo::Int))
-        }
+            //check that integer requirements are satisfied
+            if self.state[i].1 == Property::AnyInt {
+                assert!(matches!(self.state[i].0.as_ref().unwrap(), TypeInfo::Byte | TypeInfo::Int))
+            }
+
+            ty
+        }).collect_vec();
 
         TypeSolution { state }
     }
@@ -162,7 +163,7 @@ impl<'ast> TypeProblem<'ast> {
         let matches = &mut self.matches;
 
         self.tuple_index.retain(|&(target, index, result)| {
-            if let Some(target) = &state[target.0] {
+            if let Some(target) = &state[target.0].0 {
                 if let TypeInfo::Tuple(target) = target {
                     let target_result = target.fields.get(index as usize)
                         .expect("Tuple index out of bounds");
@@ -178,7 +179,7 @@ impl<'ast> TypeProblem<'ast> {
         });
 
         self.struct_index.retain(|&(target, index, result)| {
-            if let Some(target) = &state[target.0] {
+            if let Some(target) = &state[target.0].0 {
                 if let TypeInfo::Struct(target) = target {
                     let (_, field_ty) = target.fiend_field(index).unwrap();
                     fully_known_queue.push((result, field_ty));
@@ -220,10 +221,11 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Get the type inferred for the given TypeVar.
     fn get_solution(&self, types: &mut TypeStore<'ast>, var: TypeVar) -> Type {
-        if let Some(info) = &self.state[var.0] {
+        let state = &self.state[var.0];
+        if let Some(info) = &state.0 {
             let info = info.map_ty(&mut |&var| self.get_solution(types, var));
             types.define_type(info)
-        } else if self.default_void[var.0] {
+        } else if state.1 == Property::DefaultVoid {
             types.type_void()
         } else {
             panic!("Failed to infer type for {:?}", var)
@@ -233,17 +235,20 @@ impl<'ast> TypeProblem<'ast> {
     /// Apply the requirement that both TypeVars match. Returns whether this match was fully applied and doesn't need to
     /// be considered again.
     fn unify_var(&mut self, left: TypeVar, right: TypeVar) -> bool {
-        assert_ne!(left, right);
+        //nothing to do, skip
+        if left == right {
+            return true
+        }
 
-        match (&self.state[left.0], &self.state[right.0]) {
+        match (&self.state[left.0].0, &self.state[right.0].0) {
             //todo we need to revisit this later, record it somewhere?
             (None, None) => false,
             (Some(left), None) => {
-                self.state[right.0] = Some(left.clone());
+                self.state[right.0].0 = Some(left.clone());
                 true
             }
             (None, Some(right)) => {
-                self.state[left.0] = Some(right.clone());
+                self.state[left.0].0 = Some(right.clone());
                 true
             }
             (Some(_), Some(_)) => {
@@ -257,8 +262,8 @@ impl<'ast> TypeProblem<'ast> {
     fn unify_both_known(&mut self, left: TypeVar, right: TypeVar) {
         //TODO how to avoid cloning in this function?
 
-        let left = self.state[left.0].as_ref().unwrap();
-        let right = self.state[right.0].as_ref().unwrap();
+        let left = self.state[left.0].0.as_ref().unwrap();
+        let right = self.state[right.0].0.as_ref().unwrap();
 
         match (left, right) {
             (TypeInfo::Placeholder(_), _) | (_, TypeInfo::Placeholder(_)) => panic!("placeholder"),
@@ -313,10 +318,15 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
 
         for i in 0..self.state.len() {
             let var = TypeVar(i);
-            let int = if self.any_int.contains(&var) { "int" } else { "" };
-            let void = if self.default_void[i] { "->void" } else { "" };
+            let state = &self.state[i];
 
-            writeln!(f, "        {:?}({}{}): {:?}", var, int, void, self.state[i])?;
+            let prop = match state.1 {
+                Property::Unknown => "",
+                Property::AnyInt => "int",
+                Property::DefaultVoid => "->void",
+            };
+
+            writeln!(f, "        {:?}({}): {:?}", var, prop, state.0)?;
         }
 
         writeln!(f, "    ],\n    constraints: [")?;
