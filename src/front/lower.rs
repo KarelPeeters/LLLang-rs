@@ -165,7 +165,6 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
                     map_value,
 
                     ret_ty: func_decl.func_ty.ret,
-                    ir_func,
 
                     expr_type_map: Default::default(),
                     decl_type_map: Default::default(),

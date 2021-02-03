@@ -9,18 +9,15 @@ use crate::front::error::Result;
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeProblem, TypeVar};
-use crate::mid::ir;
 
 /// The state necessary to lower a single function.
 pub struct TypeFuncState<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
-    //TODO remove dead fields
     pub items: &'cst ItemStore<'ast>,
     pub types: &'cst mut MappingTypeStore<'ast>,
     pub map_value: F,
 
     pub module_scope: &'cst Scope<'static, ScopedItem>,
 
-    pub ir_func: ir::Function,
     pub ret_ty: cst::Type,
 
     pub expr_type_map: HashMap<*const ast::Expression, TypeVar>,
@@ -32,16 +29,6 @@ pub struct TypeFuncState<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
 impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
     fn resolve_type(&mut self, scope: &Scope<ScopedItem>, ty: &'ast ast::Type) -> Result<'ast, cst::Type> {
         self.items.resolve_type(ScopeKind::Real, scope, &mut self.types.inner, ty)
-    }
-
-    fn type_of_scoped_value(&mut self, value: ScopedValue) -> TypeVar {
-        match value {
-            ScopedValue::TypeVar(var) => var,
-            ScopedValue::Function(_) | ScopedValue::Const(_) | ScopedValue::Immediate(_) => {
-                let ty = (self.map_value)(value).ty(&self.types);
-                self.problem.fully_known(&self.types, ty)
-            }
-        }
     }
 
     fn visit_expr(
@@ -68,8 +55,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let item = self.items.resolve_path(ScopeKind::Real, scope, path)?;
 
                 if let ScopedItem::Value(value) = item {
-                    //TODO maybe inline this function into the single use location?
-                    self.type_of_scoped_value(value)
+                    match value {
+                        ScopedValue::TypeVar(var) => var,
+                        ScopedValue::Function(_) | ScopedValue::Const(_) | ScopedValue::Immediate(_) => {
+                            let ty = (self.map_value)(value).ty(&self.types);
+                            self.problem.fully_known(&self.types, ty)
+                        }
+                    }
                 } else {
                     return Err(item.err_unexpected_kind(error::ItemType::Value, path));
                 }
