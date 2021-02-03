@@ -153,7 +153,7 @@ impl<'ast> TypeProblem<'ast> {
             assert!(matches!(info, TypeInfo::Byte | TypeInfo::Int))
         }
 
-        return TypeSolution { state };
+        TypeSolution { state }
     }
 
     /// Run a single iteration of the solver, returns whether any progress was made.

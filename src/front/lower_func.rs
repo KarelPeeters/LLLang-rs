@@ -322,9 +322,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 // evaluate args
                 let mut ir_args = Vec::with_capacity(args.len());
-                let after_args = args.iter().enumerate().try_fold(after_target, |flow, (i, arg)| {
-                    let (after_value, value) =
-                        self.append_expr_loaded(flow, scope, arg)?;
+                let after_args = args.iter().try_fold(after_target, |flow, arg| {
+                    let (after_value, value) = self.append_expr_loaded(flow, scope, arg)?;
                     ir_args.push(value.ir);
                     Ok(after_value)
                 })?;
@@ -690,7 +689,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         let body = decl.ast.body.as_ref().
             expect("can only generate code for functions with a body");
-        let end = self.append_nested_block(start, &mut scope, body)?;
+        let end = self.append_nested_block(start, &scope, body)?;
 
         if end.needs_return {
             if self.ret_ty == self.types.type_void() {

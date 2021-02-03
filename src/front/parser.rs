@@ -618,7 +618,7 @@ impl<'a> Parser<'a> {
         };
 
         if need_semi {
-            self.expect(TT::Semi, "end of statement")?.span.end;
+            self.expect(TT::Semi, "end of statement")?;
         }
 
         let span = Span::new(start_pos, self.last_popped_end);

@@ -104,7 +104,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
     prog.get_func_mut(func).slots
         .retain(|slot| !replaced_slots.contains(&slot));
 
-    return replaced_slots.len();
+    replaced_slots.len()
 }
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of

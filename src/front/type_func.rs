@@ -274,7 +274,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
         let body = decl.ast.body.as_ref().
             expect("can only generate code for functions with a body");
-        self.visit_nested_block(&mut scope, body)?;
+        self.visit_nested_block(&scope, body)?;
 
         Ok(())
     }

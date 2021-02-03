@@ -112,7 +112,7 @@ impl<'a> MappingTypeStore<'a> {
         };
 
         self.map.insert(ty, ir_ty);
-        return ir_ty;
+        ir_ty
     }
 }
 
