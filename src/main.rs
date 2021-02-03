@@ -1,9 +1,6 @@
 #![allow(dead_code)]
 #![deny(unused_must_use)]
 
-//TODO enable this warning
-//#![warn(missing_debug_implementations)]
-
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, read_to_string};
 use std::io::Write;

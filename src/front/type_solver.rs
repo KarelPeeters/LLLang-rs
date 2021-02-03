@@ -4,10 +4,10 @@ use std::fmt::Formatter;
 use itertools::{Itertools, zip};
 
 use crate::front::cst;
-use crate::front::cst::{StructTypeInfo, Type, TypeInfo, TypeStore};
+use crate::front::cst::{Type, TypeInfo, TypeStore};
 
-type VarTypeInfo<'ast> = cst::TypeInfo<TypeVar, StructTypeInfo<'ast>>;
-type KnownTypeInfo<'ast> = cst::TypeInfo<Type, StructTypeInfo<'ast>>;
+type VarTypeInfo<'ast> = cst::TypeInfo<'ast, TypeVar>;
+type KnownTypeInfo<'ast> = cst::TypeInfo<'ast, Type>;
 
 /// Represents the type of an expression in the program.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

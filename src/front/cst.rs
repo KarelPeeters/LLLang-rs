@@ -23,7 +23,7 @@ pub struct ResolvedProgram<'a> {
     pub main_func: Function,
 }
 
-type BasicTypeInfo<'a> = TypeInfo<Type, StructTypeInfo<'a>>;
+type BasicTypeInfo<'ast> = TypeInfo<'ast, Type>;
 
 pub struct TypeStore<'a> {
     types: ArenaSet<Type, BasicTypeInfo<'a>>,
@@ -275,11 +275,13 @@ impl ScopedItem {
     }
 }
 
-//TODO can S just be replaced by StructTypeInfo? is someone using it for something else?
+/// Information about a type in the high-level language. The type parameter T is the key used to represent nested types.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub enum TypeInfo<T, S> {
-    //TODO is it possible to get rid of this built-in None variant?
+pub enum TypeInfo<'ast, T> {
+    /// A temporary placeholder used during cst construction.
     Placeholder(usize),
+
+    /// The wildcard type, used to declare types without known inner types, eg. `&_` or `(_, _)`.
     Wildcard,
 
     Void,
@@ -291,10 +293,10 @@ pub enum TypeInfo<T, S> {
 
     Tuple(TupleTypeInfo<T>),
     Function(FunctionTypeInfo<T>),
-    Struct(S),
+    Struct(StructTypeInfo<'ast>),
 }
 
-impl<T: Copy, S> TypeInfo<T, S> {
+impl<'ast, T: Copy> TypeInfo<'ast, T> {
     pub fn unwrap_ptr(&self) -> Option<T> {
         match self {
             TypeInfo::Pointer(inner) => Some(*inner),
@@ -303,7 +305,7 @@ impl<T: Copy, S> TypeInfo<T, S> {
     }
 }
 
-impl<T, S> TypeInfo<T, S> {
+impl<'ast, T> TypeInfo<'ast, T> {
     pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo<T>> {
         match self {
             TypeInfo::Function(inner) => Some(inner),
@@ -312,9 +314,9 @@ impl<T, S> TypeInfo<T, S> {
     }
 }
 
-impl<'ast, T> TypeInfo<T, StructTypeInfo<'ast>> {
+impl<'ast, T> TypeInfo<'ast, T> {
     /// Map the representation for nested types while keeping the structure.
-    pub fn map_ty<R>(&self, f: &mut impl FnMut(&T) -> R) -> TypeInfo<R, StructTypeInfo<'ast>> {
+    pub fn map_ty<R>(&self, f: &mut impl FnMut(&T) -> R) -> TypeInfo<'ast, R> {
         match self {
             TypeInfo::Placeholder(_) => unreachable!(),
             TypeInfo::Wildcard => TypeInfo::Wildcard,
