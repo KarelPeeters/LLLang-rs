@@ -21,9 +21,8 @@ enum Property {
 }
 
 //TODO don't assert anywhere, return an error instead. look at unwrap, expect, panic, ...
-//TODO print out an instance once, to see how much duplicate noise there is
-pub struct TypeProblem<'ast> {
-    state: Vec<(Option<VarTypeInfo<'ast>>, Property)>,
+pub struct TypeProblem<'ast, R> {
+    state: Vec<(Option<VarTypeInfo<'ast>>, Property, R)>,
 
     matches: VecDeque<(TypeVar, TypeVar)>,
     struct_index: VecDeque<(TypeVar, &'ast str, TypeVar)>,
@@ -39,7 +38,7 @@ pub struct TypeSolution {
     state: Vec<Type>
 }
 
-impl<'ast> Default for TypeProblem<'ast> {
+impl<'ast, R> Default for TypeProblem<'ast, R> {
     fn default() -> Self {
         let mut result = TypeProblem {
             state: Default::default(),
@@ -58,10 +57,10 @@ impl<'ast> Default for TypeProblem<'ast> {
     }
 }
 
-impl<'ast> TypeProblem<'ast> {
-    fn new_var(&mut self, prop: Property) -> TypeVar {
+impl<'ast, R> TypeProblem<'ast, R> {
+    fn new_var(&mut self, prop: Property, owner: R) -> TypeVar {
         let i = self.state.len();
-        self.state.push((None, prop));
+        self.state.push((None, prop, owner));
         TypeVar(i)
     }
 
@@ -78,26 +77,25 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Create a new TypeVar without any known type information.
-    pub fn unknown(&mut self) -> TypeVar {
-        self.new_var(Property::Unknown)
+    pub fn unknown(&mut self, owner: R) -> TypeVar {
+        self.new_var(Property::Unknown, owner)
     }
 
     /// Create a new TypeVar without a known type, but that gets assigned the void type if at the end of inference this
     /// type still has no inferred type.
-    pub fn unknown_default_void(&mut self) -> TypeVar {
-        self.new_var(Property::DefaultVoid)
+    pub fn unknown_default_void(&mut self, owner: R) -> TypeVar {
+        self.new_var(Property::DefaultVoid, owner)
     }
 
     /// Create a new TypeVar that can be assigned any integer type.
-    pub fn unknown_int(&mut self) -> TypeVar {
-        self.new_var(Property::AnyInt)
+    pub fn unknown_int(&mut self, owner: R) -> TypeVar {
+        self.new_var(Property::AnyInt, owner)
     }
 
     /// Create a new TypeVar with a known type pattern
-    pub fn known(&mut self, info: VarTypeInfo<'ast>) -> TypeVar {
-        let var = self.unknown();
+    pub fn known(&mut self, owner: R, info: VarTypeInfo<'ast>) -> TypeVar {
+        let var = self.unknown(owner);
 
-        //TODO this is easy to forget, is there a better way to handle this
         if let TypeInfo::Wildcard = info {
             return var;
         }
@@ -107,21 +105,21 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Create a new TypeVar with a fully known type.
-    pub fn fully_known(&mut self, types: &cst::TypeStore<'ast>, ty: Type) -> TypeVar {
+    pub fn fully_known(&mut self, types: &cst::TypeStore<'ast>, owner: R, ty: Type) -> TypeVar {
         let info = types[ty].map_ty(&mut |&child_ty| self.fully_known(types, child_ty));
-        self.known(info)
+        self.known(owner, info)
     }
 
     /// Create a new TypeVar representing the type of a tuple index expression.
-    pub fn tuple_index(&mut self, target: TypeVar, index: u32) -> TypeVar {
-        let var = self.unknown();
+    pub fn tuple_index(&mut self, owner: R, target: TypeVar, index: u32) -> TypeVar {
+        let var = self.unknown(owner);
         self.tuple_index.push_back((target, index, var));
         var
     }
 
     /// Create a new TypeVar representing the type of a struct index expression.
-    pub fn struct_index(&mut self, target: TypeVar, index: &'ast str) -> TypeVar {
-        let var = self.unknown();
+    pub fn struct_index(&mut self, owner: R, target: TypeVar, index: &'ast str) -> TypeVar {
+        let var = self.unknown(owner);
         self.struct_index.push_back((target, index, var));
         var
     }
@@ -133,7 +131,7 @@ impl<'ast> TypeProblem<'ast> {
 }
 
 /// Solver implementation
-impl<'ast> TypeProblem<'ast> {
+impl<'ast, O> TypeProblem<'ast, O> {
     pub fn solve(mut self, types: &mut TypeStore<'ast>) -> TypeSolution {
         //main solver loop
         let mut fully_known_queue = Vec::new();
@@ -193,6 +191,7 @@ impl<'ast> TypeProblem<'ast> {
             }
         });
 
+        //TODO how to do this owner stuff when vars get created for struct fields?
         for &(result, field_ty) in fully_known_queue.iter() {
             let field_ty = self.fully_known(types, field_ty);
             self.matches.push_back((field_ty, result))
@@ -241,7 +240,6 @@ impl<'ast> TypeProblem<'ast> {
         }
 
         match (&self.state[left.0].0, &self.state[right.0].0) {
-            //todo we need to revisit this later, record it somewhere?
             (None, None) => false,
             (Some(left), None) => {
                 self.state[right.0].0 = Some(left.clone());
@@ -260,8 +258,6 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Util function for `unify_var` that assumes both vars have known infos.
     fn unify_both_known(&mut self, left: TypeVar, right: TypeVar) {
-        //TODO how to avoid cloning in this function?
-
         let left = self.state[left.0].0.as_ref().unwrap();
         let right = self.state[right.0].0.as_ref().unwrap();
 
