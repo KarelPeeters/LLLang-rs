@@ -20,11 +20,38 @@ fn type_size_in_bytes(prog: &Program, ty: &TypeInfo) -> i32 {
     }
 }
 
+#[derive(Default)]
+struct Output {
+    header: String,
+    text: String,
+}
+
+impl Output {
+    fn append_ln(&mut self, line: &str) {
+        self.text.push_str(line);
+        self.text.push('\n');
+    }
+
+    fn append_instr(&mut self, instr: &str) {
+        self.text.push_str("    ");
+        self.append_ln(instr);
+    }
+}
+
 struct AsmBuilder<'p> {
     prog: &'p Program,
+    next_label_number: usize,
 
-    text: String,
-    header: String,
+    //TODO make these match the indices in the IR debug format
+    block_numbers: IndexMap<Block, usize>,
+    func_numbers: IndexMap<Function, usize>,
+    data_numbers: IndexMap<Data, usize>,
+}
+
+struct AsmFuncBuilder<'p, 'o, 'r> {
+    prog: &'p Program,
+    output: &'o mut Output,
+    parent: &'r mut AsmBuilder<'p>,
 
     local_stack_size: i32,
     param_size: i32,
@@ -35,12 +62,126 @@ struct AsmBuilder<'p> {
 
     pre_phi_stack_positions: IndexMap<Phi, i32>,
     post_phi_stack_positions: IndexMap<Phi, i32>,
+}
 
-    next_label_number: usize,
-    //TODO make these match the indices in the IR debug format
-    block_numbers: IndexMap<Block, usize>,
-    func_numbers: IndexMap<Function, usize>,
-    data_numbers: IndexMap<Data, usize>,
+impl AsmBuilder<'_> {
+    pub fn lower(mut self) -> String {
+        let mut output = Output::default();
+
+        //call main function
+        let main_func_number = self.func_number(self.prog.main);
+        output.append_ln("_main:");
+        output.append_instr(&format!("call func_{}", main_func_number));
+        output.append_instr("push eax");
+        output.append_instr("call _ExitProcess@4");
+
+        //hardcode dependency TODO eventually remove this
+        output.header.push_str("extern _ExitProcess@4\n");
+
+        //write out all of the functions
+        for (func, func_info) in &self.prog.nodes.funcs {
+            self.append_func(&mut output, func, func_info)
+        };
+
+        //write out all of the data
+        //TODO maybe write this to the data section instead of the text section
+        for (&data, &data_num) in &self.data_numbers {
+            output.text.push_str(&format!("data_{}:\n  db ", data_num));
+
+            let data_info = self.prog.get_data(data);
+            for (i, b) in data_info.bytes.iter().enumerate() {
+                if i != 0 { output.text.push_str(", ") }
+                output.text.push_str(&format!("{}", b));
+            }
+            output.text.push('\n');
+        }
+
+        //format everything together
+        format!("global _main\n{}\nsection .text\n{}", output.header, output.text)
+    }
+
+    fn append_func(&mut self, output: &mut Output, func: Function, func_info: &FunctionInfo) {
+        let prog = self.prog;
+
+        let mut param_stack_positions = IndexMap::new();
+        let mut slot_stack_positions = IndexMap::new();
+        let mut instr_stack_positions = IndexMap::new();
+
+        let mut pre_phi_stack_positions = IndexMap::new();
+        let mut post_phi_stack_positions = IndexMap::new();
+
+        //determine the stack position for each slot and value-returning instruction
+        let mut stack_size = 0;
+
+        //TODO for stdcall we don't actually need to allocate slots, they already have an address on the stack
+        for &slot in &func_info.slots {
+            let ty = prog.get_type(prog.get_slot(slot).inner_ty);
+            let size = type_size_in_bytes(prog, ty);
+
+            slot_stack_positions.insert(slot, stack_size);
+            stack_size += size;
+        }
+
+        prog.visit_blocks(func, |block| {
+            let block_info = prog.get_block(block);
+
+            for &phi in &block_info.phis {
+                let ty = prog.get_phi(phi).ty;
+                let ty_size = type_size_in_bytes(&prog, prog.get_type(ty));
+
+                pre_phi_stack_positions.insert(phi, stack_size);
+                stack_size += ty_size;
+                post_phi_stack_positions.insert(phi, stack_size);
+                stack_size += ty_size;
+            }
+
+            for &instr in &block_info.instructions {
+                let ty = prog.get_type(prog.get_instr(instr).ty(prog));
+                instr_stack_positions.insert(instr, stack_size);
+                stack_size += type_size_in_bytes(&prog, ty);
+            }
+        });
+
+        //the local stack size is the stack size excluding the parameters and the isp
+        let local_stack_size = stack_size;
+
+        //space for isp
+        stack_size += 4;
+
+        let mut param_size = 0;
+
+        //determine the stack position for each parameter
+        for &param in func_info.params.iter() {
+            param_stack_positions.insert(param, stack_size);
+            let size = type_size_in_bytes(prog, prog.get_type(prog.type_of_value(Value::Param(param))));
+            stack_size += size;
+            param_size += size;
+        }
+
+
+        let func_number = self.func_number(func);
+        output.append_ln(&format!("func_{}:", func_number));
+
+        //grow stack
+        output.append_instr(&format!("sub esp, {}", local_stack_size));
+
+        let mut func_builder = AsmFuncBuilder {
+            prog,
+            output,
+            parent: self,
+            local_stack_size,
+            param_size,
+            param_stack_positions,
+            slot_stack_positions,
+            instr_stack_positions,
+            pre_phi_stack_positions,
+            post_phi_stack_positions,
+        };
+
+        prog.visit_blocks(func, |block| {
+            func_builder.append_block(block);
+        });
+    }
 }
 
 impl AsmBuilder<'_> {
@@ -65,17 +206,23 @@ impl AsmBuilder<'_> {
         let next_num = self.data_numbers.len();
         *self.data_numbers.entry(data).or_insert(next_num)
     }
+}
 
-    fn append_ln(&mut self, line: &str) {
-        self.text.push_str(line);
-        self.text.push('\n');
+impl std::ops::Deref for AsmFuncBuilder<'_, '_, '_> {
+    type Target = Output;
+
+    fn deref(&self) -> &Self::Target {
+        self.output
     }
+}
 
-    fn append_instr(&mut self, instr: &str) {
-        self.text.push_str("    ");
-        self.append_ln(instr);
+impl std::ops::DerefMut for AsmFuncBuilder<'_, '_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.output
     }
+}
 
+impl AsmFuncBuilder<'_, '_, '_> {
     /// `reg = value`
     fn append_value_to_reg(&mut self, reg: &str, value: &Value, stack_offset: i32) {
         match value {
@@ -87,7 +234,7 @@ impl AsmBuilder<'_> {
                 self.append_instr(&format!("mov {}, {}", reg, cst.value))
             }
             Value::Func(func) => {
-                let func_number = self.func_number(*func);
+                let func_number = self.parent.func_number(*func);
                 self.append_instr(&format!("mov {}, func_{}", reg, func_number));
             }
             Value::Param(param) => {
@@ -112,7 +259,7 @@ impl AsmBuilder<'_> {
                 self.header.push_str(&format!("extern {}\n", name))
             }
             Value::Data(data) => {
-                let data_number = self.data_number(*data);
+                let data_number = self.parent.data_number(*data);
                 self.append_instr(&format!("mov {}, data_{}", reg, data_number));
             }
         }
@@ -131,16 +278,17 @@ impl AsmBuilder<'_> {
         let target_block_info = self.prog.get_block(target.block);
 
         for (phi, phi_value) in target_block_info.phis.iter().zip(&target.phi_values) {
+            let pre_pos = self.pre_phi_stack_positions[phi];
             self.append_value_to_reg("eax", &phi_value, 0);
-            self.append_instr(&format!("mov [esp+{}], eax", self.pre_phi_stack_positions[phi]));
+            self.append_instr(&format!("mov [esp+{}], eax", pre_pos));
         }
 
-        let block_number = self.block_number(target.block);
+        let block_number = self.parent.block_number(target.block);
         self.append_instr(&format!("jmp block_{}", block_number));
     }
 
     pub fn append_block(&mut self, block: Block) {
-        let block_number = self.block_number(block);
+        let block_number = self.parent.block_number(block);
         self.append_ln(&format!("  block_{}: ", block_number));
 
         let block = self.prog.get_block(block);
@@ -149,8 +297,10 @@ impl AsmBuilder<'_> {
         if !block.phis.is_empty() {
             self.append_instr(";phi copy");
             for phi in &block.phis {
-                self.append_instr(&format!("mov eax, [esp+{}]", self.pre_phi_stack_positions[phi]));
-                self.append_instr(&format!("mov [esp+{}], eax", self.post_phi_stack_positions[phi]));
+                let pre_pos = self.pre_phi_stack_positions[phi];
+                let post_pos = self.post_phi_stack_positions[phi];
+                self.append_instr(&format!("mov eax, [esp+{}]", pre_pos));
+                self.append_instr(&format!("mov [esp+{}], eax", post_pos));
             }
         }
 
@@ -243,7 +393,7 @@ impl AsmBuilder<'_> {
                 self.append_jump_to_target(target);
             }
             Terminator::Branch { cond, true_target, false_target } => {
-                let label_number = self.label_number();
+                let label_number = self.parent.label_number();
 
                 self.append_instr(";  cond");
                 self.append_value_to_reg("eax", cond, 0);
@@ -258,128 +408,23 @@ impl AsmBuilder<'_> {
                 self.append_jump_to_target(false_target);
             }
             Terminator::Return { value } => {
+                let local_stack_size = self.local_stack_size;
+                let param_size = self.param_size;
+
                 self.append_value_to_reg("eax", value, 0);
-                self.append_instr(&format!("add esp, {}", self.local_stack_size));
-                self.append_instr(&format!("ret {}", self.param_size));
+                self.append_instr(&format!("add esp, {}", local_stack_size));
+                self.append_instr(&format!("ret {}", param_size));
             }
             Terminator::Unreachable => {
                 self.append_instr("hlt");
             }
         }
     }
-
-    fn append_func(&mut self, func: Function, func_info: &FunctionInfo) {
-        self.param_stack_positions.clear();
-        self.slot_stack_positions.clear();
-        self.instr_stack_positions.clear();
-
-        //determine the stack position for each slot and value-returning instruction
-        let mut stack_size = 0;
-
-        //TODO for stdcall we don't actually need to allocate slots, they already have an address on the stack
-        for &slot in &func_info.slots {
-            let ty = self.prog.get_type(self.prog.get_slot(slot).inner_ty);
-            let size = type_size_in_bytes(&self.prog, ty);
-
-            self.slot_stack_positions.insert(slot, stack_size);
-            stack_size += size;
-        }
-
-        self.prog.visit_blocks(func, |block| {
-            let block_info = self.prog.get_block(block);
-
-            for &phi in &block_info.phis {
-                let ty = self.prog.get_phi(phi).ty;
-                let ty_size = type_size_in_bytes(&self.prog, self.prog.get_type(ty));
-
-                self.pre_phi_stack_positions.insert(phi, stack_size);
-                stack_size += ty_size;
-                self.post_phi_stack_positions.insert(phi, stack_size);
-                stack_size += ty_size;
-            }
-
-            for &instr in &block_info.instructions {
-                let ty = self.prog.get_type(self.prog.get_instr(instr).ty(self.prog));
-                self.instr_stack_positions.insert(instr, stack_size);
-                stack_size += type_size_in_bytes(&self.prog, ty);
-            }
-        });
-
-        //the local stack size is the stack size excluding the parameters and the isp
-        self.local_stack_size = stack_size;
-
-        //space for isp
-        stack_size += 4;
-
-        let mut param_size = 0;
-
-        //determine the stack position for each parameter
-        for &param in func_info.params.iter() {
-            self.param_stack_positions.insert(param, stack_size);
-            let size = type_size_in_bytes(&self.prog, self.prog.get_type(self.prog.type_of_value(Value::Param(param))));
-            stack_size += size;
-            param_size += size;
-        }
-
-        self.param_size = param_size;
-
-        let func_number = self.func_number(func);
-        self.append_ln(&format!("func_{}:", func_number));
-
-        //grow stack
-        self.append_instr(&format!("sub esp, {}", self.local_stack_size));
-
-        self.prog.visit_blocks(func, |block| {
-            self.append_block(block);
-        });
-    }
-
-    pub fn lower(mut self) -> String {
-        //call main function
-        let main_func_number = self.func_number(self.prog.main);
-        self.append_ln("_main:");
-        self.append_instr(&format!("call func_{}", main_func_number));
-        self.append_instr("push eax");
-        self.append_instr("call _ExitProcess@4");
-
-        //hardcode dependency TODO eventually remove this
-        self.header.push_str("extern _ExitProcess@4\n");
-
-        //write out all of the functions
-        for (func, func_info) in &self.prog.nodes.funcs {
-            self.append_func(func, func_info)
-        };
-
-        //write out all of the data
-        //TODO maybe write this to the data section instead of the text section
-        for (&data, &data_num) in &self.data_numbers {
-            self.text.push_str(&format!("data_{}:\n  db ", data_num));
-
-            let data_info = self.prog.get_data(data);
-            for (i, b) in data_info.bytes.iter().enumerate() {
-                if i != 0 { self.text.push_str(", ") }
-                self.text.push_str(&format!("{}", b));
-            }
-            self.text.push('\n');
-        }
-
-        //format everything together
-        format!("global _main\n{}\nsection .text\n{}", self.header, self.text)
-    }
 }
 
 pub fn lower(prog: &Program) -> String {
     AsmBuilder {
         prog,
-        text: Default::default(),
-        header: Default::default(),
-        local_stack_size: Default::default(),
-        param_size: Default::default(),
-        param_stack_positions: Default::default(),
-        slot_stack_positions: Default::default(),
-        instr_stack_positions: Default::default(),
-        pre_phi_stack_positions: Default::default(),
-        post_phi_stack_positions: Default::default(),
         next_label_number: Default::default(),
         block_numbers: Default::default(),
         func_numbers: Default::default(),
