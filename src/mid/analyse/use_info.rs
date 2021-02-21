@@ -53,8 +53,7 @@ pub enum Usage {
     //values passed to target as phi value
     TargetPhiValue {
         func: Function,
-        from_block: Block,
-        target_index: TargetIndex,
+        target_kind: TargetKind,
         phi_index: usize,
     },
     //branch terminator uses value as cond
@@ -70,10 +69,11 @@ pub enum Usage {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum TargetIndex {
-    Jump,
-    BranchTrue,
-    BranchFalse,
+pub enum TargetKind {
+    Entry,
+    Jump(Block),
+    BranchTrue(Block),
+    BranchFalse(Block),
 }
 
 #[derive(Debug)]
@@ -130,7 +130,9 @@ impl UseInfo {
             if let Some(func) = todo_funcs.pop_front() {
                 if visited_funcs.insert(func) {
                     let func_info = prog.get_func(func);
-                    todo_blocks.push_back((func, func_info.entry))
+
+                    todo_blocks.push_back((func, func_info.entry.block));
+                    info.add_target_usages(func, &func_info.entry, TargetKind::Entry)
                 }
             }
 
@@ -155,14 +157,14 @@ impl UseInfo {
                     //terminator
                     match &block_info.terminator {
                         Terminator::Jump { target } => {
-                            info.add_target_usages(func, block, target, TargetIndex::Jump);
+                            info.add_target_usages(func, target, TargetKind::Jump(block));
                             todo_blocks.push_back((func, target.block));
                         }
                         Terminator::Branch { cond, true_target, false_target } => {
                             info.add_usage(*cond, Usage::BranchCond { func, from_block: block });
-                            info.add_target_usages(func, block, true_target, TargetIndex::BranchTrue);
+                            info.add_target_usages(func, true_target, TargetKind::BranchTrue(block));
                             todo_blocks.push_back((func, true_target.block));
-                            info.add_target_usages(func, block, false_target, TargetIndex::BranchFalse);
+                            info.add_target_usages(func, false_target, TargetKind::BranchFalse(block));
                             todo_blocks.push_back((func, false_target.block));
                         }
                         Terminator::Return { value } => {
@@ -184,12 +186,11 @@ impl UseInfo {
         self.usages.entry(value).or_default().push(usage);
     }
 
-    fn add_target_usages(&mut self, func: Function, block: Block, target: &Target, target_idx: TargetIndex) {
+    fn add_target_usages(&mut self, func: Function, target: &Target, target_kind: TargetKind) {
         for (phi_idx, &value) in target.phi_values.iter().enumerate() {
             self.add_usage(value, Usage::TargetPhiValue {
                 func,
-                from_block: block,
-                target_index: target_idx,
+                target_kind,
                 phi_index: phi_idx,
             })
         }
@@ -271,10 +272,8 @@ impl UseInfo {
                         _ => unreachable!()
                     }
                 }
-                Usage::TargetPhiValue { from_block, target_index: target_idx, phi_index: phi_idx, .. } => {
-                    let block_info = prog.get_block_mut(from_block);
-
-                    let target = terminator_target_by_index_mut(&mut block_info.terminator, target_idx);
+                Usage::TargetPhiValue { func, target_kind, phi_index: phi_idx } => {
+                    let target = target_kind.get_target_mut(prog, func);
                     repl(count, &mut target.phi_values[phi_idx], old, new);
                 }
                 Usage::BranchCond { from_block, .. } => {
@@ -296,39 +295,53 @@ impl UseInfo {
     }
 }
 
-pub fn terminator_target_by_index(term: &Terminator, index: TargetIndex) -> &Target {
-    match term {
-        Terminator::Jump { target } => {
-            assert_eq!(index, TargetIndex::Jump, "Jump only has Jump target");
-            target
-        }
-        Terminator::Branch { cond: _, true_target, false_target } => {
-            match index {
-                TargetIndex::Jump => panic!("Branch doesn't have Jump target"),
-                TargetIndex::BranchTrue => true_target,
-                TargetIndex::BranchFalse => false_target,
+impl TargetKind {
+    pub fn get_target(self, prog: &Program, func: Function) -> &Target {
+        match self {
+            TargetKind::Entry => &prog.get_func(func).entry,
+            TargetKind::Jump(block) => {
+                match &prog.get_block(block).terminator {
+                    Terminator::Jump { target } => target,
+                    _ => panic!("Expected to find Terminator::Jump for TargetKind::Jump")
+                }
+            }
+            TargetKind::BranchTrue(block) => {
+                match &prog.get_block(block).terminator {
+                    Terminator::Branch { true_target, .. } => true_target,
+                    _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchTrue")
+                }
+            }
+            TargetKind::BranchFalse(block) => {
+                match &prog.get_block(block).terminator {
+                    Terminator::Branch { false_target, .. } => false_target,
+                    _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchFalse")
+                }
             }
         }
-        Terminator::Return { .. } => panic!("Return doesn't have any targets"),
-        Terminator::Unreachable => panic!("Unreachable doesn't have any targets"),
     }
-}
 
-pub fn terminator_target_by_index_mut(term: &mut Terminator, index: TargetIndex) -> &mut Target {
-    match term {
-        Terminator::Jump { target } => {
-            assert_eq!(index, TargetIndex::Jump, "Jump only has Jump target");
-            target
-        }
-        Terminator::Branch { cond: _, true_target, false_target } => {
-            match index {
-                TargetIndex::Jump => panic!("Branch doesn't have Jump target"),
-                TargetIndex::BranchTrue => true_target,
-                TargetIndex::BranchFalse => false_target,
+    pub fn get_target_mut(self, prog: &mut Program, func: Function) -> &mut Target {
+        match self {
+            TargetKind::Entry => &mut prog.get_func_mut(func).entry,
+            TargetKind::Jump(block) => {
+                match &mut prog.get_block_mut(block).terminator {
+                    Terminator::Jump { target } => target,
+                    _ => panic!("Expected to find Terminator::Jump for TargetKind::Jump")
+                }
+            }
+            TargetKind::BranchTrue(block) => {
+                match &mut prog.get_block_mut(block).terminator {
+                    Terminator::Branch { true_target, .. } => true_target,
+                    _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchTrue")
+                }
+            }
+            TargetKind::BranchFalse(block) => {
+                match &mut prog.get_block_mut(block).terminator {
+                    Terminator::Branch { false_target, .. } => false_target,
+                    _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchFalse")
+                }
             }
         }
-        Terminator::Return { .. } => panic!("Return doesn't have any targets"),
-        Terminator::Unreachable => panic!("Unreachable doesn't have any targets"),
     }
 }
 

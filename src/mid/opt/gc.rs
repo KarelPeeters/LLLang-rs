@@ -41,7 +41,7 @@ fn collect_used(prog: &Program) -> Visited {
         let FunctionInfo { ty: _, func_ty: _, global_name: _, entry, params, slots }
             = prog.get_func(func);
 
-        todo.add_block(*entry);
+        todo.add_block(entry.block);
         for &param in params {
             todo.add_value(Value::Param(param));
         }

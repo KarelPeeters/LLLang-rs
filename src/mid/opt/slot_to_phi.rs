@@ -29,7 +29,7 @@ type PhiMap = HashMap<(Block, StackSlot), Phi>;
 fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> usize {
     let func_info = prog.get_func(func);
     let dom_info = DomInfo::new(prog, func);
-    let entry = func_info.entry;
+    let entry_block = func_info.entry.block;
 
     //figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
@@ -55,12 +55,17 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
         //fill in phi operands
         for &block in &dom_info.blocks {
             let block_instr_count = prog.get_block(block).instructions.len();
-            let value = get_value_for_slot(prog, &dom_info, &phi_map, entry, &replaced_slots, slot, block, block_instr_count);
+            let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, block, block_instr_count);
 
             prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
                 target.phi_values.push(value)
             });
         }
+
+        //TODO what is this for? does this ever make sense? fix this when rewriting slot_to_phi
+        //push entry undef values
+        let ty = prog.get_slot(slot).inner_ty;
+        prog.get_func_mut(func).entry.phi_values.push(Value::Undef(ty));
 
         let slot_usages = &use_info[Value::Slot(slot)];
 
@@ -76,7 +81,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
                         let load_index = prog.get_block(block).instructions.iter()
                             .position(|&i| i == instr).unwrap();
 
-                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry, &replaced_slots, slot, block, load_index);
+                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, block, load_index);
                         use_info.replace_usages(prog, Value::Instr(instr), value);
                     }
                     &InstructionInfo::Store { addr, .. } => {

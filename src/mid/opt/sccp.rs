@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use indexmap::map::IndexMap;
 
-use crate::mid::analyse::use_info::{for_each_usage_in_instr, terminator_target_by_index, Usage, UseInfo};
+use crate::mid::analyse::use_info::{for_each_usage_in_instr, Usage, UseInfo};
 use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
 
 ///Try to prove values are constant and replace them
@@ -113,7 +113,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
         match curr {
             Todo::FunctionInit(func) => {
                 if funcs_reachable.insert(func) {
-                    todo.push_back(Todo::BlockInit(func, prog.get_func(func).entry))
+                    todo.push_back(Todo::BlockInit(func, prog.get_func(func).entry.block))
                 }
             }
             Todo::BlockInit(func, block) => {
@@ -165,8 +165,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         Usage::BinaryOperand { instr, .. } => {
                             visit_instr(prog, &mut map, &mut todo, instr);
                         }
-                        Usage::TargetPhiValue { from_block, target_index, phi_index, .. } => {
-                            let target = terminator_target_by_index(&prog.get_block(from_block).terminator, target_index);
+                        Usage::TargetPhiValue { func, target_kind, phi_index } => {
+                            let target = target_kind.get_target(prog, func);
 
                             let phi = prog.get_block(target.block).phis[phi_index];
                             let new_value = map.eval(target.phi_values[phi_index]);

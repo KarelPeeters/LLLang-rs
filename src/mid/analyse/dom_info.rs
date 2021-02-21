@@ -17,7 +17,7 @@ impl DomInfo {
     // also don't store all of this redundant state
     pub fn new(prog: &Program, func: Function) -> Self {
         let func_info = prog.get_func(func);
-        let entry = func_info.entry;
+        let entry_block = func_info.entry.block;
 
         let mut blocks = Vec::new();
         prog.visit_blocks(func, |block| blocks.push(block));
@@ -35,7 +35,7 @@ impl DomInfo {
 
         let mut dominated_by: Vec<FixedBitSet> = blocks.iter().enumerate().map(|(bi, &block)| {
             let mut dominates = FixedBitSet::with_capacity(blocks.len());
-            if block == entry {
+            if block == entry_block {
                 dominates.set(bi, true)
             } else {
                 dominates.set_range(.., true);

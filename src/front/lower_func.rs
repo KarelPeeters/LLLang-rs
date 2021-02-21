@@ -659,7 +659,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
     pub fn lower_func(&mut self, decl: &'cst cst::FunctionDecl<'ast>) -> Result<'ast, ()> {
         let start = self.new_flow(true);
-        self.prog.get_func_mut(self.ir_func).entry = start.block;
+        self.prog.get_func_mut(self.ir_func).entry = ir::Target { block: start.block, phi_values: vec![] };
 
         let mut scope = self.module_scope.nest();
 

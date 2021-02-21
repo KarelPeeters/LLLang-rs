@@ -86,7 +86,8 @@ impl Default for Program {
         let main_func_ty = FunctionType { params: Vec::new(), ret: ty_int };
         let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
 
-        let entry = nodes.blocks.push(BlockInfo::new());
+        let block = nodes.blocks.push(BlockInfo::new());
+        let entry = Target { block, phi_values: vec![] };
         let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
         let main = nodes.funcs.push(main_info);
 
@@ -201,7 +202,7 @@ pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
     pub global_name: Option<String>,
-    pub entry: Block,
+    pub entry: Target,
     pub params: Vec<Parameter>,
     pub slots: Vec<StackSlot>,
 }
@@ -210,12 +211,13 @@ impl FunctionInfo {
     /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
-        let entry = prog.define_block(BlockInfo::new());
+        let block = prog.define_block(BlockInfo::new());
+        let entry = Target { block, phi_values: vec![] };
 
         Self::new_given_parts(func_ty, ty, entry)
     }
 
-    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Block) -> Self {
+    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target) -> Self {
         Self {
             ty,
             func_ty,
@@ -434,7 +436,7 @@ impl Program {
 
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry);
+        blocks_left.push_front(func.entry.block);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
@@ -454,7 +456,7 @@ impl Program {
 
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry);
+        blocks_left.push_front(func.entry.block);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
