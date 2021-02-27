@@ -86,7 +86,8 @@ impl Default for Program {
         let main_func_ty = FunctionType { params: Vec::new(), ret: ty_int };
         let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
 
-        let entry = nodes.blocks.push(BlockInfo::new());
+        let block = nodes.blocks.push(BlockInfo::new());
+        let entry = Target { block, phi_values: vec![] };
         let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
         let main = nodes.funcs.push(main_info);
 
@@ -201,7 +202,7 @@ pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
     pub global_name: Option<String>,
-    pub entry: Block,
+    pub entry: Target,
     pub params: Vec<Parameter>,
     pub slots: Vec<StackSlot>,
 }
@@ -210,12 +211,13 @@ impl FunctionInfo {
     /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
-        let entry = prog.define_block(BlockInfo::new());
+        let block = prog.define_block(BlockInfo::new());
+        let entry = Target { block, phi_values: vec![] };
 
         Self::new_given_parts(func_ty, ty, entry)
     }
 
-    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Block) -> Self {
+    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target) -> Self {
         Self {
             ty,
             func_ty,
@@ -307,6 +309,9 @@ pub enum LogicalOp {
 
 impl InstructionInfo {
     pub fn ty(&self, prog: &Program) -> Type {
+        //TODO this implementation is prone to infinite recursion!
+        // eg a = add (a, a) or similar constructs
+        // maybe change InstructionInfo to always include the result type?
         match self {
             InstructionInfo::Load { addr } => {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
@@ -428,13 +433,13 @@ pub struct ExternInfo {
 //Visitors
 //TODO think about how to structure this, right now it's kind of crappy and non consistent
 impl Program {
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, func: Function, mut f: F) -> Result<(), E> {
         let func = self.get_func(func);
 
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry);
+        blocks_left.push_front(func.entry.block);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
@@ -454,7 +459,7 @@ impl Program {
 
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry);
+        blocks_left.push_front(func.entry.block);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
@@ -469,7 +474,7 @@ impl Program {
         Ok(())
     }
 
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn visit_blocks<F: FnMut(Block)>(&self, func: Function, mut f: F) {
         //change this to use ! once that's stable
         self.try_visit_blocks::<(), _>(func, |block| {
@@ -478,7 +483,7 @@ impl Program {
         }).unwrap();
     }
 
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, func: Function, mut f: F) {
         //change this to use ! once that's stable
         self.try_visit_blocks_mut::<(), _>(func, |prog, block| {
@@ -490,7 +495,7 @@ impl Program {
 
 //Formatting related stuff
 impl Program {
-    /// Wrap a type as a Display value that recursively prints the type
+    /// Wrap a `Type` as a `Display` value that recursively prints a human-readable version of the type.
     pub fn format_type(&self, ty: Type) -> impl Display + '_ {
         struct Wrapped<'a> {
             ty: Type,
@@ -529,6 +534,44 @@ impl Program {
         }
 
         Wrapped { ty, prog: self }
+    }
+
+    /// Wrap a `Value` as a `Display` value that prints a mostly human-readable representation of the value,
+    /// including the type.
+    pub fn format_value(&self, value: Value) -> impl Display + '_ {
+        struct Wrapped<'a> {
+            value: Value,
+            prog: &'a Program,
+        }
+
+        impl Display for Wrapped<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                let ty = self.prog.format_type(self.prog.type_of_value(self.value));
+
+                match self.value {
+                    Value::Undef(_) =>
+                        write!(f, "Undef(: {})", ty),
+                    Value::Const(cst) =>
+                        write!(f, "Const({}: {})", cst.value, ty),
+                    Value::Func(func) =>
+                        write!(f, "Func({:?}: {})", func.0, ty),
+                    Value::Param(param) =>
+                        write!(f, "Param({:?}: {})", param.0, ty),
+                    Value::Slot(slot) =>
+                        write!(f, "Slot({:?}: {})", slot.0, ty),
+                    Value::Phi(phi) =>
+                        write!(f, "Phi({:?}: {})", phi.0, ty),
+                    Value::Instr(instr) =>
+                        write!(f, "Instr({:?}: {})", instr.0, ty),
+                    Value::Extern(ext) =>
+                        write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
+                    Value::Data(data) =>
+                        write!(f, "Data({:?}: {})", data.0, ty),
+                }
+            }
+        }
+
+        Wrapped { value, prog: self }
     }
 }
 
