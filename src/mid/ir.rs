@@ -309,6 +309,9 @@ pub enum LogicalOp {
 
 impl InstructionInfo {
     pub fn ty(&self, prog: &Program) -> Type {
+        //TODO this implementation is prone to infinite recursion!
+        // eg a = add (a, a) or similar constructs
+        // maybe change InstructionInfo to always include the result type?
         match self {
             InstructionInfo::Load { addr } => {
                 prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
@@ -430,7 +433,7 @@ pub struct ExternInfo {
 //Visitors
 //TODO think about how to structure this, right now it's kind of crappy and non consistent
 impl Program {
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, func: Function, mut f: F) -> Result<(), E> {
         let func = self.get_func(func);
 
@@ -471,7 +474,7 @@ impl Program {
         Ok(())
     }
 
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn visit_blocks<F: FnMut(Block)>(&self, func: Function, mut f: F) {
         //change this to use ! once that's stable
         self.try_visit_blocks::<(), _>(func, |block| {
@@ -480,7 +483,7 @@ impl Program {
         }).unwrap();
     }
 
-    /// Visit all the blocks reachable from the entry of `func`
+    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
     pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, func: Function, mut f: F) {
         //change this to use ! once that's stable
         self.try_visit_blocks_mut::<(), _>(func, |prog, block| {
@@ -492,7 +495,7 @@ impl Program {
 
 //Formatting related stuff
 impl Program {
-    /// Wrap a type as a Display value that recursively prints the type
+    /// Wrap a `Type` as a `Display` value that recursively prints a human-readable version of the type.
     pub fn format_type(&self, ty: Type) -> impl Display + '_ {
         struct Wrapped<'a> {
             ty: Type,
@@ -531,6 +534,44 @@ impl Program {
         }
 
         Wrapped { ty, prog: self }
+    }
+
+    /// Wrap a `Value` as a `Display` value that prints a mostly human-readable representation of the value,
+    /// including the type.
+    pub fn format_value(&self, value: Value) -> impl Display + '_ {
+        struct Wrapped<'a> {
+            value: Value,
+            prog: &'a Program,
+        }
+
+        impl Display for Wrapped<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                let ty = self.prog.format_type(self.prog.type_of_value(self.value));
+
+                match self.value {
+                    Value::Undef(_) =>
+                        write!(f, "Undef(: {})", ty),
+                    Value::Const(cst) =>
+                        write!(f, "Const({}: {})", cst.value, ty),
+                    Value::Func(func) =>
+                        write!(f, "Func({:?}: {})", func.0, ty),
+                    Value::Param(param) =>
+                        write!(f, "Param({:?}: {})", param.0, ty),
+                    Value::Slot(slot) =>
+                        write!(f, "Slot({:?}: {})", slot.0, ty),
+                    Value::Phi(phi) =>
+                        write!(f, "Phi({:?}: {})", phi.0, ty),
+                    Value::Instr(instr) =>
+                        write!(f, "Instr({:?}: {})", instr.0, ty),
+                    Value::Extern(ext) =>
+                        write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
+                    Value::Data(data) =>
+                        write!(f, "Data({:?}: {})", data.0, ty),
+                }
+            }
+        }
+
+        Wrapped { value, prog: self }
     }
 }
 

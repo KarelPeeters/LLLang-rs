@@ -121,7 +121,7 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
     }
 }
 
-fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Result<PathBuf> {
     println!("----Parse------");
     let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
@@ -143,10 +143,14 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool) -> Result<PathBuf> {
         .write_fmt(format_args!("{}", ir_program))?;
 
     println!("----Optimize---");
-    run_optimizations(&mut ir_program);
-    let ir_opt_file = ll_path.with_extension("ir_opt");
-    File::create(&ir_opt_file)?
-        .write_fmt(format_args!("{}", ir_program))?;
+    if optimize {
+        run_optimizations(&mut ir_program);
+        let ir_opt_file = ll_path.with_extension("ir_opt");
+        File::create(&ir_opt_file)?
+            .write_fmt(format_args!("{}", ir_program))?;
+    } else {
+        println!("skipped")
+    }
 
     println!("----Backend----");
     let asm = back::x86_asm::lower(&ir_program);
@@ -161,9 +165,9 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
     println!("----Assemble---");
     let result = Command::new("nasm")
         .current_dir(asm_path.parent().unwrap())
-        .arg("-gcv8")
         .arg("-O0")
         .arg("-fwin32")
+        .arg("-g")
         .arg(asm_path.file_name().unwrap())
         .status()?;
 
@@ -174,6 +178,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
     let result = Command::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.27.29110\\bin\\Hostx64\\x86\\link.exe")
         .current_dir(asm_path.parent().unwrap())
         .arg("/nologo")
+        .arg("/debug")
         .arg("/subsystem:console")
         .arg("/nodefaultlib")
         .arg("/entry:main")
@@ -200,6 +205,9 @@ fn run_exe(exe_path: &Path) -> std::io::Result<()> {
 struct Opts {
     #[clap(long)]
     no_std: bool,
+
+    #[clap(long)]
+    no_opt: bool,
 
     #[clap(subcommand)]
     command: SubCommand,
@@ -243,7 +251,7 @@ fn main() -> Result<()> {
     };
 
     let asm_path = match level {
-        Level::LL => compile_ll_to_asm(&path, !opts.no_std)?,
+        Level::LL => compile_ll_to_asm(&path, !opts.no_std, !opts.no_opt)?,
         Level::ASM => path,
     };
 
