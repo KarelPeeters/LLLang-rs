@@ -114,9 +114,8 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
+version = "0.10.0"
+source = "git+https://github.com/KarelPeeters/itertools#c4b94608ac022ad31430d9d8f66673f916b89012"
 dependencies = [
  "either",
 ]

@@ -1,6 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use indexmap::map::IndexMap;
+use itertools::zip_eq;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, Usage, UseInfo};
 use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
@@ -274,7 +275,7 @@ fn update_target_reachable(prog: &Program, map: &mut LatticeMap, todo: &mut VecD
 
     //merge phi values
     let target_block_info = prog.get_block(target.block);
-    for (&phi, &phi_value) in target_block_info.phis.iter().zip(&target.phi_values) {
+    for (&phi, &phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
         map.merge_value(todo, Value::Phi(phi), map.eval(phi_value));
     }
 }
@@ -293,7 +294,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
 
                 //merge in arguments
                 let target_info = prog.get_func(target);
-                for (&param, &arg) in target_info.params.iter().zip(args) {
+                for (&param, &arg) in zip_eq(&target_info.params, args) {
                     map.merge_value(todo, Value::Param(param), map.eval(arg))
                 }
 

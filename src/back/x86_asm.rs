@@ -1,7 +1,7 @@
 use std::cmp::max;
 
 use indexmap::map::IndexMap;
-use itertools::{Itertools, zip, zip_eq};
+use itertools::{Itertools, zip_eq};
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::mid::ir::{ArithmeticOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
@@ -413,7 +413,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
     fn append_jump_to_target(&mut self, target: &Target) {
         let target_block_info = self.prog.get_block(target.block);
 
-        for (phi, phi_value) in target_block_info.phis.iter().zip(&target.phi_values) {
+        for (phi, phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
             let pre_pos = self.local_layout.offsets[self.phi_stack_indices[phi].pre];
             self.append_value_to_mem(MemRegOffset::stack(pre_pos), phi_value, 0);
         }
@@ -478,7 +478,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                         self.append_instr(&format!("sub esp, {}", stack_delta));
                     }
 
-                    for (arg, offset) in zip(args, param_layout.offsets).rev() {
+                    for (arg, offset) in zip_eq(args, param_layout.offsets).rev() {
                         self.append_value_to_mem(MemRegOffset::stack(offset), arg, stack_delta);
                     }
 

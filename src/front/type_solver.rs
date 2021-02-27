@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 
-use itertools::{Itertools, zip};
+use itertools::{Itertools, zip_eq};
 
 use crate::front::cst;
 use crate::front::cst::{Type, TypeInfo, TypeStore};
@@ -278,14 +278,14 @@ impl<'ast> TypeProblem<'ast> {
             }
             (TypeInfo::Tuple(left), TypeInfo::Tuple(right)) => {
                 assert_eq!(left.fields.len(), right.fields.len());
-                for (left, right) in zip(left.fields.clone(), right.fields.clone()) {
+                for (left, right) in zip_eq(left.fields.clone(), right.fields.clone()) {
                     self.unify_var(left, right);
                 }
             }
             (TypeInfo::Function(left), TypeInfo::Function(right)) => {
                 assert_eq!(left.params.len(), right.params.len());
                 let (left_ret, right_ret) = (left.ret, right.ret);
-                for (left, right) in zip(left.params.clone(), right.params.clone()) {
+                for (left, right) in zip_eq(left.params.clone(), right.params.clone()) {
                     self.unify_var(left, right);
                 }
 
