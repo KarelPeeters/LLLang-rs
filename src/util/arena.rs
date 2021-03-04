@@ -90,6 +90,10 @@ impl<K: IndexType, T> Arena<K, T> {
     pub fn iter(&self) -> impl Iterator<Item=(K, &T)> {
         self.into_iter()
     }
+    
+    pub fn keys(&self) -> impl Iterator<Item=K> + '_ {
+        self.map.keys().map(|&i| K::new(Idx::new(i)))
+    }
 
     pub fn retain<F: FnMut(K, &T) -> bool>(&mut self, mut keep: F) {
         self.map.retain(|&i, v| keep(K::new(Idx::new(i)), v))

@@ -230,6 +230,7 @@ impl FunctionInfo {
 }
 
 #[derive(Debug)]
+//TODO should this include the owning function? this would simplify the dominance checking a bit
 pub struct ParameterInfo {
     pub ty: Type,
 }

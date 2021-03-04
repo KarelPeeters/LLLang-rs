@@ -2,6 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use indexmap::map::IndexMap;
 
+use crate::mid::analyse::dom_info::{DomInfo, DomRequirement};
 use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
 
 //TODO figure out a way to fake type safety here, eg guarantee that the linked instruction is indeed
@@ -79,6 +80,33 @@ pub enum TargetKind {
 #[derive(Debug)]
 pub struct UseInfo {
     usages: IndexMap<Value, Vec<Usage>>,
+}
+
+impl Usage {
+    /// The property needed by the used value to ensure that value dominates the usage.
+    fn dominance_requirement(self) -> DomRequirement {
+        match self {
+            Usage::Main =>
+                DomRequirement::Global,
+            Usage::Addr { func, block, instr } |
+            Usage::StoreValue { func, block, instr } |
+            Usage::CallTarget { func, block, instr } |
+            Usage::CallArgument { func, block, instr, index: _ } |
+            Usage::BinaryOperand { func, block, instr } |
+            Usage::SubPtrTarget { func, block, instr } =>
+                DomRequirement::BeforeInstr { func, block, instr },
+            Usage::TargetPhiValue { func, target_kind, phi_index } => {
+                match target_kind {
+                    TargetKind::Entry =>
+                        DomRequirement::InFunction { func },
+                    TargetKind::Jump(block) | TargetKind::BranchTrue(block) | TargetKind::BranchFalse(block) =>
+                        DomRequirement::BeforeTerminator { func, block },
+                }
+            }
+            Usage::BranchCond { func, from_block } | Usage::ReturnValue { func, from_block } =>
+                DomRequirement::BeforeTerminator { func, block: from_block }
+        }
+    }
 }
 
 pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
@@ -194,6 +222,10 @@ impl UseInfo {
                 phi_index: phi_idx,
             })
         }
+    }
+
+    pub fn value_dominates_usage(prog: &Program, dom_info: &DomInfo, value: Value, usage: Usage) -> bool {
+        todo!()
     }
 
     //TODO figure out a way to make all of this a lot more typesafe

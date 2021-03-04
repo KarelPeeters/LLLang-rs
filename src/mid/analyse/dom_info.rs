@@ -1,6 +1,6 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Function, Program};
+use crate::mid::ir::{Block, Function, Program, Instruction};
 use crate::util::IndexMutTwice;
 
 #[derive(Debug)]
@@ -10,6 +10,36 @@ pub struct DomInfo {
     dominates: Vec<FixedBitSet>,
     frontier: Vec<FixedBitSet>,
     parent: Vec<Option<usize>>,
+}
+
+/// Describes the availability of a certain value.
+#[derive(Debug, Copy, Clone)]
+pub enum DomAvailability {
+    /// defined globally
+    Global,
+    /// defined in the entire function
+    InFunction { func: Function },
+    /// defined before the start of the block (even before the phis)
+    BeforeBlock { func: Function, block: Block },
+    /// defined by the end of the block (before the terminator)
+    BeforeTerminator { func: Function, block: Block },
+    /// defined before the instruction in the block
+    BeforeInstr { func: Function, block: Block, instr: Instruction },
+}
+
+/// Describes the dominance requirement on a certain value.
+#[derive(Debug, Copy, Clone)]
+pub enum DomRequirement {
+    /// required globally
+    Global,
+    /// required in the entire function
+    InFunction { func: Function },
+    /// required before the start of the block (even before the phis)
+    BeforeBlock { func: Function, block: Block },
+    /// required before the instruction in the block
+    BeforeInstr { func: Function, block: Block, instr: Instruction },
+    /// required by the end of the block (before the terminator)
+    BeforeTerminator { func: Function, block: Block },
 }
 
 impl DomInfo {
@@ -153,10 +183,24 @@ impl DomInfo {
             .map(move |bi| self.blocks[bi])
     }
 
+    /// Iterate over the immediate predecessors of `block`.
     pub fn iter_predecessors(&self, block: Block) -> impl Iterator<Item=Block> + '_ {
         let bi = self.block_index(block);
         (0..self.blocks.len())
             .filter(move |&pi| self.successors[pi][bi])
             .map(move |pi| self.blocks[pi])
+    }
+
+    fn is_available(&self, prog: &Program, availability: DomAvailability, requirement: DomRequirement) -> bool {
+        match (availability, requirement) {
+            (DomAvailability::Global, _) => true,
+            (_, DomRequirement::Global) => false,
+            (DomAvailability::InFunction { func: func_available },
+                DomRequirement::InFunction { func } |
+                DomRequirement::BeforeTerminator { func, ..}
+            ) => {
+                todo!()
+            }
+        }
     }
 }

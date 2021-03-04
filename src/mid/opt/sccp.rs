@@ -4,9 +4,9 @@ use indexmap::map::IndexMap;
 use itertools::zip_eq;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Value, Type};
 
-///Try to prove values are constant and replace them
+///Try to prove values are constant or only equal to a single other value and replace them
 pub fn sccp(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
 
@@ -21,6 +21,7 @@ pub fn sccp(prog: &mut Program) -> bool {
 enum Lattice {
     Undef,
     Const(Value),
+    Other(Value),
     Overdef,
 }
 
@@ -29,10 +30,14 @@ impl Lattice {
         match (left, right) {
             (Lattice::Overdef, _) | (_, Lattice::Overdef) =>
                 Lattice::Overdef,
+            (Lattice::Const(_), Lattice::Other(_)) |(Lattice::Other(_), Lattice::Const(_)) =>
+                Lattice::Overdef,
             (Lattice::Undef, other) | (other, Lattice::Undef) =>
                 other,
             (Lattice::Const(left), Lattice::Const(right)) =>
                 if left == right { Lattice::Const(left) } else { Lattice::Overdef },
+            (Lattice::Other(left), Lattice::Other(right)) =>
+                if left == right { Lattice::Other(left) } else { Lattice::Overdef },
         }
     }
 
@@ -41,6 +46,10 @@ impl Lattice {
             Lattice::Undef => Some(Value::Undef(ty)),
             Lattice::Const(value) => {
                 assert!(value.is_const_like());
+                Some(value)
+            }
+            Lattice::Other(value) => {
+                assert!(!value.is_const_like());
                 Some(value)
             }
             Lattice::Overdef => None,
@@ -53,6 +62,9 @@ struct LatticeMap {
     func_returns: IndexMap<Function, Lattice>,
     values: IndexMap<Value, Lattice>,
 }
+
+//TODO what if there are multiple other candidate values?
+// => doesn't matter, they will be recursively replaced hopefully
 
 impl LatticeMap {
     fn eval(&self, value: Value) -> Lattice {
@@ -70,7 +82,7 @@ impl LatticeMap {
     fn merge_value(&mut self, todo: &mut VecDeque<Todo>, value: Value, new: Lattice) {
         assert!(matches!(value, Value::Param(_) | Value::Phi(_) | Value::Instr(_)));
 
-        let prev = self.eval(value);
+        let prev = *self.values.get(&value).unwrap_or(&Lattice::Undef);
         let next = Lattice::merge(prev, new);
         self.values.insert(value, next);
 
@@ -359,6 +371,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
 }
 
 fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice_map: &LatticeMap) -> usize {
+    //TODO in the single-other-value case, make sure that that value dominates the usage, otherwise the replacement is not safe
+
     let mut count = 0;
 
     for (&value, &lattice_value) in &lattice_map.values {
