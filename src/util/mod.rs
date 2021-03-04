@@ -19,3 +19,14 @@ impl<T> IndexMutTwice<T> for [T] {
         }
     }
 }
+
+pub fn zip_eq<L: ExactSizeIterator, R: ExactSizeIterator>(
+    left: impl IntoIterator<IntoIter=L>,
+    right: impl IntoIterator<IntoIter=R>,
+) -> std::iter::Zip<L, R> {
+    let left = left.into_iter();
+    let right = right.into_iter();
+
+    assert_eq!(left.len(), right.len(), "iterators are not the same length");
+    left.zip(right)
+}

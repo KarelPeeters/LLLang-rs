@@ -1,10 +1,11 @@
 use std::cmp::max;
 
 use indexmap::map::IndexMap;
-use itertools::{Itertools, zip_eq};
+use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::mid::ir::{ArithmeticOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::util::zip_eq;
 
 pub fn lower(prog: &Program) -> String {
     AsmBuilder {

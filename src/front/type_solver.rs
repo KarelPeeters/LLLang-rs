@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 
-use itertools::{Itertools, zip_eq};
+use itertools::Itertools;
 
 use crate::front::cst;
 use crate::front::cst::{Type, TypeInfo, TypeStore};
+use crate::util::zip_eq;
 
 type VarTypeInfo<'ast> = cst::TypeInfo<'ast, TypeVar>;
 type KnownTypeInfo<'ast> = cst::TypeInfo<'ast, Type>;

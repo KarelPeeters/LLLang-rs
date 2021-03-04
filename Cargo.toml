@@ -12,5 +12,4 @@ clap = "3.0.0-beta.2"
 derive_more = "0.99.11"
 fixedbitset = "0.3.1"
 walkdir = "2.3.1"
-# custom version that has zip_eq(..).rev() implemented
-itertools = { git = "https://github.com/KarelPeeters/itertools" }
+itertools = "0.10.0"

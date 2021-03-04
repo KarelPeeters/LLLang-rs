@@ -1,10 +1,10 @@
 use std::collections::{HashSet, VecDeque};
 
 use indexmap::map::IndexMap;
-use itertools::zip_eq;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, Usage, UseInfo};
 use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
+use crate::util::zip_eq;
 
 ///Try to prove values are constant and replace them
 pub fn sccp(prog: &mut Program) -> bool {
