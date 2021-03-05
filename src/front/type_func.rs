@@ -188,7 +188,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.equal(expect_ty, value_ty);
                 self.decl_type_map.insert(decl as *const _, expect_ty);
 
-                scope.declare(&decl.id, ScopedItem::Value(ScopedValue::TypeVar(expect_ty)))?;
+                scope.maybe_declare(&decl.id, ScopedItem::Value(ScopedValue::TypeVar(expect_ty)))?;
 
                 Ok(())
             }
@@ -234,7 +234,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.equal(index_ty, end_ty);
 
                 let mut index_scope = scope.nest();
-                index_scope.declare(&for_stmt.index, ScopedItem::Value(ScopedValue::TypeVar(index_ty)))?;
+                index_scope.maybe_declare(&for_stmt.index, ScopedItem::Value(ScopedValue::TypeVar(index_ty)))?;
 
                 self.visit_nested_block(&index_scope, &for_stmt.body)?;
 
@@ -264,7 +264,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             let ty = decl.func_ty.params[i];
             let ty_var = self.problem.fully_known(&self.types, ty);
 
-            scope.declare(&param.id, ScopedItem::Value(ScopedValue::TypeVar(ty_var)))?;
+            scope.maybe_declare(&param.id, ScopedItem::Value(ScopedValue::TypeVar(ty_var)))?;
         }
 
         let body = decl.ast.body.as_ref().

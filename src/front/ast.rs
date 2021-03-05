@@ -27,6 +27,12 @@ pub enum TypeKind {
 }
 
 #[derive(Debug)]
+pub enum MaybeIdentifier {
+    Identifier(Identifier),
+    Placeholder(Span),
+}
+
+#[derive(Debug)]
 pub struct Identifier {
     pub span: Span,
     pub string: String,
@@ -93,7 +99,7 @@ pub struct Function {
 #[derive(Debug)]
 pub struct Parameter {
     pub span: Span,
-    pub id: Identifier,
+    pub id: MaybeIdentifier,
     pub ty: Type,
 }
 
@@ -124,7 +130,7 @@ pub enum StatementKind {
 pub struct Declaration {
     pub span: Span,
     pub mutable: bool,
-    pub id: Identifier,
+    pub id: MaybeIdentifier,
     pub ty: Option<Type>,
     pub init: Option<Box<Expression>>,
 }
@@ -154,7 +160,7 @@ pub struct WhileStatement {
 #[derive(Debug)]
 pub struct ForStatement {
     pub span: Span,
-    pub index: Identifier,
+    pub index: MaybeIdentifier,
     pub index_ty: Option<Type>,
     pub start: Box<Expression>,
     pub end: Box<Expression>,

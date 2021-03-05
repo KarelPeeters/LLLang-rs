@@ -24,6 +24,15 @@ impl<V: Debug> Scope<'_, V> {
         }
     }
 
+    pub fn maybe_declare<'a>(&mut self, id: &'a ast::MaybeIdentifier, var: V) -> Result<'a, ()> {
+        match id {
+            ast::MaybeIdentifier::Identifier(id) =>
+                self.declare(id, var),
+            ast::MaybeIdentifier::Placeholder(_) =>
+                Ok(())
+        }
+    }
+
     /// Declare a value with the given id. Panics if the id already exists in this scope.
     pub fn declare_str(&mut self, id: &str, var: V) {
         let prev = self.values.insert(id.to_owned(), var);

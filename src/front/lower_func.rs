@@ -518,7 +518,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let slot = self.define_slot(ty_ir);
                 let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
-                scope.declare(&decl.id, item)?;
+                scope.maybe_declare(&decl.id, item)?;
 
                 //optionally store the value
                 if let Some(value) = value {
@@ -597,7 +597,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
                 let index_slot_value = LRValue::Left(TypedValue { ty: index_ty_ptr, ir: index_slot });
                 let item = ScopedItem::Value(ScopedValue::Immediate(index_slot_value));
-                index_scope.declare(&for_stmt.index, item)?;
+                index_scope.maybe_declare(&for_stmt.index, item)?;
 
                 //index = start
                 self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, value: start_value.ir });
@@ -684,7 +684,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
             let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
-            scope.declare(&param.id, item)?;
+            scope.maybe_declare(&param.id, item)?;
         }
 
         let body = decl.ast.body.as_ref().

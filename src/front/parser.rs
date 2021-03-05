@@ -528,11 +528,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parameter(&mut self) -> Result<ast::Parameter> {
-        let id = self.identifier("parameter name")?;
+        let start = self.peek().span.start;
+        let id = self.maybe_identifier("parameter name")?;
         self.expect(TT::Colon, "parameter type")?;
         let ty = self.type_decl()?;
 
-        let span = Span::new(id.span.start, ty.span.end);
+        let span = Span::new(start, ty.span.end);
         Ok(ast::Parameter { span, id, ty })
     }
 
@@ -581,7 +582,7 @@ impl<'a> Parser<'a> {
             TT::For => {
                 self.pop()?;
 
-                let index = self.identifier("index variable")?;
+                let index = self.maybe_identifier("index variable")?;
                 let index_ty = self.maybe_type_decl()?;
 
                 self.expect(TT::In, "in")?;
@@ -628,7 +629,7 @@ impl<'a> Parser<'a> {
     fn variable_declaration(&mut self, ty: TT) -> Result<ast::Declaration> {
         let start_pos = self.expect(ty, "variable declaration")?.span.start;
         let mutable = self.accept(TT::Mut)?.is_some();
-        let id = self.identifier("variable name")?;
+        let id = self.maybe_identifier("variable name")?;
 
         let ty = self.maybe_type_decl()?;
         let init = self.accept(TT::Eq)?
@@ -861,6 +862,14 @@ impl<'a> Parser<'a> {
 
         let span = Span::new(id.span.start, self.last_popped_end);
         Ok(ast::Path { span, parents, id })
+    }
+
+    fn maybe_identifier(&mut self, description: &'static str) -> Result<ast::MaybeIdentifier> {
+        if self.at(TT::Underscore) {
+            Ok(ast::MaybeIdentifier::Placeholder(self.pop()?.span))
+        } else {
+            Ok(ast::MaybeIdentifier::Identifier(self.identifier(description)?))
+        }
     }
 
     fn identifier(&mut self, description: &'static str) -> Result<ast::Identifier> {
