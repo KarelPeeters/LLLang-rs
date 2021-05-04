@@ -401,8 +401,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
         // so we don't need to clear them here
         match size {
             RegisterSize::S8 => {
+                self.append_instr("cwd");
                 self.append_instr("idiv bx");
-                self.append_instr("mov dx, ah")
+                self.append_instr("mov edx, eax")
             }
             RegisterSize::S16 | RegisterSize::S32 => {
                 self.append_instr(&format!("xor {d}, {d}", d = Register::D.with_size(size)));
@@ -518,7 +519,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                             } else {
                                 self.append_instr(&format!("imul {}, {}", a, b));
                             }
-                        },
+                        }
                         ArithmeticOp::Div => self.append_div(size),
                         ArithmeticOp::Mod => {
                             self.append_div(size);
