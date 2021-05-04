@@ -12,9 +12,9 @@ use crate::front::type_func::TypeFuncState;
 use crate::mid::ir;
 
 /// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
-/// is an LValue of RValue. LValues are values that can appear on the right side of assignments, RValues are those that cannot.
+/// is an LValue of RValue. LValues are values that can appear on the left side of assignments, RValues are those that cannot.
 /// This concept is orthogonal to mutability.
-/// It's also possible to think of an LValue as a pointer that looks like it has the dereferenced type and it
+/// It's also possible to think of an LValue as a pointer that looks like it has the dereferenced type and is
 /// dereferenced automatically when required.
 #[derive(Debug, Copy, Clone)]
 pub enum LRValue {
@@ -226,11 +226,13 @@ fn map_function<'a>(
         }
         (ext, true) => {
             let mut func_ir = ir::FunctionInfo::new(ty_func_ir, prog);
+
+            func_ir.debug_name = Some(decl.ast.id.string.clone());
             if ext {
                 func_ir.global_name = Some(decl.ast.id.string.clone())
             }
-            let func_ir = prog.define_func(func_ir);
 
+            let func_ir = prog.define_func(func_ir);
             Ok((Some(func_ir), ir::Value::Func(func_ir)))
         }
     }?;

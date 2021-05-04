@@ -38,8 +38,10 @@ fn collect_used(prog: &Program) -> Visited {
     todo.add_value(Value::Func(prog.main));
 
     while let Some(func) = todo.funcs.pop_front() {
-        let FunctionInfo { ty: _, func_ty: _, global_name: _, entry, params, slots }
-            = prog.get_func(func);
+        let FunctionInfo {
+            entry, params, slots,
+            ty: _, func_ty: _, global_name: _, debug_name: _
+        } = prog.get_func(func);
 
         todo.add_block(entry.block);
         for &param in params {

@@ -202,6 +202,7 @@ pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
     pub global_name: Option<String>,
+    pub debug_name: Option<String>,
     pub entry: Target,
     pub params: Vec<Parameter>,
     pub slots: Vec<StackSlot>,
@@ -222,6 +223,7 @@ impl FunctionInfo {
             ty,
             func_ty,
             global_name: None,
+            debug_name: None,
             entry,
             params: Vec::new(),
             slots: Vec::new(),
@@ -587,6 +589,14 @@ impl Display for Program {
 
         for (func, func_info) in &self.nodes.funcs {
             writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
+
+            if let Some(global_name) = &func_info.global_name {
+                writeln!(f, "    global_name: {}", global_name)?;
+            }
+            if let Some(debug_name) = &func_info.debug_name {
+                writeln!(f, "    debug_name: {}", debug_name)?;
+            }
+
             if !func_info.params.is_empty() {
                 writeln!(f, "    params:")?;
                 for &param in &func_info.params {

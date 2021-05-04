@@ -148,7 +148,11 @@ impl AsmBuilder<'_> {
         let local_layout = TupleLayout::from_types(&self.prog, local_types.iter().copied());
 
         let func_number = self.func_number(func);
-        output.append_ln(&format!("func_{}:", func_number));
+        if let Some(debug_name) = &func_info.debug_name {
+            output.append_ln(&format!("func_{}: ; {}: {}", func_number, debug_name, self.prog.format_type(func_info.ty)));
+        } else {
+            output.append_ln(&format!("func_{}: ; {}", func_number, self.prog.format_type(func_info.ty)));
+        }
 
         //grow stack
         let required_stack_alignment = max(param_layout.layout.alignment, local_layout.layout.alignment);
