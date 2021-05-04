@@ -339,7 +339,7 @@ impl<'ast, T> TypeInfo<'ast, T> {
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct TupleTypeInfo<T> {
-    pub fields: Vec<T>
+    pub fields: Vec<T>,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -349,42 +349,48 @@ pub struct FunctionTypeInfo<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct StructTypeInfo<'a> {
-    pub decl: &'a ast::Struct,
-    pub fields: Vec<(&'a str, Type)>,
+pub struct StructTypeInfo<'ast> {
+    pub decl: &'ast ast::Struct,
+    pub fields: Vec<StructFieldInfo<'ast>>,
 }
 
-impl<'a> StructTypeInfo<'a> {
-    pub fn fiend_field(&self, index: &str) -> Option<(u32, Type)> {
-        self.fields.iter().enumerate()
-            .find(|(_, (id, _))| *id == index)
-            .map(|(i, (_, ty))| (i as u32, *ty))
+#[derive(Debug, Copy, Clone)]
+pub struct StructFieldInfo<'ast> {
+    pub id: &'ast str,
+    pub ty: Type,
+}
+
+impl<'ast> StructTypeInfo<'ast> {
+    pub fn find_field_index(&self, index: &str) -> Option<u32> {
+        self.fields.iter()
+            .position(|field| field.id == index)
+            .map(|i| i as u32)
     }
 }
 
-impl<'a> Hash for StructTypeInfo<'a> {
+impl<'ast> Hash for StructTypeInfo<'ast> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::ptr::hash(self.decl, state)
     }
 }
 
-impl<'a> PartialEq for StructTypeInfo<'a> {
+impl<'ast> PartialEq for StructTypeInfo<'ast> {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.decl, other.decl)
     }
 }
 
-impl<'a> Eq for StructTypeInfo<'a> {}
+impl<'ast> Eq for StructTypeInfo<'ast> {}
 
 #[derive(Debug)]
-pub struct FunctionDecl<'a> {
+pub struct FunctionDecl<'ast> {
     pub ty: Type,
     pub func_ty: FunctionTypeInfo<Type>,
-    pub ast: &'a ast::Function,
+    pub ast: &'ast ast::Function,
 }
 
 #[derive(Debug)]
-pub struct ConstDecl<'a> {
+pub struct ConstDecl<'ast> {
     pub ty: Type,
-    pub ast: &'a ast::Const,
+    pub ast: &'ast ast::Const,
 }

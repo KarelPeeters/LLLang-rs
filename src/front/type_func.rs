@@ -8,7 +8,7 @@ use crate::front::cst::{FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, Sc
 use crate::front::error::Result;
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
-use crate::front::type_solver::{TypeProblem, TypeVar};
+use crate::front::type_solver::{Origin, TypeProblem, TypeVar};
 
 /// The state necessary to lower a single function.
 pub struct TypeFuncState<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
@@ -36,20 +36,22 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
         scope: &Scope<ScopedItem>,
         expr: &'ast ast::Expression,
     ) -> Result<'ast, TypeVar> {
+        let expr_origin = Origin::Expression(expr);
+
         let result: TypeVar = match &expr.kind {
             ast::ExpressionKind::Null => {
                 // null can take on any pointer type
-                let inner_ty = self.problem.unknown();
-                self.problem.known(TypeInfo::Pointer(inner_ty))
+                let inner_ty = self.problem.unknown(expr_origin);
+                self.problem.known(expr_origin, TypeInfo::Pointer(inner_ty))
             }
             ast::ExpressionKind::BoolLit { .. } => {
                 self.problem.ty_bool()
             }
             ast::ExpressionKind::IntLit { .. } => {
-                self.problem.unknown_int()
+                self.problem.unknown_int(expr_origin)
             }
             ast::ExpressionKind::StringLit { .. } => {
-                self.problem.known(TypeInfo::Pointer(self.problem.ty_byte()))
+                self.problem.known(expr_origin, TypeInfo::Pointer(self.problem.ty_byte()))
             }
             ast::ExpressionKind::Path(path) => {
                 let item = self.items.resolve_path(ScopeKind::Real, scope, path)?;
@@ -70,7 +72,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let cond_ty = self.visit_expr(&scope, &*condition)?;
                 self.problem.equal(cond_ty, self.problem.ty_bool());
 
-                let value_ty = self.problem.unknown();
+                let value_ty = self.problem.unknown(expr_origin);
                 let then_ty = self.visit_expr(&scope, then_value)?;
                 let else_ty = self.visit_expr(&scope, else_value)?;
                 self.problem.equal(value_ty, then_ty);
@@ -79,7 +81,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let value_ty = self.problem.unknown_int();
+                let value_ty = self.problem.unknown_int(expr_origin);
 
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
@@ -97,19 +99,19 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 match kind {
                     ast::UnaryOp::Ref => {
                         let inner_ty = self.visit_expr(scope, inner)?;
-                        self.problem.known(TypeInfo::Pointer(inner_ty))
+                        self.problem.known(expr_origin, TypeInfo::Pointer(inner_ty))
                     }
                     ast::UnaryOp::Deref => {
                         let inner_ty = self.visit_expr(scope, inner)?;
 
-                        let deref_ty = self.problem.unknown();
-                        let ref_ty = self.problem.known(TypeInfo::Pointer(deref_ty));
+                        let deref_ty = self.problem.unknown(expr_origin);
+                        let ref_ty = self.problem.known(expr_origin, TypeInfo::Pointer(deref_ty));
                         self.problem.equal(inner_ty, ref_ty);
 
                         deref_ty
                     }
                     ast::UnaryOp::Neg => {
-                        let value_ty = self.problem.unknown_int();
+                        let value_ty = self.problem.unknown_int(expr_origin);
                         let inner_ty = self.visit_expr(scope, inner)?;
                         self.problem.equal(value_ty, inner_ty);
                         value_ty
@@ -122,8 +124,8 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let arg_tys = args.iter().map(|arg| {
                     self.visit_expr(scope, arg)
                 }).try_collect()?;
-                let ret_ty = self.problem.unknown();
-                let template = self.problem.known(TypeInfo::Function(FunctionTypeInfo {
+                let ret_ty = self.problem.unknown(expr_origin);
+                let template = self.problem.known(expr_origin, TypeInfo::Function(FunctionTypeInfo {
                     params: arg_tys,
                     ret: ret_ty,
                 }));
@@ -138,10 +140,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 match index {
                     DotIndexIndex::Tuple { span: _, index } => {
-                        self.problem.tuple_index(target_ty, *index)
+                        self.problem.tuple_index(expr_origin, target_ty, *index)
                     }
                     DotIndexIndex::Struct(id) => {
-                        self.problem.struct_index(target_ty, &id.string)
+                        self.problem.struct_index(expr_origin, target_ty, &id.string)
                     }
                 }
             }
@@ -149,16 +151,17 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let value_ty = if let Some(value) = value {
                     self.visit_expr(scope, value)?
                 } else {
-                    self.problem.known(TypeInfo::Void)
+                    self.problem.ty_void()
                 };
 
                 let ret_ty = self.problem.fully_known(&self.types, self.ret_ty);
                 self.problem.equal(ret_ty, value_ty);
 
-                self.problem.unknown_default_void()
+                //TODO use "never" type once that exists instead, also for break and continue
+                self.problem.unknown_default_void(expr_origin)
             }
-            ast::ExpressionKind::Continue => self.problem.unknown_default_void(),
-            ast::ExpressionKind::Break => self.problem.unknown_default_void(),
+            ast::ExpressionKind::Continue => self.problem.unknown_default_void(expr_origin),
+            ast::ExpressionKind::Break => self.problem.unknown_default_void(expr_origin),
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);
@@ -171,19 +174,20 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
         match &stmt.kind {
             ast::StatementKind::Declaration(decl) => {
                 assert!(!decl.mutable, "everything is mutable for now");
+                let decl_origin = Origin::Declaration(decl);
 
-                let expect_ty = decl.ty.as_ref()
-                    .map(|ty| self.resolve_type(scope, ty))
-                    .transpose()?;
-                let expect_ty = match expect_ty {
-                    Some(expect_ty) => self.problem.fully_known(&self.types, expect_ty),
-                    None => self.problem.unknown(),
+                let expect_ty = match &decl.ty {
+                    None => self.problem.unknown(decl_origin),
+                    Some(ty) => {
+                        let ty = self.resolve_type(scope, ty);
+                        self.problem.fully_known(&self.types, ty?)
+                    }
                 };
 
-                let value_ty = decl.init.as_ref()
-                    .map(|init| { self.visit_expr(scope, init) })
-                    .transpose()?
-                    .unwrap_or_else(|| self.problem.unknown());
+                let value_ty = match &decl.init {
+                    None => self.problem.unknown(decl_origin),
+                    Some(init) => self.visit_expr(scope, init)?
+                };
 
                 self.problem.equal(expect_ty, value_ty);
                 self.decl_type_map.insert(decl as *const _, expect_ty);
@@ -222,13 +226,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     .transpose()?;
                 let index_ty = match index_ty {
                     Some(index_ty) => self.problem.fully_known(&self.types, index_ty),
-                    None => self.problem.unknown(),
+                    None => self.problem.unknown(Origin::ForIndex(for_stmt)),
                 };
 
                 let start_ty = self.visit_expr(scope, &for_stmt.start)?;
                 let end_ty = self.visit_expr(scope, &for_stmt.end)?;
 
-                let unknown_int = self.problem.unknown_int();
+                let unknown_int = self.problem.unknown_int(Origin::ForIndex(for_stmt));
                 self.problem.equal(index_ty, unknown_int);
                 self.problem.equal(index_ty, start_ty);
                 self.problem.equal(index_ty, end_ty);

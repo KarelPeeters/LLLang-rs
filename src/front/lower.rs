@@ -105,7 +105,7 @@ impl<'a> MappingTypeStore<'a> {
             }
             TypeInfo::Struct(StructTypeInfo { decl: _, fields }) => {
                 let fields = fields.clone().iter()
-                    .map(|&(_, f_ty)| self.map_type(prog, f_ty))
+                    .map(|field| self.map_type(prog, field.ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
             }

@@ -359,12 +359,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         *index
                     }
                     (TypeInfo::Struct(target_ty_info), DotIndexIndex::Struct(id)) => {
-                        target_ty_info.fiend_field(&id.string)
+                        target_ty_info.find_field_index(&id.string)
                             .ok_or_else(|| Error::StructFieldNotFound {
                                 target,
                                 target_type: self.types.format_type(target_value.ty).to_string(),
                                 index: id,
-                            })?.0
+                            })?
                     }
                     (TypeInfo::Tuple(_), _) | (TypeInfo::Struct(_), _) => return Err(Error::WrongDotIndexType {
                         target,

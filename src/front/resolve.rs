@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front;
 use crate::front::{ast, cst};
 use crate::front::ast::{Item, ModuleContent};
-use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 
 type AstProgram = front::Program<Option<ast::ModuleContent>>;
@@ -171,9 +171,9 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
                     //already handled
                     Item::UseDecl(_) => {}
                     Item::Struct(struct_ast) => {
-                        let fields: Vec<(&str, cst::Type)> = struct_ast.fields.iter().map(|field| {
+                        let fields = struct_ast.fields.iter().map(|field| {
                             let ty = items.resolve_type(ScopeKind::Real, module_scope, types, &field.ty)?;
-                            Ok((&*field.id.string, ty))
+                            Ok(StructFieldInfo { id: &*field.id.string, ty })
                         }).try_collect()?;
 
                         let info = TypeInfo::Struct(StructTypeInfo { decl: struct_ast, fields });
