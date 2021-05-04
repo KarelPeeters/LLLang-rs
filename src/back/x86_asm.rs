@@ -315,7 +315,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
                 let data_number = self.parent.data_number(*data);
-                self.append_instr(&format!("mov {}, data_{}", target, data_number));
+                self.append_instr(&format!("mov {}, dword data_{}", target, data_number));
             }
         }
     }
@@ -380,7 +380,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
                 let data_number = self.parent.data_number(*data);
-                self.append_instr(&format!("mov {}, data_{}", target, data_number));
+                self.append_instr(&format!("mov {}, dword data_{}", target, data_number));
             }
         }
 
