@@ -44,12 +44,14 @@ pub struct TypeProblem<'ast> {
     //constraints
     matches: VecDeque<(TypeVar, TypeVar)>,
     struct_index: VecDeque<(TypeVar, &'ast str, TypeVar)>,
+    array_index: VecDeque<(TypeVar, TypeVar)>,
     tuple_index: VecDeque<(TypeVar, u32, TypeVar)>,
 
     //basic types
     ty_void: TypeVar,
     ty_bool: TypeVar,
     ty_byte: TypeVar,
+    ty_int: TypeVar,
 }
 
 pub struct TypeSolution {
@@ -62,16 +64,19 @@ impl<'ast> Default for TypeProblem<'ast> {
             state: vec![],
             matches: Default::default(),
             struct_index: Default::default(),
+            array_index: Default::default(),
             tuple_index: Default::default(),
 
             ty_void: TypeVar(usize::MAX),
             ty_bool: TypeVar(usize::MAX),
             ty_byte: TypeVar(usize::MAX),
+            ty_int: TypeVar(usize::MAX),
         };
 
         problem.ty_void = problem.known(Origin::FullyKnown, TypeInfo::Void);
         problem.ty_bool = problem.known(Origin::FullyKnown, TypeInfo::Bool);
         problem.ty_byte = problem.known(Origin::FullyKnown, TypeInfo::Byte);
+        problem.ty_int = problem.known(Origin::FullyKnown, TypeInfo::Int);
 
         problem
     }
@@ -97,6 +102,10 @@ impl<'ast> TypeProblem<'ast> {
 
     pub fn ty_byte(&self) -> TypeVar {
         self.ty_byte
+    }
+
+    pub fn ty_int(&self) -> TypeVar {
+        self.ty_int
     }
 
     /// Create a new TypeVar without any known type information.
@@ -142,6 +151,13 @@ impl<'ast> TypeProblem<'ast> {
         var
     }
 
+    /// Create a new TypeVar representing the result type of an array index expression.
+    pub fn array_index(&mut self, origin: Origin<'ast>, target: TypeVar) -> TypeVar {
+        let var = self.unknown(origin);
+        self.array_index.push_back((target, var));
+        var
+    }
+
     /// Require that two types match
     pub fn equal(&mut self, left: TypeVar, right: TypeVar) {
         self.matches.push_back((left, right))
@@ -152,10 +168,8 @@ impl<'ast> TypeProblem<'ast> {
 impl<'ast> TypeProblem<'ast> {
     pub fn solve(mut self, types: &mut TypeStore<'ast>) -> TypeSolution {
         //main solver loop
-        let mut fully_known_queue = Vec::new();
-
         loop {
-            let progress = self.solve_iter(types, &mut fully_known_queue);
+            let progress = self.solve_iter(types);
             if !progress { break; }
         }
 
@@ -175,16 +189,28 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Run a single iteration of the solver, returns whether any progress was made.
-    fn solve_iter(&mut self, types: &mut TypeStore<'ast>, fully_known_queue: &mut Vec<(TypeVar, Type)>) -> bool {
-        let state = &self.state;
-        let matches = &mut self.matches;
+    fn solve_iter(&mut self, types: &mut TypeStore<'ast>) -> bool {
+        self.apply_index_constraints(types);
 
-        self.tuple_index.retain(|&(target, index, result)| {
-            if let Some(target) = &state[target.0].info {
+        //process all currently known matches
+        // new ones (or ones that need to be kept) are appended to self.matches
+        // they will be processed during the next iteration
+        let matches = std::mem::take(&mut self.matches);
+        let mut progress = false;
+        for (left, right) in matches {
+            progress |= self.unify_var(left, right);
+        }
+        progress
+    }
+
+    fn apply_index_constraints(&mut self, types: &mut TypeStore<'ast>) {
+        let mut tuple_index = std::mem::take(&mut self.tuple_index);
+        tuple_index.retain(|&(target, index, result)| {
+            if let Some(target) = &self.state[target.0].info {
                 if let TypeInfo::Tuple(target) = target {
                     let target_result = target.fields.get(index as usize)
                         .expect("Tuple index out of bounds");
-                    matches.push_back((*target_result, result))
+                    self.matches.push_back((*target_result, result))
                 } else {
                     panic!("Expected tuple type, got {:?}", target);
                 }
@@ -194,14 +220,37 @@ impl<'ast> TypeProblem<'ast> {
                 true
             }
         });
+        assert!(self.tuple_index.is_empty());
+        self.tuple_index = tuple_index;
 
-        self.struct_index.retain(|&(target, index, result)| {
-            if let Some(target) = &state[target.0].info {
+        let mut array_index = std::mem::take(&mut self.array_index);
+        array_index.retain(|&(target, result)| {
+            if let Some(target) = &self.state[target.0].info {
+                if let TypeInfo::Array(target) = target {
+                    let target_result = target.inner;
+                    self.matches.push_back((target_result, result))
+                } else {
+                    panic!("Expected array type, got {:?}", target);
+                }
+
+                false
+            } else {
+                true
+            }
+        });
+        assert!(self.array_index.is_empty());
+        self.array_index = array_index;
+
+        let mut struct_index = std::mem::take(&mut self.struct_index);
+        struct_index.retain(|&(target, index, result)| {
+            if let Some(target) = &self.state[target.0].info {
                 if let TypeInfo::Struct(target) = target {
                     let field_idx = target.find_field_index(index)
                         .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
                     let field_ty = target.fields[field_idx as usize].ty;
-                    fully_known_queue.push((result, field_ty));
+
+                    let known_ty = self.fully_known(types, field_ty);
+                    self.matches.push_back((result, known_ty));
                 } else {
                     panic!("Expected struct type, got {:?}", target);
                 }
@@ -211,24 +260,8 @@ impl<'ast> TypeProblem<'ast> {
                 true
             }
         });
-
-        for &(result, field_ty) in fully_known_queue.iter() {
-            let field_ty = self.fully_known(types, field_ty);
-            self.matches.push_back((field_ty, result))
-        }
-        fully_known_queue.clear();
-
-        let mut progress = false;
-
-        //process all currently known matches
-        // new ones (or ones that need to be kept) are appended to self.matches
-        // they will be processed during the next iteration
-        let matches = std::mem::take(&mut self.matches);
-        for (left, right) in matches {
-            progress |= self.unify_var(left, right);
-        }
-
-        progress
+        assert!(self.struct_index.is_empty());
+        self.struct_index = struct_index;
     }
 
     /// Get the type inferred for the given TypeVar.

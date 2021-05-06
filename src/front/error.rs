@@ -60,8 +60,8 @@ pub enum Error<'a> {
     },
 
     //lrvalue
-    StoreIntoRValue(&'a ast::Expression),
-    ReferenceOfLValue(&'a ast::Expression),
+    ExpectedLValue(&'a ast::Expression),
+    ReferenceOfRValue(&'a ast::Expression),
 
     //identifier
     UndeclaredIdentifier(&'a ast::Identifier),

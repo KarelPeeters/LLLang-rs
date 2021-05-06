@@ -288,7 +288,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                             //ref turns an lvalue into an rvalue
                             LRValue::Left(inner) => LRValue::Right(inner),
                             //we could create a temporary slot and return a reference to that, but that gets confusing
-                            LRValue::Right(_) => return Err(Error::ReferenceOfLValue(expr)),
+                            LRValue::Right(_) => return Err(Error::ReferenceOfRValue(expr)),
                         };
 
                         (flow, inner)
@@ -317,8 +317,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             }
             ast::ExpressionKind::Call { target, args } => {
                 //evaluate target
-                let (after_target, target) = self.append_expr_loaded(flow, scope, target)?;
-                let ret_ty = self.types[target.ty].unwrap_func().unwrap().ret;
+                let (after_target, target_value) = self.append_expr_loaded(flow, scope, target)?;
+                let ret_ty = self.types[target_value.ty].unwrap_func().unwrap().ret;
 
                 // evaluate args
                 let mut ir_args = Vec::with_capacity(args.len());
@@ -330,7 +330,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //actual call
                 let call = ir::InstructionInfo::Call {
-                    target: target.ir,
+                    target: target_value.ir,
                     args: ir_args,
                 };
                 let call = self.append_instr(after_args.block, call);
@@ -338,20 +338,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_args, LRValue::Right(TypedValue { ty: ret_ty, ir: ir::Value::Instr(call) }))
             }
             ast::ExpressionKind::DotIndex { target, index } => {
-                //TODO allow reference to struct too? again, how to propagate the LR-ness?
+                //TODO currently we only allow LValue(&Struct),
+                //  but we could add support for RValue(Struct) and RValue(&Struct) as well
 
-                let (after_target, target_value) = self.append_expr(flow, scope, target)?;
-
-                let target_value = match target_value {
-                    LRValue::Left(target_value) => target_value,
-                    LRValue::Right(_) => {
-                        //TODO really? why? origin().x should work too, right?
-                        //  just allow both of them and propagate the LRNess
-                        //  -> this is a limitation of the current IR, we can't load fields out of values
-                        panic!("dot indexing only works for LValues")
-                    }
-                };
-
+                let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
                 let target_inner_ty = self.types[target_value.ty].unwrap_ptr().unwrap();
 
                 let index = match (&self.types[target_inner_ty], index) {
@@ -381,10 +371,20 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
                 let result_ty_ptr_ir = self.types.map_type(&mut self.prog, result_ty_ptr);
 
-                let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr { base: target_value.ir, index, result_ty: result_ty_ptr_ir };
+                let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr {
+                    base: target_value.ir,
+                    index,
+                    result_ty: result_ty_ptr_ir,
+                };
                 let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
 
                 (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(struct_sub_ptr) }))
+            }
+            ast::ExpressionKind::ArrayIndex { target, index } => {
+                let (after_target, _target_value) = self.append_expr_lvalue(flow, scope, target)?;
+                let (_after_index, _index) = self.append_expr_loaded(after_target, scope, index)?;
+
+                todo!("Actually emit IR instruction once it's implemented");
             }
             ast::ExpressionKind::Return { value } => {
                 let (after_value, value) = if let Some(value) = value {
@@ -454,6 +454,20 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         let loaded_value = self.append_load(after_value.block, value);
 
         Ok((after_value, loaded_value))
+    }
+
+    fn append_expr_lvalue(
+        &mut self,
+        flow: Flow,
+        scope: &Scope<ScopedItem>,
+        expr: &'ast ast::Expression,
+    ) -> Result<'ast, (Flow, TypedValue)> {
+        let (after_value, value) = self.append_expr(flow, scope, expr)?;
+
+        match value {
+            LRValue::Left(value) => Ok((after_value, value)),
+            LRValue::Right(_) => Err(Error::ExpectedLValue(expr)),
+        }
     }
 
     fn append_loop<
@@ -529,20 +543,14 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 Ok(after_value)
             }
             ast::StatementKind::Assignment(assign) => {
-                let (after_addr, addr) = self.append_expr(flow, scope, &assign.left)?;
+                let (after_addr, addr) = self.append_expr_lvalue(flow, scope, &assign.left)?;
+                let (after_value, value) =
+                    self.append_expr_loaded(after_addr, scope, &assign.right)?;
 
-                match addr {
-                    LRValue::Left(addr) => {
-                        let (after_value, value) =
-                            self.append_expr_loaded(after_addr, scope, &assign.right)?;
+                let store = ir::InstructionInfo::Store { addr: addr.ir, value: value.ir };
+                self.append_instr(after_value.block, store);
 
-                        let store = ir::InstructionInfo::Store { addr: addr.ir, value: value.ir };
-                        self.append_instr(after_value.block, store);
-
-                        Ok(after_value)
-                    }
-                    LRValue::Right(_) => Err(Error::StoreIntoRValue(&assign.left)),
-                }
+                Ok(after_value)
             }
             ast::StatementKind::If(if_stmt) => {
                 let (cond_end, cond) =

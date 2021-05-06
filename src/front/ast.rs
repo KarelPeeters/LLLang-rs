@@ -192,6 +192,10 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
     },
 
+    ArrayIndex {
+        target: Box<Expression>,
+        index: Box<Expression>,
+    },
     DotIndex {
         target: Box<Expression>,
         index: DotIndexIndex,

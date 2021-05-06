@@ -707,7 +707,7 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        //prefix, will be applied later from right to left
+        //collect prefix operators, will be applied later from right to left
         let mut prefix_ops = Vec::new();
         loop {
             let token = self.peek();
@@ -721,11 +721,28 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let mut curr = self.postfix()?;
+
+        //apply prefixes from right to left
+        for (pos, op) in prefix_ops {
+            curr = ast::Expression {
+                span: Span::new(pos, curr.span.end),
+                kind: ast::ExpressionKind::Unary {
+                    kind: op,
+                    inner: Box::new(curr),
+                },
+            }
+        }
+
+        Ok(curr)
+    }
+
+    fn postfix(&mut self) -> Result<ast::Expression> {
         //inner expression
         let mut curr = self.atomic()?;
         let curr_start = curr.span.start;
 
-        //postfix, apply immediately from left to right
+        //apply immediately from left to right
         loop {
             let token = self.peek();
 
@@ -737,6 +754,17 @@ impl<'a> Parser<'a> {
                     ast::ExpressionKind::Call {
                         target: Box::new(curr),
                         args,
+                    }
+                }
+                TT::OpenS => {
+                    //array indexing
+                    self.pop()?;
+                    let index = self.expression()?;
+                    self.expect(TT::CloseS, "")?;
+
+                    ast::ExpressionKind::ArrayIndex {
+                        target: Box::new(curr),
+                        index: Box::new(index),
                     }
                 }
                 TT::Dot => {
@@ -768,17 +796,6 @@ impl<'a> Parser<'a> {
             curr = ast::Expression {
                 span: Span::new(curr_start, self.last_popped_end),
                 kind,
-            }
-        }
-
-        //apply prefixes from right to left
-        for (pos, op) in prefix_ops {
-            curr = ast::Expression {
-                span: Span::new(pos, curr.span.end),
-                kind: ast::ExpressionKind::Unary {
-                    kind: op,
-                    inner: Box::new(curr),
-                },
             }
         }
 
