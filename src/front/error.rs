@@ -7,8 +7,6 @@ type TypeString = String;
 #[derive(Debug)]
 pub enum Error<'a> {
     //types
-    InvalidType(&'a ast::Type),
-    CannotInferType(Span),
     TypeMismatch {
         expression: &'a ast::Expression,
         expected: TypeString,
@@ -19,10 +17,6 @@ pub enum Error<'a> {
         actual: TypeString,
     },
     ExpectPointerType {
-        expression: &'a ast::Expression,
-        actual: TypeString,
-    },
-    ExpectFunctionType {
         expression: &'a ast::Expression,
         actual: TypeString,
     },
@@ -42,17 +36,8 @@ pub enum Error<'a> {
         target_type: TypeString,
         index: &'a ast::Identifier,
     },
-    TupleIndexOutOfBounds {
-        target: &'a ast::Expression,
-        target_type: TypeString,
-        index: u32,
-    },
 
     //literals
-    InvalidLiteralType {
-        span: Span,
-        ty: TypeString,
-    },
     InvalidLiteral {
         span: Span,
         lit: String,
@@ -80,11 +65,6 @@ pub enum Error<'a> {
     //functions
     MissingReturn(&'a ast::Identifier),
     MissingFunctionBody(&'a ast::Function),
-    WrongArgCount {
-        call: &'a ast::Expression,
-        expected: usize,
-        actual: usize,
-    },
 
     //other
     NotInLoop {

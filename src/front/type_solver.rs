@@ -8,7 +8,6 @@ use crate::front::cst::{Type, TypeInfo, TypeStore};
 use crate::util::zip_eq;
 
 type VarTypeInfo<'ast> = cst::TypeInfo<'ast, TypeVar>;
-type KnownTypeInfo<'ast> = cst::TypeInfo<'ast, Type>;
 
 /// Represents the type of an expression in the program.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

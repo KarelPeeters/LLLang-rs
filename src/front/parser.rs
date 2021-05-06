@@ -124,7 +124,6 @@ impl Token {
 
 struct Tokenizer<'a> {
     left: &'a str,
-    file: FileId,
     pos: Pos,
 
     curr: Token,
@@ -135,7 +134,6 @@ impl<'a> Tokenizer<'a> {
     fn new(file: FileId, left: &'a str) -> Result<Self> {
         let pos = Pos { file, line: 1, col: 1 };
         let mut result = Self {
-            file,
             left,
             pos,
             curr: Token::eof_token(pos),

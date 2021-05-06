@@ -17,7 +17,6 @@ pub fn lower(prog: &Program) -> String {
     }.lower()
 }
 
-const SP_SIZE: i32 = 4;
 const STACK_ALIGNMENT: i32 = 4;
 
 #[derive(Default)]
@@ -649,6 +648,7 @@ impl RegisterSize {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Register {
     A,

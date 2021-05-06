@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![deny(unused_must_use)]
 
 use std::ffi::{OsStr, OsString};
@@ -18,9 +17,9 @@ use crate::front::pos::FileId;
 
 #[macro_use]
 mod util;
-mod front;
-mod back;
-mod mid;
+pub mod front;
+pub mod back;
+pub mod mid;
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -29,7 +28,6 @@ enum CompileError {
     InvalidFileName(OsString),
     DuplicateModule(String),
     Parse(ParseError),
-    Lower,
     Assemble,
     Link,
 }
