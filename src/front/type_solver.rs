@@ -43,9 +43,7 @@ pub struct TypeProblem<'ast> {
 
     //constraints
     matches: VecDeque<(TypeVar, TypeVar)>,
-    struct_index: VecDeque<(TypeVar, &'ast str, TypeVar)>,
-    array_index: VecDeque<(TypeVar, TypeVar)>,
-    tuple_index: VecDeque<(TypeVar, u32, TypeVar)>,
+    index_matches: VecDeque<IndexMatch<'ast>>,
 
     //basic types
     ty_void: TypeVar,
@@ -58,14 +56,36 @@ pub struct TypeSolution {
     state: Vec<Type>,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct IndexMatch<'ast> {
+    target: TypeVar,
+    result: TypeVar,
+    index: IndexKind<'ast>,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum IndexKind<'ast> {
+    Tuple(u32),
+    Array,
+    Struct(&'ast str),
+}
+
+impl IndexKind<'_> {
+    fn name(self) -> &'static str {
+        match self {
+            IndexKind::Tuple(_) => "tuple",
+            IndexKind::Array => "array",
+            IndexKind::Struct(_) => "struct",
+        }
+    }
+}
+
 impl<'ast> Default for TypeProblem<'ast> {
     fn default() -> Self {
         let mut problem = TypeProblem {
             state: vec![],
             matches: Default::default(),
-            struct_index: Default::default(),
-            array_index: Default::default(),
-            tuple_index: Default::default(),
+            index_matches: Default::default(),
 
             ty_void: TypeVar(usize::MAX),
             ty_bool: TypeVar(usize::MAX),
@@ -139,23 +159,23 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Create a new TypeVar representing the type of a tuple index expression.
     pub fn tuple_index(&mut self, origin: Origin<'ast>, target: TypeVar, index: u32) -> TypeVar {
-        let var = self.unknown(origin);
-        self.tuple_index.push_back((target, index, var));
-        var
+        let result = self.unknown(origin);
+        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Tuple(index) });
+        result
     }
 
     /// Create a new TypeVar representing the type of a struct index expression.
     pub fn struct_index(&mut self, origin: Origin<'ast>, target: TypeVar, index: &'ast str) -> TypeVar {
-        let var = self.unknown(origin);
-        self.struct_index.push_back((target, index, var));
-        var
+        let result = self.unknown(origin);
+        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Struct(index) });
+        result
     }
 
     /// Create a new TypeVar representing the result type of an array index expression.
     pub fn array_index(&mut self, origin: Origin<'ast>, target: TypeVar) -> TypeVar {
-        let var = self.unknown(origin);
-        self.array_index.push_back((target, var));
-        var
+        let result = self.unknown(origin);
+        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Array });
+        result
     }
 
     /// Require that two types match
@@ -204,64 +224,43 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     fn apply_index_constraints(&mut self, types: &mut TypeStore<'ast>) {
-        let mut tuple_index = std::mem::take(&mut self.tuple_index);
-        tuple_index.retain(|&(target, index, result)| {
-            if let Some(target) = &self.state[target.0].info {
-                if let TypeInfo::Tuple(target) = target {
+        let mut index_matches = std::mem::take(&mut self.index_matches);
+
+        index_matches.retain(|&IndexMatch { target, result, index }| {
+            let target = if let Some(target) = &self.state[target.0].info {
+                target
+            } else {
+                //we don't know the target type yet, so we can't make progress
+                return true;
+            };
+
+            match (target, index) {
+                (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
                     let target_result = target.fields.get(index as usize)
                         .expect("Tuple index out of bounds");
                     self.matches.push_back((*target_result, result))
-                } else {
-                    panic!("Expected tuple type, got {:?}", target);
                 }
-
-                false
-            } else {
-                true
-            }
-        });
-        assert!(self.tuple_index.is_empty());
-        self.tuple_index = tuple_index;
-
-        let mut array_index = std::mem::take(&mut self.array_index);
-        array_index.retain(|&(target, result)| {
-            if let Some(target) = &self.state[target.0].info {
-                if let TypeInfo::Array(target) = target {
+                (TypeInfo::Array(target), IndexKind::Array) => {
                     let target_result = target.inner;
                     self.matches.push_back((target_result, result))
-                } else {
-                    panic!("Expected array type, got {:?}", target);
                 }
-
-                false
-            } else {
-                true
-            }
-        });
-        assert!(self.array_index.is_empty());
-        self.array_index = array_index;
-
-        let mut struct_index = std::mem::take(&mut self.struct_index);
-        struct_index.retain(|&(target, index, result)| {
-            if let Some(target) = &self.state[target.0].info {
-                if let TypeInfo::Struct(target) = target {
+                (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
                     let field_idx = target.find_field_index(index)
                         .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
                     let field_ty = target.fields[field_idx as usize].ty;
 
                     let known_ty = self.fully_known(types, field_ty);
                     self.matches.push_back((result, known_ty));
-                } else {
-                    panic!("Expected struct type, got {:?}", target);
                 }
-
-                false
-            } else {
-                true
+                (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
             }
+
+            //we applied this constraint, it can now be removed
+            false
         });
-        assert!(self.struct_index.is_empty());
-        self.struct_index = struct_index;
+
+        assert!(self.index_matches.is_empty());
+        self.index_matches = index_matches;
     }
 
     /// Get the type inferred for the given TypeVar.
@@ -388,12 +387,8 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
             writeln!(f, "        {:?} == {:?}", left, right)?;
         }
 
-        for &(target, index, result) in &self.tuple_index {
-            writeln!(f, "        {:?}.{} == {:?}", target, index, result)?;
-        }
-
-        for &(target, index, result) in &self.struct_index {
-            writeln!(f, "        {:?}.{} == {:?}", target, index, result)?;
+        for &IndexMatch { target, result, index } in &self.index_matches {
+            writeln!(f, "        {:?}[{:?}] == {:?}", target, index, result)?;
         }
 
         write!(f, "    ]\n}}\n")?;
