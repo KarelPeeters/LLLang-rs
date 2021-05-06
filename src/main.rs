@@ -143,13 +143,14 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Resul
         .write_fmt(format_args!("{}", ir_program))?;
 
     println!("----Optimize---");
+    let ir_opt_file = ll_path.with_extension("ir_opt");
     if optimize {
         run_optimizations(&mut ir_program);
-        let ir_opt_file = ll_path.with_extension("ir_opt");
         File::create(&ir_opt_file)?
             .write_fmt(format_args!("{}", ir_program))?;
     } else {
-        println!("skipped")
+        //clear file
+        File::create(&ir_opt_file)?.write_all(&[])?;
     }
 
     println!("----Backend----");
