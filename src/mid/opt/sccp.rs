@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use indexmap::map::IndexMap;
 
-use crate::mid::analyse::use_info::{for_each_usage_in_instr, Usage, UseInfo};
+use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
 use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
 use crate::util::zip_eq;
 
@@ -110,6 +110,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
     let mut funcs_reachable = HashSet::new();
     let mut blocks_reachable = HashSet::new();
 
+    //TODO move this loop body into a separate function
     while let Some(curr) = todo.pop_front() {
         match curr {
             Todo::FunctionInit(func) => {
@@ -124,9 +125,10 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                     //visit each instr
                     for &instr in &block_info.instructions {
                         visit_instr(&prog, &mut map, &mut todo, instr);
+                        let pos = InstructionPos { func, block, instr };
 
                         //since it's the first time we check for usage of functions as generic operands
-                        for_each_usage_in_instr(func, block, instr, prog.get_instr(instr), |value, usage| {
+                        for_each_usage_in_instr(pos, prog.get_instr(instr), |value, usage| {
                             if let Value::Func(func) = value {
                                 if !matches!(usage, Usage::CallTarget {..}) {
                                     // mark function parameters as overdefined
@@ -159,12 +161,16 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                     match usage {
                         Usage::Main | Usage::CallTarget { .. } =>
                             unreachable!("this value should never change: {:?}", usage),
-                        //don't need to visit because result is always overdefined
-                        Usage::Addr { .. } | Usage::SubPtrTarget { .. } => {}
+
+                        //don't need to visit because their result already starts out overdefined
+                        Usage::Addr { .. } | Usage::TupleFieldPtrBase { .. } => {}
+                        Usage::ArrayIndexPtrBase { .. } | Usage::ArrayIndexPtrIndex { .. } => {}
+
                         //don't need to visit because result is void
                         Usage::StoreValue { .. } => {}
-                        Usage::BinaryOperand { instr, .. } => {
-                            visit_instr(prog, &mut map, &mut todo, instr);
+
+                        Usage::BinaryOperand { pos } => {
+                            visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
                         Usage::TargetPhiValue { func, target_kind, phi_index } => {
                             let target = target_kind.get_target(prog, func);
@@ -174,8 +180,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                             map.merge_value(&mut todo, Value::Phi(phi), new_value)
                         }
-                        Usage::CallArgument { instr, index, .. } => {
-                            match prog.get_instr(instr) {
+                        Usage::CallArgument { pos, index } => {
+                            match prog.get_instr(pos.instr) {
                                 InstructionInfo::Call { target, args } => {
                                     if let &Value::Func(target) = target {
                                         //merge in argument
@@ -212,9 +218,9 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                 let return_lattice = map.eval_func_return(func);
 
                 for &usage in &use_info[Value::Func(func)] {
-                    if let Usage::CallTarget { instr, .. } = usage {
-                        map.merge_value(&mut todo, Value::Instr(instr), return_lattice);
-                        todo.push_back(Todo::ValueUsers(Value::Instr(instr)))
+                    if let Usage::CallTarget { pos } = usage {
+                        map.merge_value(&mut todo, Value::Instr(pos.instr), return_lattice);
+                        todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
                     }
                 }
             }
@@ -286,6 +292,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
     let result = match instr_info {
         InstructionInfo::Load { .. } => Lattice::Overdef,
         InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
+        InstructionInfo::ArrayIndexPtr { .. } => Lattice::Overdef,
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
             if let Value::Func(target) = *target {

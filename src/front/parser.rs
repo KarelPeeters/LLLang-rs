@@ -303,6 +303,18 @@ const EXPR_START_TOKENS: &[TT] = &[
     TT::OpenB,
 ];
 
+const TYPE_START_TOKENS: &[TT] = &[
+    TT::Underscore,
+    TT::Void,
+    TT::Bool,
+    TT::Byte,
+    TT::Int,
+    TT::Ampersand,
+    TT::Id,
+    TT::OpenB,
+    TT::OpenS
+];
+
 struct BinOpInfo {
     level: u8,
     token: TT,
@@ -695,7 +707,7 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        //prefix, will be applied later from right to left
+        //collect prefix operators, will be applied later from right to left
         let mut prefix_ops = Vec::new();
         loop {
             let token = self.peek();
@@ -709,11 +721,28 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let mut curr = self.postfix()?;
+
+        //apply prefixes from right to left
+        for (pos, op) in prefix_ops {
+            curr = ast::Expression {
+                span: Span::new(pos, curr.span.end),
+                kind: ast::ExpressionKind::Unary {
+                    kind: op,
+                    inner: Box::new(curr),
+                },
+            }
+        }
+
+        Ok(curr)
+    }
+
+    fn postfix(&mut self) -> Result<ast::Expression> {
         //inner expression
         let mut curr = self.atomic()?;
         let curr_start = curr.span.start;
 
-        //postfix, apply immediately from left to right
+        //apply immediately from left to right
         loop {
             let token = self.peek();
 
@@ -725,6 +754,17 @@ impl<'a> Parser<'a> {
                     ast::ExpressionKind::Call {
                         target: Box::new(curr),
                         args,
+                    }
+                }
+                TT::OpenS => {
+                    //array indexing
+                    self.pop()?;
+                    let index = self.expression()?;
+                    self.expect(TT::CloseS, "")?;
+
+                    ast::ExpressionKind::ArrayIndex {
+                        target: Box::new(curr),
+                        index: Box::new(index),
                     }
                 }
                 TT::Dot => {
@@ -756,17 +796,6 @@ impl<'a> Parser<'a> {
             curr = ast::Expression {
                 span: Span::new(curr_start, self.last_popped_end),
                 kind,
-            }
-        }
-
-        //apply prefixes from right to left
-        for (pos, op) in prefix_ops {
-            curr = ast::Expression {
-                span: Span::new(pos, curr.span.end),
-                kind: ast::ExpressionKind::Unary {
-                    kind: op,
-                    inner: Box::new(curr),
-                },
             }
         }
 
@@ -930,7 +959,22 @@ impl<'a> Parser<'a> {
                     kind,
                 })
             }
-            _ => Err(Self::unexpected_token(self.peek(), &[TT::Ampersand, TT::Id, TT::OpenB], "type declaration")),
+            TT::OpenS => {
+                //array
+                self.pop()?;
+                let inner = self.type_decl()?;
+                self.expect(TT::Semi, "array type delimiter")?;
+                //TODO proper IntLit parsing
+                let length: u32 = self.expect(TT::IntLit, "array length")?.string
+                    .parse().unwrap();
+                self.expect(TT::CloseS, "end of array type")?;
+
+                Ok(ast::Type {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::TypeKind::Array { inner: Box::new(inner), length },
+                })
+            }
+            _ => Err(Self::unexpected_token(self.peek(), TYPE_START_TOKENS, "type declaration")),
         }
     }
 }

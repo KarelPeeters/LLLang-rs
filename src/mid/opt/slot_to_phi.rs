@@ -71,18 +71,18 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
         //replace loads
         for &usage in slot_usages {
-            if let Usage::Addr { instr, block, .. } = usage {
-                let instr_info = prog.get_instr(instr);
+            if let Usage::Addr { pos } = usage {
+                let instr_info = prog.get_instr(pos.instr);
                 match instr_info {
                     &InstructionInfo::Load { addr } => {
                         debug_assert_eq!(Value::Slot(slot), addr);
 
                         //found a load, build a value for it and replace it
-                        let load_index = prog.get_block(block).instructions.iter()
-                            .position(|&i| i == instr).unwrap();
+                        let load_index = prog.get_block(pos.block).instructions.iter()
+                            .position(|&instr| instr == pos.instr).unwrap();
 
-                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, block, load_index);
-                        use_info.replace_usages(prog, Value::Instr(instr), value);
+                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
+                        use_info.replace_usages(prog, Value::Instr(pos.instr), value);
                     }
                     &InstructionInfo::Store { addr, .. } => {
                         //nothing to do here, this will be removed later
@@ -97,8 +97,8 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
         //remove loads & stores
         for &usage in slot_usages {
-            if let Usage::Addr { instr, block, .. } = usage {
-                remove_item(&mut prog.get_block_mut(block).instructions, &instr).unwrap();
+            if let Usage::Addr { pos } = usage {
+                remove_item(&mut prog.get_block_mut(pos.block).instructions, &pos.instr).unwrap();
             } else {
                 unreachable!("usage type: {:?}", usage)
             }

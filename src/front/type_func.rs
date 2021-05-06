@@ -147,6 +147,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     }
                 }
             }
+            ast::ExpressionKind::ArrayIndex { target, index } => {
+                let target_ty = self.visit_expr(scope, target)?;
+                let index_ty = self.visit_expr(scope, index)?;
+
+                self.problem.equal(self.problem.ty_int(), index_ty);
+                self.problem.array_index(expr_origin, target_ty)
+            }
             ast::ExpressionKind::Return { value } => {
                 let value_ty = if let Some(value) = value {
                     self.visit_expr(scope, value)?

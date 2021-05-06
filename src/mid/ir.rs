@@ -61,6 +61,7 @@ pub struct Program {
     //TODO we've lost distinct indices! is there an easy way to get that back?
     //all values that may be used multiple times are stored as nodes
     pub nodes: Arenas,
+    //TODO maybe look into adding a cell here so we can modify this when we have a &Program for usability
     //the types are stored separately in a set for interning
     types: ArenaSet<Type, TypeInfo>,
 
@@ -116,6 +117,10 @@ impl Program {
         self.types.push(TypeInfo::Tuple(tuple_ty))
     }
 
+    pub fn define_type_array(&mut self, array_ty: ArrayType) -> Type {
+        self.types.push(TypeInfo::Array(array_ty))
+    }
+
     pub fn type_bool(&self) -> Type {
         self.ty_bool
     }
@@ -150,6 +155,7 @@ pub enum TypeInfo {
     Pointer { inner: Type },
     Func(FunctionType),
     Tuple(TupleType),
+    Array(ArrayType),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -163,36 +169,45 @@ pub struct TupleType {
     pub fields: Vec<Type>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ArrayType {
+    pub inner: Type,
+    pub length: u32,
+}
+
 impl TypeInfo {
     pub fn unwrap_int(&self) -> Option<u32> {
-        if let TypeInfo::Integer { bits } = self {
-            Some(*bits)
-        } else {
-            None
+        match self {
+            &TypeInfo::Integer { bits } => Some(bits),
+            _ => None,
         }
     }
 
     pub fn unwrap_ptr(&self) -> Option<Type> {
-        if let TypeInfo::Pointer { inner } = self {
-            Some(*inner)
-        } else {
-            None
+        match self {
+            &TypeInfo::Pointer { inner } => Some(inner),
+            _ => None,
         }
     }
 
     pub fn unwrap_func(&self) -> Option<&FunctionType> {
-        if let TypeInfo::Func(func_ty) = self {
-            Some(func_ty)
-        } else {
-            None
+        match self {
+            TypeInfo::Func(func_ty) => Some(func_ty),
+            _ => None,
         }
     }
 
     pub fn unwrap_tuple(&self) -> Option<&TupleType> {
-        if let TypeInfo::Tuple(tuple_ty) = self {
-            Some(tuple_ty)
-        } else {
-            None
+        match self {
+            TypeInfo::Tuple(tuple_ty) => Some(tuple_ty),
+            _ => None,
+        }
+    }
+
+    pub fn unwrap_array(&self) -> Option<&ArrayType> {
+        match self {
+            TypeInfo::Array(ty) => Some(ty),
+            _ => None,
         }
     }
 }
@@ -273,17 +288,27 @@ pub struct PhiInfo {
 
 #[derive(Debug)]
 pub enum InstructionInfo {
+    /// `Load { addr: &T } -> T`
     Load { addr: Value },
+    /// `Store { addr: &T, value: T } -> void`
     Store { addr: Value, value: Value },
+    /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
     Call { target: Value, args: Vec<Value> },
+    /// `Arithmetic { kind, left: iN, right: iN } -> iN`
     Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
+    /// `Comparison { kind, left: iN, right: iN } -> i1`
     Comparison { kind: LogicalOp, left: Value, right: Value },
 
     //TODO we need to store the result type here, which sucks
     //  possible solutions:
     //    * use "Cell" in program so we can create types on an immutable program?
     //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
+    /// `TupleFieldPtr { base: &(A, B, C), index: 1 } -> B`
     TupleFieldPtr { base: Value, index: u32, result_ty: Type },
+
+    //TODO look into how exactly the equivalent LLVM instruction works and why it is so complicated
+    /// `ArrayIndex { base: &[T; _], index } ->  &T
+    ArrayIndexPtr { base: Value, index: Value, result_ty: Type },
 
     //TODO add instruction to load tuple value directly instead of needing a pointer to it
 }
@@ -327,7 +352,8 @@ impl InstructionInfo {
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::TupleFieldPtr { result_ty, .. } => *result_ty
+            InstructionInfo::TupleFieldPtr { result_ty, .. } => *result_ty,
+            InstructionInfo::ArrayIndexPtr { result_ty, .. } => *result_ty,
         }
     }
 }
@@ -513,29 +539,30 @@ impl Program {
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
                         write!(f, "&{}", self.prog.format_type(*inner)),
-                    TypeInfo::Func(func_ty) => {
-                        write!(f, "(")?;
-                        for (i, &param_ty) in func_ty.params.iter().enumerate() {
-                            if i > 0 { write!(f, ", ")?; }
-                            write!(f, "{}", self.prog.format_type(param_ty))?;
-                        }
-                        write!(f, ") -> {}", self.prog.format_type(func_ty.ret))?;
-                        Ok(())
+                    TypeInfo::Tuple(TupleType { fields }) =>
+                        self.prog.write_tuple(f, fields),
+                    TypeInfo::Func(FunctionType { params, ret }) => {
+                        self.prog.write_tuple(f, params)?;
+                        write!(f, " -> {}", self.prog.format_type(*ret))
                     }
-                    TypeInfo::Tuple(tuple_ty) => {
-                        write!(f, "(")?;
-                        for (i, &param_ty) in tuple_ty.fields.iter().enumerate() {
-                            if i > 0 { write!(f, ", ")?; }
-                            write!(f, "{}", self.prog.format_type(param_ty))?;
-                        }
-                        write!(f, ")")?;
-                        Ok(())
-                    }
+                    TypeInfo::Array(ArrayType { inner, length }) =>
+                        write!(f, "[{}; {}]", self.prog.format_type(*inner), length),
                 }
             }
         }
 
         Wrapped { ty, prog: self }
+    }
+
+    /// Helper function for formatting types, writes `(fields[0], fields[1], ...)`
+    fn write_tuple(&self, f: &mut Formatter<'_>, fields: &[Type]) -> std::fmt::Result {
+        write!(f, "(")?;
+        for (i, &field) in fields.iter().enumerate() {
+            if i > 0 { write!(f, ", ")?; }
+            write!(f, "{}", self.format_type(field))?;
+        }
+        write!(f, ")")?;
+        Ok(())
     }
 
     /// Wrap a `Value` as a `Display` value that prints a mostly human-readable representation of the value,

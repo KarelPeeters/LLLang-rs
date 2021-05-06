@@ -4,52 +4,42 @@ use indexmap::map::IndexMap;
 
 use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
 
+#[derive(Debug, Copy, Clone)]
+pub struct InstructionPos {
+    pub func: Function,
+    pub block: Block,
+    pub instr: Instruction,
+}
+
 //TODO figure out a way to fake type safety here, eg guarantee that the linked instruction is indeed
 // a call or a load or whatever
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
 // eg. slot_to_phi only cares about slots
 //TODO try to unify some of this code with gc
+//TODO maybe extract a subtype for all instruction operand usages
 #[derive(Debug, Copy, Clone)]
 pub enum Usage {
     //program main
     Main,
-    //address in load or store
-    Addr {
-        func: Function,
-        block: Block,
-        instr: Instruction,
-    },
-    //store value
-    StoreValue {
-        func: Function,
-        block: Block,
-        instr: Instruction,
-    },
-    //call target
-    CallTarget {
-        func: Function,
-        block: Block,
-        instr: Instruction,
-    },
-    //call argument
+    //address in Load or Store
+    Addr { pos: InstructionPos },
+    //Store value
+    StoreValue { pos: InstructionPos },
+    //Call target
+    CallTarget { pos: InstructionPos },
+    //Call argument
     CallArgument {
-        func: Function,
-        block: Block,
-        instr: Instruction,
+        pos: InstructionPos,
         index: usize,
     },
-    //operand in binary operation
-    BinaryOperand {
-        func: Function,
-        block: Block,
-        instr: Instruction,
-    },
-    //target of subptr
-    SubPtrTarget {
-        func: Function,
-        block: Block,
-        instr: Instruction,
-    },
+    //operand in Arithmetic or Comparison
+    BinaryOperand { pos: InstructionPos },
+    //target of TupleFieldPtr
+    TupleFieldPtrBase { pos: InstructionPos },
+    //target of ArrayIndexPtr
+    ArrayIndexPtrBase { pos: InstructionPos },
+    //index of ArrayIndexPtr
+    ArrayIndexPtrIndex { pos: InstructionPos },
     //values passed to target as phi value
     TargetPhiValue {
         func: Function,
@@ -82,33 +72,35 @@ pub struct UseInfo {
 }
 
 pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
-    func: Function,
-    block: Block,
-    instr: Instruction,
+    pos: InstructionPos,
     instr_info: &InstructionInfo,
     mut f: F,
 ) {
     match instr_info {
         &InstructionInfo::Load { addr } => {
-            f(addr, Usage::Addr { func, block, instr })
+            f(addr, Usage::Addr { pos })
         }
         &InstructionInfo::Store { addr, value } => {
-            f(addr, Usage::Addr { func, block, instr });
-            f(value, Usage::StoreValue { func, block, instr });
+            f(addr, Usage::Addr { pos });
+            f(value, Usage::StoreValue { pos });
         }
         &InstructionInfo::Call { target, ref args } => {
-            f(target, Usage::CallTarget { func, block, instr });
+            f(target, Usage::CallTarget { pos });
             for (index, &arg) in args.iter().enumerate() {
-                f(arg, Usage::CallArgument { func, block, instr, index });
+                f(arg, Usage::CallArgument { pos, index });
             }
         }
         &InstructionInfo::Arithmetic { kind: _, left, right } |
         &InstructionInfo::Comparison { kind: _, left, right } => {
-            f(left, Usage::BinaryOperand { func, block, instr });
-            f(right, Usage::BinaryOperand { func, block, instr });
+            f(left, Usage::BinaryOperand { pos });
+            f(right, Usage::BinaryOperand { pos });
         }
         &InstructionInfo::TupleFieldPtr { base, index: _, result_ty: _ } => {
-            f(base, Usage::SubPtrTarget { func, instr, block });
+            f(base, Usage::TupleFieldPtrBase { pos });
+        }
+        &InstructionInfo::ArrayIndexPtr { base, index, result_ty: _ } => {
+            f(base, Usage::ArrayIndexPtrBase { pos });
+            f(index, Usage::ArrayIndexPtrIndex { pos });
         }
     }
 }
@@ -143,8 +135,9 @@ impl UseInfo {
                     //instructions
                     for &instr in &block_info.instructions {
                         let instr_info = prog.get_instr(instr);
+                        let pos = InstructionPos { func, block, instr };
 
-                        for_each_usage_in_instr(func, block, instr, instr_info, |value, usage| {
+                        for_each_usage_in_instr(pos, instr_info, |value, usage| {
                             info.add_usage(value, usage);
 
                             //if the usage is a function visit it too
@@ -227,34 +220,34 @@ impl UseInfo {
                         panic!("Replacing main func not yet supported")
                     }
                 }
-                Usage::Addr { instr, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::Addr { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Load { addr } => repl(count, addr, old, new),
                         InstructionInfo::Store { addr, .. } => repl(count, addr, old, new),
                         _ => unreachable!()
                     }
                 }
-                Usage::StoreValue { instr, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::StoreValue { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Store { value, .. } => repl(count, value, old, new),
                         _ => unreachable!()
                     }
                 }
-                Usage::CallTarget { instr, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::CallTarget { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Call { target, .. } => repl(count, target, old, new),
                         _ => unreachable!()
                     }
                 }
-                Usage::CallArgument { instr, index, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::CallArgument { pos, index, .. } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Call { args, .. } =>
                             repl(count, &mut args[index], old, new),
                         _ => unreachable!()
                     }
                 }
-                Usage::BinaryOperand { instr, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::BinaryOperand { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Arithmetic { left, right, .. } |
                         InstructionInfo::Comparison { left, right, .. } => {
                             let mut replaced_any = false;
@@ -265,10 +258,24 @@ impl UseInfo {
                         _ => unreachable!()
                     }
                 }
-                Usage::SubPtrTarget { instr, .. } => {
-                    match prog.get_instr_mut(instr) {
+                Usage::TupleFieldPtrBase { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::TupleFieldPtr { base, .. } =>
                             repl(count, base, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::ArrayIndexPtrBase { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::ArrayIndexPtr { base, .. } =>
+                            repl(count, base, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::ArrayIndexPtrIndex { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::ArrayIndexPtr { index, .. } =>
+                            repl(count, index, old, new),
                         _ => unreachable!()
                     }
                 }
