@@ -266,7 +266,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         //TODO redesign this stack_delta stuff, the current implementation is just one big minefield
 
         let ty = self.prog.type_of_value(*value);
-        let layout = Layout::from(&self.prog, ty);
+        let layout = Layout::for_type(&self.prog, ty);
 
         match value {
             Value::Undef(_) => {
@@ -332,7 +332,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         //  where source can then have a function to_MemRegOffset and to_register? (or either of them)
 
         let ty = self.prog.type_of_value(*value);
-        let layout = Layout::from(&self.prog, ty);
+        let layout = Layout::for_type(&self.prog, ty);
 
         let register_size = RegisterSize::for_size(layout.size)
             .unwrap_or_else(|()| panic!("Tried to put value {:?} with size {} into reg", value, layout.size))
@@ -438,7 +438,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         if !block.phis.is_empty() {
             self.append_instr(";phi copy");
             for phi in &block.phis {
-                let size = Layout::from(&self.prog, self.prog.get_phi(*phi).ty).size;
+                let size = Layout::for_type(&self.prog, self.prog.get_phi(*phi).ty).size;
 
                 let PhiIndices { pre, post } = self.phi_stack_indices[phi];
                 let pre_pos = self.local_layout.offsets[pre];
@@ -452,7 +452,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         for instr in &block.instructions {
             let instr_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
             let result_ty = self.prog.get_instr(*instr).ty(&self.prog);
-            let result_layout = Layout::from(&self.prog, result_ty);
+            let result_layout = Layout::for_type(&self.prog, result_ty);
 
             match self.prog.get_instr(*instr) {
                 InstructionInfo::Store { addr, value } => {
@@ -493,7 +493,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("call eax");
 
                     //copy the return register to the stack
-                    let return_layout = Layout::from(&self.prog, func_ty.ret);
+                    let return_layout = Layout::for_type(&self.prog, func_ty.ret);
                     let return_register_size = RegisterSize::for_size(return_layout.size)
                         .unwrap_or_else(|()| panic!("Return value for {:?} size {} does not fit in register", instr, return_layout.size));
 
@@ -593,7 +593,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let local_stack_size = self.local_stack_size;
                 let param_size = self.param_size;
 
-                if Layout::from(&self.prog, self.prog.type_of_value(*value)).size != 0 {
+                if Layout::for_type(&self.prog, self.prog.type_of_value(*value)).size != 0 {
                     self.append_value_to_reg(Register::A, value, 0);
                 }
 

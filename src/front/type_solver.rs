@@ -289,20 +289,28 @@ impl<'ast> TypeProblem<'ast> {
                 self.unify_var(left, right);
             }
             (TypeInfo::Tuple(left), TypeInfo::Tuple(right)) => {
-                assert_eq!(left.fields.len(), right.fields.len());
+                assert_eq!(left.fields.len(), right.fields.len(), "tuples must have the same size");
                 for (left, right) in zip_eq(left.fields.clone(), right.fields.clone()) {
                     self.unify_var(left, right);
                 }
             }
             (TypeInfo::Function(left), TypeInfo::Function(right)) => {
-                assert_eq!(left.params.len(), right.params.len());
-                let (left_ret, right_ret) = (left.ret, right.ret);
+                assert_eq!(left.params.len(), right.params.len(), "functions must have the same number of parameters");
+                let left_ret = left.ret;
+                let right_ret = right.ret;
+
                 for (left, right) in zip_eq(left.params.clone(), right.params.clone()) {
                     self.unify_var(left, right);
                 }
 
                 //do this last so error messages appear more in order
                 self.unify_var(left_ret, right_ret);
+            }
+            (TypeInfo::Array(left), TypeInfo::Array(right)) => {
+                assert_eq!(left.length, right.length, "arrays must have the same length");
+                let left_inner = left.inner;
+                let right_inner = right.inner;
+                self.unify_var(left_inner, right_inner);
             }
 
             (TypeInfo::Struct(left), TypeInfo::Struct(right)) => {

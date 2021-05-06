@@ -116,6 +116,10 @@ impl Program {
         self.types.push(TypeInfo::Tuple(tuple_ty))
     }
 
+    pub fn define_type_array(&mut self, array_ty: ArrayType) -> Type {
+        self.types.push(TypeInfo::Array(array_ty))
+    }
+
     pub fn type_bool(&self) -> Type {
         self.ty_bool
     }
@@ -150,6 +154,7 @@ pub enum TypeInfo {
     Pointer { inner: Type },
     Func(FunctionType),
     Tuple(TupleType),
+    Array(ArrayType),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -161,6 +166,12 @@ pub struct FunctionType {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TupleType {
     pub fields: Vec<Type>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ArrayType {
+    pub inner: Type,
+    pub length: u32,
 }
 
 impl TypeInfo {
@@ -513,29 +524,30 @@ impl Program {
                         write!(f, "i{}", bits),
                     TypeInfo::Pointer { inner } =>
                         write!(f, "&{}", self.prog.format_type(*inner)),
-                    TypeInfo::Func(func_ty) => {
-                        write!(f, "(")?;
-                        for (i, &param_ty) in func_ty.params.iter().enumerate() {
-                            if i > 0 { write!(f, ", ")?; }
-                            write!(f, "{}", self.prog.format_type(param_ty))?;
-                        }
-                        write!(f, ") -> {}", self.prog.format_type(func_ty.ret))?;
-                        Ok(())
+                    TypeInfo::Tuple(TupleType { fields }) =>
+                        self.prog.write_tuple(f, fields),
+                    TypeInfo::Func(FunctionType { params, ret }) => {
+                        self.prog.write_tuple(f, params)?;
+                        write!(f, " -> {}", self.prog.format_type(*ret))
                     }
-                    TypeInfo::Tuple(tuple_ty) => {
-                        write!(f, "(")?;
-                        for (i, &param_ty) in tuple_ty.fields.iter().enumerate() {
-                            if i > 0 { write!(f, ", ")?; }
-                            write!(f, "{}", self.prog.format_type(param_ty))?;
-                        }
-                        write!(f, ")")?;
-                        Ok(())
-                    }
+                    TypeInfo::Array(ArrayType { inner, length }) =>
+                        write!(f, "[{}; {}]", self.prog.format_type(*inner), length),
                 }
             }
         }
 
         Wrapped { ty, prog: self }
+    }
+
+    /// Helper function for formatting types, writes `(fields[0], fields[1], ...)`
+    fn write_tuple(&self, f: &mut Formatter<'_>, fields: &[Type]) -> std::fmt::Result {
+        write!(f, "(")?;
+        for (i, &field) in fields.iter().enumerate() {
+            if i > 0 { write!(f, ", ")?; }
+            write!(f, "{}", self.format_type(field))?;
+        }
+        write!(f, ")")?;
+        Ok(())
     }
 
     /// Wrap a `Value` as a `Display` value that prints a mostly human-readable representation of the value,

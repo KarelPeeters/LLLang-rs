@@ -303,6 +303,18 @@ const EXPR_START_TOKENS: &[TT] = &[
     TT::OpenB,
 ];
 
+const TYPE_START_TOKENS: &[TT] = &[
+    TT::Underscore,
+    TT::Void,
+    TT::Bool,
+    TT::Byte,
+    TT::Int,
+    TT::Ampersand,
+    TT::Id,
+    TT::OpenB,
+    TT::OpenS
+];
+
 struct BinOpInfo {
     level: u8,
     token: TT,
@@ -930,7 +942,22 @@ impl<'a> Parser<'a> {
                     kind,
                 })
             }
-            _ => Err(Self::unexpected_token(self.peek(), &[TT::Ampersand, TT::Id, TT::OpenB], "type declaration")),
+            TT::OpenS => {
+                //array
+                self.pop()?;
+                let inner = self.type_decl()?;
+                self.expect(TT::Semi, "array type delimiter")?;
+                //TODO proper IntLit parsing
+                let length: u32 = self.expect(TT::IntLit, "array length")?.string
+                    .parse().unwrap();
+                self.expect(TT::CloseS, "end of array type")?;
+
+                Ok(ast::Type {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::TypeKind::Array { inner: Box::new(inner), length },
+                })
+            }
+            _ => Err(Self::unexpected_token(self.peek(), TYPE_START_TOKENS, "type declaration")),
         }
     }
 }

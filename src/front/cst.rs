@@ -122,6 +122,7 @@ impl<'a> TypeStore<'a> {
                         write_tuple(&self.store, f, &info.params)?;
                         write!(f, " -> {}", self.store.format_type(info.ret))
                     }
+                    TypeInfo::Array(info) => write!(f, "[{}; {}]", self.store.format_type(info.inner), info.length),
                     TypeInfo::Struct(info) => write!(f, "{}", info.decl.id.string),
                 }
             }
@@ -237,6 +238,10 @@ impl<'a> ItemStore<'a> {
 
                 Ok(types.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
             }
+            ast::TypeKind::Array { inner, length } => {
+                let inner = self.resolve_type(scope_kind, scope, types, inner)?;
+                Ok(types.types.push(TypeInfo::Array(ArrayTypeInfo { inner, length: *length })))
+            }
         }
     }
 }
@@ -293,6 +298,8 @@ pub enum TypeInfo<'ast, T> {
 
     Tuple(TupleTypeInfo<T>),
     Function(FunctionTypeInfo<T>),
+    Array(ArrayTypeInfo<T>),
+
     Struct(StructTypeInfo<'ast>),
 }
 
@@ -332,6 +339,10 @@ impl<'ast, T> TypeInfo<'ast, T> {
                 ret: f(&info.ret),
                 params: info.params.iter().map(f).collect(),
             }),
+            TypeInfo::Array(info) => TypeInfo::Array(ArrayTypeInfo {
+                inner: f(&info.inner),
+                length: info.length,
+            }),
             TypeInfo::Struct(info) => TypeInfo::Struct(info.clone()),
         }
     }
@@ -346,6 +357,12 @@ pub struct TupleTypeInfo<T> {
 pub struct FunctionTypeInfo<T> {
     pub params: Vec<T>,
     pub ret: T,
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct ArrayTypeInfo<T> {
+    pub inner: T,
+    pub length: u32,
 }
 
 #[derive(Debug, Clone)]

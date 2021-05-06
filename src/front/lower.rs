@@ -5,11 +5,12 @@ use itertools::Itertools;
 
 use crate::front::{ast, cst};
 use crate::front::ast::ExpressionKind;
-use crate::front::cst::{FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, Type, TypeInfo, TypeStore};
+use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, Type, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
 use crate::mid::ir;
+use crate::mid::ir::ArrayType;
 
 /// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
 /// is an LValue of RValue. LValues are values that can appear on the left side of assignments, RValues are those that cannot.
@@ -108,6 +109,10 @@ impl<'a> MappingTypeStore<'a> {
                     .map(|field| self.map_type(prog, field.ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
+            }
+            &TypeInfo::Array(ArrayTypeInfo { inner, length }) => {
+                let inner = self.map_type(prog, inner);
+                prog.define_type_array(ArrayType { inner, length })
             }
         };
 

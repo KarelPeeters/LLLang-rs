@@ -16,6 +16,7 @@ pub enum TypeKind {
     Int,
 
     Path(Path),
+
     Ref(Box<Type>),
     Func {
         params: Vec<Type>,
@@ -23,6 +24,10 @@ pub enum TypeKind {
     },
     Tuple {
         fields: Vec<Type>
+    },
+    Array {
+        inner: Box<Type>,
+        length: u32,
     },
 }
 
@@ -47,7 +52,7 @@ pub struct Path {
 
 #[derive(Debug)]
 pub struct ModuleContent {
-    pub items: Vec<Item>
+    pub items: Vec<Item>,
 }
 
 #[derive(Debug)]
