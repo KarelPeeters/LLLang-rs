@@ -39,7 +39,7 @@ impl Layout {
                 Layout::new(inner.size * (length as i32), inner.alignment)
             }
             TypeInfo::Tuple(TupleType { fields }) => {
-                TupleLayout::from_types(prog, fields.iter().copied()).layout
+                TupleLayout::for_types(prog, fields.iter().copied()).layout
             }
         }
     }
@@ -52,7 +52,7 @@ pub struct TupleLayout {
 }
 
 impl TupleLayout {
-    pub fn from_types(prog: &Program, fields: impl IntoIterator<Item=Type>) -> Self {
+    pub fn for_types(prog: &Program, fields: impl IntoIterator<Item=Type>) -> Self {
         TupleLayout::from_layouts(fields.into_iter().map(|f| Layout::for_type(prog, f)))
     }
 
@@ -75,8 +75,13 @@ impl TupleLayout {
             alignment = max(alignment, field.alignment);
         }
 
+        //make sure size is multiple of alignment
+        //TODO is there a way to only do this if we're part of an array?
+        // what if we're just allocating in a tuple, like here, it really doesn't matter
+        let size = next_multiple(next_offset, alignment);
+
         TupleLayout {
-            layout: Layout::new(next_offset, alignment),
+            layout: Layout::new(size, alignment),
             offsets,
         }
     }
@@ -107,19 +112,20 @@ mod test {
 
     #[test]
     fn mixed() {
-        // 0.12 2233 3... 4
+        // 0.22 3334 44.. 5555 5555 6...
 
         let layout = TupleLayout::from_layouts([
             Layout::new(1, 1),
-            Layout::new(1, 2),
+            Layout::new(2, 2),
             Layout::new(3, 1),
             Layout::new(3, 1),
-            Layout::new(1, 4),
+            Layout::new(8, 4),
+            Layout::new(1, 1),
         ].iter().copied());
 
         assert_eq!(TupleLayout {
-            layout: Layout::new(13, 4),
-            offsets: vec![0, 2, 3, 6, 12],
+            layout: Layout::new(24, 4),
+            offsets: vec![0, 2, 4, 7, 12, 20],
         }, layout);
     }
 

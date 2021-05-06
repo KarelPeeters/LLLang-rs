@@ -51,6 +51,7 @@ fn collect_used(prog: &Program) -> Visited {
             todo.add_value(Value::Slot(slot));
         }
 
+        //TODO move this loop body into a separate function
         while let Some(block) = todo.blocks.pop_front() {
             let BlockInfo { phis, instructions, terminator } = prog.get_block(block);
 
@@ -82,6 +83,10 @@ fn collect_used(prog: &Program) -> Visited {
                     }
                     InstructionInfo::TupleFieldPtr { base, index: _, result_ty: _ } => {
                         todo.add_value(*base);
+                    }
+                    InstructionInfo::ArrayIndexPtr { base, index, result_ty: _ } => {
+                        todo.add_value(*base);
+                        todo.add_value(*index);
                     }
                 }
             }

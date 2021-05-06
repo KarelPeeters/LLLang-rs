@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
 use crate::front::{ast, cst};
-use crate::front::ast::DotIndexIndex;
 use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::ParameterInfo;
 
 /// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
@@ -345,10 +343,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let target_inner_ty = self.types[target_value.ty].unwrap_ptr().unwrap();
 
                 let index = match (&self.types[target_inner_ty], index) {
-                    (TypeInfo::Tuple(_), DotIndexIndex::Tuple { index, .. }) => {
+                    (TypeInfo::Tuple(_), ast::DotIndexIndex::Tuple { index, .. }) => {
                         *index
                     }
-                    (TypeInfo::Struct(target_ty_info), DotIndexIndex::Struct(id)) => {
+                    (TypeInfo::Struct(target_ty_info), ast::DotIndexIndex::Struct(id)) => {
                         target_ty_info.find_field_index(&id.string)
                             .ok_or_else(|| Error::StructFieldNotFound {
                                 target,
@@ -381,10 +379,21 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(struct_sub_ptr) }))
             }
             ast::ExpressionKind::ArrayIndex { target, index } => {
-                let (after_target, _target_value) = self.append_expr_lvalue(flow, scope, target)?;
-                let (_after_index, _index) = self.append_expr_loaded(after_target, scope, index)?;
+                let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
+                let (after_index, index) = self.append_expr_loaded(after_target, scope, index)?;
 
-                todo!("Actually emit IR instruction once it's implemented");
+                let result_ty = self.expr_type(expr);
+                let result_ty_ptr = self.types.define_type_ptr(result_ty);
+                let result_ty_ptr_ir = self.types.map_type(&mut self.prog, result_ty_ptr);
+
+                let array_index_ptr = ir::InstructionInfo::ArrayIndexPtr {
+                    base: target_value.ir,
+                    index: index.ir,
+                    result_ty: result_ty_ptr_ir,
+                };
+                let array_index_ptr = self.append_instr(after_index.block, array_index_ptr);
+
+                (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(array_index_ptr) }))
             }
             ast::ExpressionKind::Return { value } => {
                 let (after_value, value) = if let Some(value) = value {
@@ -412,7 +421,11 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let expect_ty = self.expr_type(expr);
             let actual_ty = result.1.ty(&self.types);
 
-            assert_eq!(expect_ty, actual_ty, "bug in lower");
+            assert_eq!(
+                expect_ty, actual_ty,
+                "bug in lower, inferred type '{}' for expression but generated code returns '{}'",
+                self.types.format_type(expect_ty), self.types.format_type(actual_ty)
+            );
         }
 
         Ok(result)
@@ -678,7 +691,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let ty_ptr = self.types.define_type_ptr(ty);
 
             //create the param
-            let ir_param = self.prog.define_param(ParameterInfo { ty: ty_ir });
+            let ir_param = self.prog.define_param(ir::ParameterInfo { ty: ty_ir });
             self.prog.get_func_mut(self.ir_func).params.push(ir_param);
 
             //allocate a slot for the parameter so its address can be taken
