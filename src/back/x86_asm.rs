@@ -285,7 +285,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Func(func) => {
                 assert_eq!(layout.size, 4);
                 let func_number = self.parent.func_number(*func);
-                self.append_instr(&format!("mov {}, func_{}", target, func_number));
+                self.append_instr(&format!("mov {}, dword func_{}", target, func_number));
             }
             Value::Param(param) => {
                 let param_index = self.prog.get_func(self.func).params.iter()
@@ -312,7 +312,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Extern(ext) => {
                 assert_eq!(layout.size, 4);
                 let name = &self.prog.get_ext(*ext).name;
-                self.append_instr(&format!("mov {}, {}", target, name));
+                self.append_instr(&format!("mov {}, dword {}", target, name));
                 self.header.push_str(&format!("extern {}\n", name))
             }
             Value::Data(data) => {
