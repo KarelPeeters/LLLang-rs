@@ -3,7 +3,6 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::ast;
-use crate::front::ast::{DotIndexIndex, Identifier};
 use crate::front::pos::{FileId, Pos, Span};
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -123,16 +122,16 @@ impl Token {
     }
 }
 
-struct Tokenizer<'a> {
-    left: &'a str,
+struct Tokenizer<'s> {
+    left: &'s str,
     pos: Pos,
 
     curr: Token,
     next: Token,
 }
 
-impl<'a> Tokenizer<'a> {
-    fn new(file: FileId, left: &'a str) -> Result<Self> {
+impl<'s> Tokenizer<'s> {
+    fn new(file: FileId, left: &'s str) -> Result<Self> {
         let pos = Pos { file, line: 1, col: 1 };
         let mut result = Self {
             left,
@@ -321,45 +320,89 @@ struct BinOpInfo {
     op: ast::BinaryOp,
 }
 
-impl BinOpInfo {
-    const fn new(level: u8, token: TokenType, bind_left: bool, op: ast::BinaryOp) -> Self {
-        Self { level, token, bind_left, op }
-    }
-}
-
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
-    BinOpInfo::new(3, TT::DoubleEq, true, ast::BinaryOp::Eq),
-    BinOpInfo::new(3, TT::NotEq, true, ast::BinaryOp::Neq),
-    BinOpInfo::new(3, TT::GreaterEqual, true, ast::BinaryOp::Gte),
-    BinOpInfo::new(3, TT::Greater, true, ast::BinaryOp::Gt),
-    BinOpInfo::new(3, TT::LessEqual, true, ast::BinaryOp::Lte),
-    BinOpInfo::new(3, TT::Less, true, ast::BinaryOp::Lt),
-    BinOpInfo::new(5, TT::Plus, true, ast::BinaryOp::Add),
-    BinOpInfo::new(5, TT::Minus, true, ast::BinaryOp::Sub),
-    BinOpInfo::new(6, TT::Slash, true, ast::BinaryOp::Div),
-    BinOpInfo::new(6, TT::Star, true, ast::BinaryOp::Mul),
-    BinOpInfo::new(6, TT::Percent, true, ast::BinaryOp::Mod),
+    BinOpInfo { level: 3, token: TT::DoubleEq, bind_left: true, op: ast::BinaryOp::Eq },
+    BinOpInfo { level: 3, token: TT::NotEq, bind_left: true, op: ast::BinaryOp::Neq },
+    BinOpInfo { level: 3, token: TT::GreaterEqual, bind_left: true, op: ast::BinaryOp::Gte },
+    BinOpInfo { level: 3, token: TT::Greater, bind_left: true, op: ast::BinaryOp::Gt },
+    BinOpInfo { level: 3, token: TT::LessEqual, bind_left: true, op: ast::BinaryOp::Lte },
+    BinOpInfo { level: 3, token: TT::Less, bind_left: true, op: ast::BinaryOp::Lt },
+    BinOpInfo { level: 5, token: TT::Plus, bind_left: true, op: ast::BinaryOp::Add },
+    BinOpInfo { level: 5, token: TT::Minus, bind_left: true, op: ast::BinaryOp::Sub },
+    BinOpInfo { level: 6, token: TT::Slash, bind_left: true, op: ast::BinaryOp::Div },
+    BinOpInfo { level: 6, token: TT::Star, bind_left: true, op: ast::BinaryOp::Mul },
+    BinOpInfo { level: 6, token: TT::Percent, bind_left: true, op: ast::BinaryOp::Mod },
 ];
 
-struct UnOpInfo {
+struct PrefixOpInfo {
+    level: u8,
     token: TT,
     op: ast::UnaryOp,
 }
 
-impl UnOpInfo {
-    const fn new(token: TokenType, op: ast::UnaryOp) -> Self {
-        UnOpInfo { token, op }
+const PREFIX_OPERATOR_INFO: &[PrefixOpInfo] = &[
+    PrefixOpInfo { level: 2, token: TT::Ampersand, op: ast::UnaryOp::Ref },
+    PrefixOpInfo { level: 2, token: TT::Star, op: ast::UnaryOp::Deref },
+    PrefixOpInfo { level: 2, token: TT::Minus, op: ast::UnaryOp::Neg },
+];
+
+const POSTFIX_DEFAULT_LEVEL: u8 = 3;
+const POSTFIX_CAST_LEVEL: u8 = 1;
+
+/// The data required to construct a prefix expression.
+struct PrefixState {
+    level: u8,
+    start: Pos,
+    op: ast::UnaryOp,
+}
+
+impl PrefixState {
+    fn apply(self, inner: ast::Expression) -> ast::Expression {
+        let inner = Box::new(inner);
+        ast::Expression {
+            span: Span::new(self.start, inner.span.end),
+            kind: ast::ExpressionKind::Unary { kind: self.op, inner },
+        }
     }
 }
 
-const PREFIX_UNARY_OPERATOR_INFO: &[UnOpInfo] = &[
-    UnOpInfo::new(TT::Ampersand, ast::UnaryOp::Ref),
-    UnOpInfo::new(TT::Star, ast::UnaryOp::Deref),
-    UnOpInfo::new(TT::Minus, ast::UnaryOp::Neg),
-];
+/// The data required to construct a postfix expression.
+struct PostFixState {
+    level: u8,
+    end: Pos,
+    kind: PostFixStateKind,
+}
+
+impl PostFixState {
+    fn apply(self, inner: ast::Expression) -> ast::Expression {
+        let inner = Box::new(inner);
+        let span = Span::new(inner.span.start, self.end);
+
+        let kind = match self.kind {
+            PostFixStateKind::Call { args } =>
+                ast::ExpressionKind::Call { target: inner, args },
+            PostFixStateKind::ArrayIndex { index } =>
+                ast::ExpressionKind::ArrayIndex { target: inner, index },
+            PostFixStateKind::DotIndex { index } =>
+                ast::ExpressionKind::DotIndex { target: inner, index },
+            PostFixStateKind::Cast { ty } =>
+                ast::ExpressionKind::Cast { value: inner, ty },
+        };
+
+        ast::Expression { span, kind }
+    }
+}
+
+enum PostFixStateKind {
+    Call { args: Vec<ast::Expression> },
+    ArrayIndex { index: Box<ast::Expression> },
+    DotIndex { index: ast::DotIndexIndex },
+    Cast { ty: ast::Type },
+}
+
 
 #[allow(dead_code)]
-impl<'a> Parser<'a> {
+impl<'s> Parser<'s> {
     fn pop(&mut self) -> Result<Token> {
         let token = self.tokenizer.advance()?;
         self.last_popped_end = token.span.end;
@@ -451,7 +494,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-impl<'a> Parser<'a> {
+impl<'s> Parser<'s> {
     fn module(&mut self) -> Result<ast::ModuleContent> {
         let (_, items) = self.list(TT::Eof, None, Self::item)?;
         Ok(ast::ModuleContent { items })
@@ -706,65 +749,82 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Result<ast::Expression> {
-        //collect prefix operators, will be applied later from right to left
-        let mut prefix_ops = Vec::new();
+        //collect all operators
+        let mut prefix_ops = self.collect_prefix_ops()?;
+        let curr = self.atomic()?;
+        let mut postfix_ops = self.collect_postfix_ops()?;
+
+        //postfix operations should be applied first-to-last, so reverse
+        postfix_ops.reverse();
+
+        //apply operations last-to-first, choosing between pre- and postfix depending on their levels
+        let mut curr = curr;
         loop {
-            let token = self.peek();
-            let info = PREFIX_UNARY_OPERATOR_INFO.iter()
-                .find(|i| i.token == token.ty);
-            if let Some(info) = info {
-                let token = self.pop()?;
-                prefix_ops.push((token.span.start, info.op));
-            } else {
-                break;
-            }
-        }
+            let prefix_level = prefix_ops.last().map(|s| s.level);
+            let postfix_level = postfix_ops.last().map(|s| s.level);
 
-        let mut curr = self.postfix()?;
-
-        //apply prefixes from right to left
-        for (pos, op) in prefix_ops {
-            curr = ast::Expression {
-                span: Span::new(pos, curr.span.end),
-                kind: ast::ExpressionKind::Unary {
-                    kind: op,
-                    inner: Box::new(curr),
-                },
+            match (prefix_level, postfix_level) {
+                (Some(prefix_level), Some(postfix_level)) => {
+                    assert_ne!(prefix_level, postfix_level);
+                    if prefix_level > postfix_level {
+                        curr = prefix_ops.pop().unwrap().apply(curr);
+                    } else {
+                        curr = postfix_ops.pop().unwrap().apply(curr);
+                    }
+                }
+                (Some(_), None) => {
+                    curr = prefix_ops.pop().unwrap().apply(curr);
+                }
+                (None, Some(_)) => {
+                    curr = postfix_ops.pop().unwrap().apply(curr);
+                }
+                (None, None) => break
             }
         }
 
         Ok(curr)
     }
 
-    fn postfix(&mut self) -> Result<ast::Expression> {
-        //inner expression
-        let mut curr = self.atomic()?;
-        let curr_start = curr.span.start;
+    fn collect_prefix_ops(&mut self) -> Result<Vec<PrefixState>> {
+        let mut result = Vec::new();
 
-        //apply immediately from left to right
+        loop {
+            let token = self.peek();
+            let info = PREFIX_OPERATOR_INFO.iter()
+                .find(|i| i.token == token.ty);
+
+            if let Some(info) = info {
+                let token = self.pop()?;
+                result.push(PrefixState { level: info.level, start: token.span.start, op: info.op });
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn collect_postfix_ops(&mut self) -> Result<Vec<PostFixState>> {
+        let mut result = Vec::new();
+
         loop {
             let token = self.peek();
 
-            let kind = match token.ty {
+            let (level, kind) = match token.ty {
                 TT::OpenB => {
                     //call
                     self.pop()?;
                     let (_, args) = self.list(TT::CloseB, Some(TT::Comma), Self::expression)?;
-                    ast::ExpressionKind::Call {
-                        target: Box::new(curr),
-                        args,
-                    }
+
+                    (POSTFIX_DEFAULT_LEVEL, PostFixStateKind::Call { args })
                 }
                 TT::OpenS => {
                     //array indexing
                     self.pop()?;
-                    let index = self.expression()?;
+                    let index = Box::new(self.expression()?);
                     self.expect(TT::CloseS, "")?;
 
-                    ast::ExpressionKind::ArrayIndex {
-                        target: Box::new(curr),
-                        index: Box::new(index),
-                    }
+                    (POSTFIX_DEFAULT_LEVEL, PostFixStateKind::ArrayIndex { index })
                 }
                 TT::Dot => {
                     //dot indexing
@@ -773,46 +833,33 @@ impl<'a> Parser<'a> {
                     let index = self.expect_any(&[TT::IntLit, TT::Id], "dot index index")?;
                     let index = match index.ty {
                         //TODO proper IntLit parsing
-                        TT::IntLit => DotIndexIndex::Tuple {
+                        TT::IntLit => ast::DotIndexIndex::Tuple {
                             span: index.span,
                             index: index.string.parse().unwrap(),
                         },
-                        TT::Id => DotIndexIndex::Struct(Identifier {
+                        TT::Id => ast::DotIndexIndex::Struct(ast::Identifier {
                             span: index.span,
                             string: index.string,
                         }),
                         _ => unreachable!(),
                     };
 
-                    ast::ExpressionKind::DotIndex {
-                        target: Box::new(curr),
-                        index,
-                    }
+                    (POSTFIX_DEFAULT_LEVEL, PostFixStateKind::DotIndex { index })
                 }
-                //TODO operator precedence: this needs to have a lower priority than the prefix operators
-                //  right now `&a as &int` parses as `&(a as &int)` but we want `(&a) as &int`
-                //  the solution is probably to store all pre/postfix ops in arrays and then walk them both, always
-                //  applying the one with the highest priority
                 TT::As => {
                     //casting
                     self.pop()?;
                     let ty = self.type_decl()?;
 
-                    ast::ExpressionKind::Cast {
-                        value: Box::new(curr),
-                        ty,
-                    }
+                    (POSTFIX_CAST_LEVEL, PostFixStateKind::Cast { ty })
                 }
                 _ => break
             };
 
-            curr = ast::Expression {
-                span: Span::new(curr_start, self.last_popped_end),
-                kind,
-            }
+            result.push(PostFixState { level, end: self.last_popped_end, kind });
         }
 
-        Ok(curr)
+        Ok(result)
     }
 
     fn atomic(&mut self) -> Result<ast::Expression> {
