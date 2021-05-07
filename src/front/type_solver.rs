@@ -27,12 +27,23 @@ enum Constraint {
     DefaultVoid,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub enum Origin<'ast> {
     FullyKnown,
     Expression(&'ast ast::Expression),
     Declaration(&'ast ast::Declaration),
     ForIndex(&'ast ast::ForStatement),
+}
+
+impl std::fmt::Debug for Origin<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Origin::FullyKnown => write!(f, "Origin::FullyKnown"),
+            Origin::Expression(a) => write!(f, "Origin::Expression({:?})", a.span),
+            Origin::Declaration(a) => write!(f, "Origin::Declaration({:?})", a.span),
+            Origin::ForIndex(a) => write!(f, "Origin::ForIndex({:?})", a.span),
+        }
+    }
 }
 
 //TODO don't assert anywhere, return an error instead. look at unwrap, expect, panic, ...
@@ -102,6 +113,11 @@ impl<'ast> Default for TypeProblem<'ast> {
 }
 
 impl<'ast> TypeProblem<'ast> {
+    /// The current amount of `TypeVar`s defined in this problem.
+    pub fn len(&self) -> usize {
+        self.state.len()
+    }
+
     fn new_var(&mut self, origin: Origin<'ast>, constraint: Constraint, info: Option<VarTypeInfo<'ast>>) -> TypeVar {
         // Some(Wildcard) means that we don't know anything about a type, so convert it to None
         let info = info.filter(|info| info != &VarTypeInfo::Wildcard);
@@ -390,16 +406,18 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
         }
 
         writeln!(f, "    ],\n    constraints: [")?;
-
         for &(left, right) in &self.matches {
             writeln!(f, "        {:?} == {:?}", left, right)?;
         }
 
+        writeln!(f, "    ],\n    index constraints: [")?;
         for &IndexMatch { target, result, index } in &self.index_matches {
             writeln!(f, "        {:?}[{:?}] == {:?}", target, index, result)?;
         }
+        writeln!(f, "    ],")?;
 
-        write!(f, "    ]\n}}\n")?;
+        writeln!(f, "}}")?;
+
         Ok(())
     }
 }
