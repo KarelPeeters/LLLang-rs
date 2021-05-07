@@ -260,7 +260,7 @@ fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
         Lattice::Const(cst) => {
             if let Value::Const(cst) = cst {
                 //if this is an actual boolean const we can fully evaluate it
-                assert_eq!(prog.type_bool(), cst.ty);
+                assert_eq!(prog.ty_bool(), cst.ty);
                 let cst = cst.value != 0;
                 (cst, !cst)
             } else {
@@ -292,7 +292,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
     let result = match instr_info {
         InstructionInfo::Load { .. } => Lattice::Overdef,
         InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
-        InstructionInfo::ArrayIndexPtr { .. } => Lattice::Overdef,
+        InstructionInfo::PointerOffSet { .. } => Lattice::Overdef,
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
             if let Value::Func(target) = *target {
@@ -354,7 +354,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lt => left < right,
                 };
 
-                Lattice::Const(Value::Const(Const { ty: prog.type_bool(), value: result as i32 }))
+                Lattice::Const(Value::Const(Const { ty: prog.ty_bool(), value: result as i32 }))
             } else {
                 //TODO sometimes this can be inferred as well, eg "0 & x"
                 Lattice::Overdef

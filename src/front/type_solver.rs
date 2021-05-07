@@ -194,11 +194,20 @@ impl<'ast> TypeProblem<'ast> {
 
         //map types back to cst types (and check that all types were indeed inferred)
         let state = (0..self.state.len()).map(|i| {
-            let ty = self.get_solution(types, TypeVar(i));
+            let var = TypeVar(i);
+            let ty = self.get_solution(types, var);
 
             //check that integer requirements are satisfied
             if self.state[i].constraint == Constraint::AnyInt {
-                assert!(matches!(self.state[i].info.as_ref().unwrap(), TypeInfo::Byte | TypeInfo::Int))
+                let info = &types[ty];
+
+                match info {
+                    TypeInfo::Byte | TypeInfo::Int => {}
+                    _ => panic!(
+                        "Type for {:?} with origin \n{:?}\nshould be an integer, but was\n{:?}\n",
+                        var, self.state[var.0].origin, info,
+                    ),
+                }
             }
 
             ty

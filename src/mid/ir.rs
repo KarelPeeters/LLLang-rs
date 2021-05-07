@@ -66,11 +66,13 @@ pub struct Program {
     types: ArenaSet<Type, TypeInfo>,
 
     //predefined types
-    ty_bool: Type,
     ty_void: Type,
+    ty_ptr: Type,
+    ty_bool: Type,
+    ty_int: Type,
 
     //TODO change program to have multiple possible entries with arbitrary signatures instead
-    //  partly for elegance but also because thi is too limiting, all extern functions should be considered entry points
+    //  partly for elegance but also because this is too limiting, all extern functions should be considered entry points
     pub main: Function,
 }
 
@@ -81,6 +83,7 @@ impl Default for Program {
         let mut nodes = Arenas::default();
 
         let ty_void = types.push(TypeInfo::Void);
+        let ty_ptr = types.push(TypeInfo::Pointer);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
         let ty_int = types.push(TypeInfo::Integer { bits: 32 });
 
@@ -92,7 +95,7 @@ impl Default for Program {
         let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
         let main = nodes.funcs.push(main_info);
 
-        Program { nodes, types, ty_bool, ty_void, main }
+        Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_int, main }
     }
 }
 
@@ -103,10 +106,6 @@ impl Program {
 
     pub fn define_type_int(&mut self, bits: u32) -> Type {
         self.define_type(TypeInfo::Integer { bits })
-    }
-
-    pub fn define_type_ptr(&mut self, inner: Type) -> Type {
-        self.types.push(TypeInfo::Pointer { inner })
     }
 
     pub fn define_type_func(&mut self, func_ty: FunctionType) -> Type {
@@ -121,12 +120,16 @@ impl Program {
         self.types.push(TypeInfo::Array(array_ty))
     }
 
-    pub fn type_bool(&self) -> Type {
-        self.ty_bool
+    pub fn ty_void(&self) -> Type {
+        self.ty_void
     }
 
-    pub fn type_void(&self) -> Type {
+    pub fn ty_ptr(&self) -> Type {
         self.ty_void
+    }
+
+    pub fn ty_bool(&self) -> Type {
+        self.ty_bool
     }
 
     pub fn get_type(&self, ty: Type) -> &TypeInfo {
@@ -139,7 +142,7 @@ impl Program {
             Value::Const(cst) => cst.ty,
             Value::Func(func) => self.get_func(func).ty,
             Value::Param(param) => self.get_param(param).ty,
-            Value::Slot(slot) => self.get_slot(slot).ty,
+            Value::Slot(_) => self.ty_ptr,
             Value::Phi(phi) => self.get_phi(phi).ty,
             Value::Instr(instr) => self.get_instr(instr).ty(self),
             Value::Extern(ext) => self.get_ext(ext).ty,
@@ -152,7 +155,7 @@ impl Program {
 pub enum TypeInfo {
     Void,
     Integer { bits: u32 },
-    Pointer { inner: Type },
+    Pointer,
     Func(FunctionType),
     Tuple(TupleType),
     Array(ArrayType),
@@ -183,11 +186,8 @@ impl TypeInfo {
         }
     }
 
-    pub fn unwrap_ptr(&self) -> Option<Type> {
-        match self {
-            &TypeInfo::Pointer { inner } => Some(inner),
-            _ => None,
-        }
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, TypeInfo::Pointer)
     }
 
     pub fn unwrap_func(&self) -> Option<&FunctionType> {
@@ -254,13 +254,6 @@ pub struct ParameterInfo {
 #[derive(Debug)]
 pub struct StackSlotInfo {
     pub inner_ty: Type,
-    pub ty: Type,
-}
-
-impl StackSlotInfo {
-    pub fn new(inner_ty: Type, prog: &mut Program) -> Self {
-        Self { inner_ty, ty: prog.define_type_ptr(inner_ty) }
-    }
 }
 
 #[derive(Debug)]
@@ -288,29 +281,42 @@ pub struct PhiInfo {
 
 #[derive(Debug)]
 pub enum InstructionInfo {
-    /// `Load { addr: &T } -> T`
-    Load { addr: Value },
-    /// `Store { addr: &T, value: T } -> void`
+    /// Load a value of type `ty` from `addr`.
+    ///
+    /// signature: `Load { addr: &, ty=T } -> T`
+    Load { addr: Value, ty: Type },
+
+    /// Store `value` into `addr`.
+    ///
+    /// `Store { ty=T, addr: &, value: T } -> void`
     Store { addr: Value, value: Value },
+
+    /// Call `target` with arguments `args`.
+    ///
     /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
     Call { target: Value, args: Vec<Value> },
+
+    ///Perform binary arithmetic operation `kind(left, right)`;
+    ///
     /// `Arithmetic { kind, left: iN, right: iN } -> iN`
     Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
+
+    /// Perform binary comparison operation `kind(left, right)`;
+    ///
     /// `Comparison { kind, left: iN, right: iN } -> i1`
     Comparison { kind: LogicalOp, left: Value, right: Value },
 
-    //TODO we need to store the result type here, which sucks
-    //  possible solutions:
-    //    * use "Cell" in program so we can create types on an immutable program?
-    //    * make Type a struct that also stores the amount of references it takes, so creating a reference type is really cheap
-    /// `TupleFieldPtr { base: &(A, B, C), index: 1 } -> B`
-    TupleFieldPtr { base: Value, index: u32, result_ty: Type },
+    /// Compute the pointer to a tuple field at `index` in `tuple_ty` from a pointer to containing tuple `base`.
+    ///
+    /// `TupleFieldPtr { base: &, index=1, tuple_ty=(A, B, C) } -> &`
+    TupleFieldPtr { base: Value, index: u32, tuple_ty: Type },
 
-    //TODO look into how exactly the equivalent LLVM instruction works and why it is so complicated
-    /// `ArrayIndex { base: &[T; _], index } ->  &T
-    ArrayIndexPtr { base: Value, index: Value, result_ty: Type },
-
-    //TODO add instruction to load tuple value directly instead of needing a pointer to it
+    /// Compute the pointer to element `index` of a hypothetical array containing elements of type `T` starting at `base`.
+    /// Intuitively this is `&base[index]` or equivalently `base + index * sizeof(T)`.
+    /// `value` can be negative..
+    ///
+    /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
+    PointerOffSet { ty: Type, base: Value, index: Value },
 }
 
 //TODO what about signed and unsigned? type or operation?
@@ -340,11 +346,8 @@ impl InstructionInfo {
         // eg a = add (a, a) or similar constructs
         // maybe change InstructionInfo to always include the result type?
         match self {
-            InstructionInfo::Load { addr } => {
-                prog.get_type(prog.type_of_value(*addr)).unwrap_ptr()
-                    .expect("load addr should have a pointer type")
-            }
-            InstructionInfo::Store { .. } => prog.type_void(),
+            InstructionInfo::Load { ty, .. } => *ty,
+            InstructionInfo::Store { .. } => prog.ty_ptr(),
             InstructionInfo::Call { target, .. } => {
                 prog.get_type(prog.type_of_value(*target)).unwrap_func()
                     .expect("call target should have a function type")
@@ -352,8 +355,13 @@ impl InstructionInfo {
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::TupleFieldPtr { result_ty, .. } => *result_ty,
-            InstructionInfo::ArrayIndexPtr { result_ty, .. } => *result_ty,
+            InstructionInfo::TupleFieldPtr { tuple_ty, index, .. } => {
+                *prog.get_type(*tuple_ty).unwrap_tuple()
+                    .expect("tuple_ty should be a tuple type")
+                    .fields.get(*index as usize)
+                    .unwrap_or_else(|| panic!("tuple index {} out of range for {:?} {}", index, tuple_ty, prog.format_type(*tuple_ty)))
+            },
+            InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
         }
     }
 }
@@ -537,8 +545,8 @@ impl Program {
                         write!(f, "void"),
                     TypeInfo::Integer { bits } =>
                         write!(f, "i{}", bits),
-                    TypeInfo::Pointer { inner } =>
-                        write!(f, "&{}", self.prog.format_type(*inner)),
+                    TypeInfo::Pointer =>
+                        write!(f, "&"),
                     TypeInfo::Tuple(TupleType { fields }) =>
                         self.prog.write_tuple(f, fields),
                     TypeInfo::Func(FunctionType { params, ret }) => {
@@ -635,7 +643,7 @@ impl Display for Program {
                 writeln!(f, "    slots:")?;
                 for &slot in &func_info.slots {
                     let slot_info = self.get_slot(slot);
-                    writeln!(f, "      {:?}: {}", slot, self.format_type(slot_info.ty))?;
+                    writeln!(f, "      {:?}: &{}", slot, self.format_type(slot_info.inner_ty))?;
                 }
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;

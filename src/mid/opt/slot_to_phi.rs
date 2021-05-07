@@ -74,7 +74,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
             if let Usage::Addr { pos } = usage {
                 let instr_info = prog.get_instr(pos.instr);
                 match instr_info {
-                    &InstructionInfo::Load { addr } => {
+                    &InstructionInfo::Load { addr, ty: _ } => {
                         debug_assert_eq!(Value::Slot(slot), addr);
 
                         //found a load, build a value for it and replace it
@@ -132,7 +132,7 @@ fn get_value_for_slot(
             if addr == Value::Slot(slot) {
                 //if the stored value is a load that will be also replaced by this pass we need to keep recursing
                 if let Value::Instr(value_instr) = value {
-                    if let &InstructionInfo::Load { addr: Value::Slot(value_slot) } = prog.get_instr(value_instr) {
+                    if let &InstructionInfo::Load { addr: Value::Slot(value_slot), ty: _ } = prog.get_instr(value_instr) {
                         if replaced_slots.contains(&value_slot) {
                             //find the block that contains the load
                             let block = *dom_info.blocks.iter().find(|&&block| {

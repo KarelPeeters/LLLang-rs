@@ -450,8 +450,6 @@ impl AsmFuncBuilder<'_, '_, '_> {
         //write out instructions
         for instr in &block.instructions {
             let instr_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
-            let result_ty = self.prog.get_instr(*instr).ty(&self.prog);
-            let result_layout = Layout::for_type(&self.prog, result_ty);
 
             match self.prog.get_instr(*instr) {
                 InstructionInfo::Store { addr, value } => {
@@ -459,7 +457,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_value_to_reg(Register::B, addr, 0);
                     self.append_value_to_mem(Register::B.mem(), value, 0);
                 }
-                InstructionInfo::Load { addr } => {
+                InstructionInfo::Load { addr, ty } => {
+                    let result_layout = Layout::for_type(self.prog, *ty);
+
                     self.append_instr(";Load");
                     self.append_value_to_reg(Register::B, addr, 0);
                     self.append_mem_copy(MemRegOffset::stack(instr_pos), Register::B.mem(), result_layout.size);
@@ -552,11 +552,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));
                 }
-                InstructionInfo::TupleFieldPtr { base, index, result_ty: _ } => {
-                    let tuple_ty = self.prog.get_type(self.prog.type_of_value(*base)).unwrap_ptr()
-                        .and_then(|ty| self.prog.get_type(ty).unwrap_tuple())
+                InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
+                    let tuple_ty = self.prog.get_type(*tuple_ty).unwrap_tuple()
                         .expect("TupleFieldPtr target should have tuple pointer type");
-
                     let layout = TupleLayout::for_types(self.prog, tuple_ty.fields.iter().copied());
                     let field_offset = layout.offsets[*index as usize];
 
@@ -565,14 +563,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr(&format!("add eax, {}", field_offset));
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::ArrayIndexPtr { base, index, result_ty } => {
-                    let result_inner_ty = self.prog.get_type(*result_ty).unwrap_ptr()
-                        .expect("ArrayIndexPtr should return a pointer");
-                    let inner_layout = Layout::for_type(self.prog, result_inner_ty);
+                InstructionInfo::PointerOffSet { base, index, ty } => {
+                    let ty_layout = Layout::for_type(self.prog, *ty);
 
                     self.append_instr(";ArrayIndexPtr");
                     self.append_value_to_reg(Register::A, index, 0);
-                    self.append_instr(&format!("imul eax, {}", inner_layout.size));
+                    self.append_instr(&format!("imul eax, {}", ty_layout.size));
 
                     self.append_value_to_reg(Register::B, base, 0);
                     self.append_instr("add eax, ebx");
