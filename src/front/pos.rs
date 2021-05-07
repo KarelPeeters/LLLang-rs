@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct FileId(pub usize);
 
 impl Debug for FileId {
@@ -32,7 +32,12 @@ pub struct Span {
 
 impl Debug for Span {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?} .. {:?}", self.start, self.end))
+        assert!(self.start.file == self.end.file);
+        write!(f, "{:?}{}:{}..{}:{}",
+               self.start.file,
+               self.start.line, self.start.col,
+               self.end.line, self.end.col
+        )
     }
 }
 

@@ -66,6 +66,7 @@ declare_tokens![
     While("while"),
     For("for"),
     In("in"),
+    As("as"),
     Break("break"),
     Continue("continue"),
 
@@ -786,6 +787,20 @@ impl<'a> Parser<'a> {
                     ast::ExpressionKind::DotIndex {
                         target: Box::new(curr),
                         index,
+                    }
+                }
+                //TODO operator precedence: this needs to have a lower priority than the prefix operators
+                //  right now `&a as &int` parses as `&(a as &int)` but we want `(&a) as &int`
+                //  the solution is probably to store all pre/postfix ops in arrays and then walk them both, always
+                //  applying the one with the highest priority
+                TT::As => {
+                    //casting
+                    self.pop()?;
+                    let ty = self.type_decl()?;
+
+                    ast::ExpressionKind::Cast {
+                        value: Box::new(curr),
+                        ty,
                     }
                 }
                 _ => break

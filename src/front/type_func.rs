@@ -154,6 +154,17 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.equal(self.problem.ty_int(), index_ty);
                 self.problem.array_index(expr_origin, target_ty)
             }
+            ast::ExpressionKind::Cast { value, ty } => {
+                let before_ty = self.visit_expr(scope, value)?;
+
+                //require that the value expression has a pointer type
+                let before_inner_ty = self.problem.unknown(expr_origin);
+                let before_ty_match = self.problem.known(expr_origin, TypeInfo::Pointer(before_inner_ty));
+                self.problem.equal(before_ty, before_ty_match);
+
+                let after_ty = self.resolve_type(scope, ty)?;
+                self.problem.fully_known(self.types, after_ty)
+            }
             ast::ExpressionKind::Return { value } => {
                 let value_ty = if let Some(value) = value {
                     self.visit_expr(scope, value)?

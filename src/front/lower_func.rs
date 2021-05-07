@@ -401,6 +401,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(array_index_ptr) }))
             }
+            ast::ExpressionKind::Cast { value, ty: _ } => {
+                let (after_value, value) = self.append_expr_loaded(flow, scope, value)?;
+                let result_ty = self.expr_type(expr);
+
+                // only the type changes, the (untyped) pointer value stays the same
+                (after_value, LRValue::Right(TypedValue { ty: result_ty, ir: value.ir }))
+            }
             ast::ExpressionKind::Return { value } => {
                 let (after_value, value) = if let Some(value) = value {
                     self.append_expr_loaded(flow, scope, value)?

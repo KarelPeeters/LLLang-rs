@@ -201,6 +201,11 @@ pub enum ExpressionKind {
         index: DotIndexIndex,
     },
 
+    Cast {
+        value: Box<Expression>,
+        ty: Type,
+    },
+
     Ternary {
         condition: Box<Expression>,
         then_value: Box<Expression>,
