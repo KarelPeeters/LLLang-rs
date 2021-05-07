@@ -1,6 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, InstructionInfo, Program, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Program, Value};
+use crate::mid::analyse::use_info::{InstructionPos, for_each_usage_in_instr};
 
 #[derive(Default)]
 struct Visited {
@@ -51,7 +52,6 @@ fn collect_used(prog: &Program) -> Visited {
             todo.add_value(Value::Slot(slot));
         }
 
-        //TODO move this loop body into a separate function
         while let Some(block) = todo.blocks.pop_front() {
             let BlockInfo { phis, instructions, terminator } = prog.get_block(block);
 
@@ -59,36 +59,13 @@ fn collect_used(prog: &Program) -> Visited {
                 todo.add_value(Value::Phi(phi));
             }
 
-            for instr in instructions {
-                todo.add_value(Value::Instr(*instr));
+            for &instr in instructions {
+                todo.add_value(Value::Instr(instr));
 
-                match prog.get_instr(*instr) {
-                    InstructionInfo::Load { addr } => {
-                        todo.add_value(*addr);
-                    }
-                    InstructionInfo::Store { addr, value } => {
-                        todo.add_value(*addr);
-                        todo.add_value(*value);
-                    }
-                    InstructionInfo::Call { target, args } => {
-                        todo.add_value(*target);
-                        for arg in args {
-                            todo.add_value(*arg);
-                        }
-                    }
-                    InstructionInfo::Arithmetic { left, right, kind: _ } |
-                    InstructionInfo::Comparison { left, right, kind: _ } => {
-                        todo.add_value(*left);
-                        todo.add_value(*right);
-                    }
-                    InstructionInfo::TupleFieldPtr { base, index: _, result_ty: _ } => {
-                        todo.add_value(*base);
-                    }
-                    InstructionInfo::ArrayIndexPtr { base, index, result_ty: _ } => {
-                        todo.add_value(*base);
-                        todo.add_value(*index);
-                    }
-                }
+                let pos = InstructionPos { func, block, instr };
+                for_each_usage_in_instr(pos, &prog.get_instr(instr), |value, _| {
+                    todo.add_value(value);
+                });
             }
 
             terminator.for_each_successor(|succ| {
