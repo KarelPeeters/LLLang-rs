@@ -6,11 +6,31 @@ use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usa
 use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
 use crate::util::zip_eq;
 
+/**
+TODO fix this buggy program that demonstrates at least a few sccp issues
+always look at the IR code because sometimes the program happens to work
+
+fun foo(x: int) -> int {
+    return x;
+}
+
+fun main() -> int {
+    let a;
+    if true {
+        a = foo;
+    } else {
+        a = foo;
+    }
+    return a(4);
+}
+
+*/
+
 ///Try to prove values are constant and replace them
 pub fn sccp(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+    let use_info = UseInfo::new(&*prog);
 
-    let lattice = compute_lattice_map(prog, &use_info);
+    let lattice = compute_lattice_map(&*prog, &use_info);
     let replaced_value_count = apply_lattice_simplifications(prog, &use_info, &lattice);
 
     println!("sccp replaced {} values", replaced_value_count);
@@ -101,7 +121,7 @@ enum Todo {
     FuncReturnUsers(Function),
 }
 
-fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
+fn compute_lattice_map(prog: &Program, use_info: &UseInfo) -> LatticeMap {
     let mut map = LatticeMap::default();
 
     let mut todo = VecDeque::new();
@@ -128,13 +148,12 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         let pos = InstructionPos { func, block, instr };
 
                         //since it's the first time we check for usage of functions as generic operands
+                        //TODO this is super brittle, what if functions are used for anything else (like phi args)?
+                        //  it would be better if this could be moved into common "value used" logic somewhere
                         for_each_usage_in_instr(pos, prog.get_instr(instr), |value, usage| {
                             if let Value::Func(func) = value {
                                 if !matches!(usage, Usage::CallTarget {..}) {
-                                    // mark function parameters as overdefined
-                                    for &param in &prog.get_func(func).params {
-                                        map.values.insert(Value::Param(param), Lattice::Overdef);
-                                    }
+                                    mark_function_escapes(prog, &mut map, &mut todo, func);
                                 }
                             }
                         });
@@ -159,8 +178,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
             Todo::ValueUsers(value) => {
                 for &usage in &use_info[value] {
                     match usage {
-                        Usage::Main | Usage::CallTarget { .. } =>
-                            unreachable!("this value should never change: {:?}", usage),
+                        Usage::Main => unreachable!("program entry should not change: {:?}", usage),
 
                         //don't need to visit because their result already starts out overdefined
                         Usage::Addr { .. } | Usage::TupleFieldPtrBase { .. } => {}
@@ -179,6 +197,9 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                             let new_value = map.eval(target.phi_values[phi_index]);
 
                             map.merge_value(&mut todo, Value::Phi(phi), new_value)
+                        }
+                        Usage::CallTarget { pos } => {
+                            visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
                         Usage::CallArgument { pos, index } => {
                             match prog.get_instr(pos.instr) {
@@ -260,7 +281,7 @@ fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
         Lattice::Const(cst) => {
             if let Value::Const(cst) = cst {
                 //if this is an actual boolean const we can fully evaluate it
-                assert_eq!(prog.type_bool(), cst.ty);
+                assert_eq!(prog.ty_bool(), cst.ty);
                 let cst = cst.value != 0;
                 (cst, !cst)
             } else {
@@ -283,6 +304,22 @@ fn update_target_reachable(prog: &Program, map: &mut LatticeMap, todo: &mut VecD
     let target_block_info = prog.get_block(target.block);
     for (&phi, &phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
         map.merge_value(todo, Value::Phi(phi), map.eval(phi_value));
+
+        if let Value::Func(func) = phi_value {
+            mark_function_escapes(prog, map, todo, func);
+        }
+    }
+}
+
+/// Mark function parameters as overdefined because this function is used as a value that's not a CallTarget, so the
+/// function "escapes" and we can't fully analyze the parameters any more.
+fn mark_function_escapes(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, func: Function) {
+    println!("Marking {:?} params as overdef", func);
+
+    for &param in &prog.get_func(func).params {
+        let param_value = Value::Param(param);
+        map.values.insert(param_value, Lattice::Overdef);
+        todo.push_back(Todo::ValueUsers(param_value));
     }
 }
 
@@ -292,23 +329,25 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
     let result = match instr_info {
         InstructionInfo::Load { .. } => Lattice::Overdef,
         InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
-        InstructionInfo::ArrayIndexPtr { .. } => Lattice::Overdef,
+        InstructionInfo::PointerOffSet { .. } => Lattice::Overdef,
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
-            if let Value::Func(target) = *target {
-                //mark reachable
-                todo.push_back(Todo::FunctionInit(target));
+            match map.eval(*target) {
+                Lattice::Undef => Lattice::Undef,
+                Lattice::Const(Value::Func(target)) => {
+                    //mark reachable
+                    todo.push_back(Todo::FunctionInit(target));
 
-                //merge in arguments
-                let target_info = prog.get_func(target);
-                for (&param, &arg) in zip_eq(&target_info.params, args) {
-                    map.merge_value(todo, Value::Param(param), map.eval(arg))
+                    //merge in arguments
+                    let target_info = prog.get_func(target);
+                    for (&param, &arg) in zip_eq(&target_info.params, args) {
+                        map.merge_value(todo, Value::Param(param), map.eval(arg))
+                    }
+
+                    //get return
+                    map.eval_func_return(target)
                 }
-
-                //get return
-                map.eval_func_return(target)
-            } else {
-                Lattice::Overdef
+                _ => Lattice::Overdef,
             }
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
@@ -354,7 +393,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lt => left < right,
                 };
 
-                Lattice::Const(Value::Const(Const { ty: prog.type_bool(), value: result as i32 }))
+                Lattice::Const(Value::Const(Const { ty: prog.ty_bool(), value: result as i32 }))
             } else {
                 //TODO sometimes this can be inferred as well, eg "0 & x"
                 Lattice::Overdef
