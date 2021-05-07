@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
+use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos};
 use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Program, Value};
-use crate::mid::analyse::use_info::{InstructionPos, for_each_usage_in_instr};
 
 #[derive(Default)]
 struct Visited {
@@ -68,8 +68,11 @@ fn collect_used(prog: &Program) -> Visited {
                 });
             }
 
-            terminator.for_each_successor(|succ| {
-                todo.add_block(succ);
+            terminator.for_each_target(|target| {
+                todo.add_block(target.block);
+                for &value in &target.phi_values {
+                    todo.add_value(value);
+                }
             });
         }
     }
