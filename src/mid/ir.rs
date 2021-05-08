@@ -125,7 +125,7 @@ impl Program {
     }
 
     pub fn ty_ptr(&self) -> Type {
-        self.ty_void
+        self.ty_ptr
     }
 
     pub fn ty_bool(&self) -> Type {
@@ -288,8 +288,8 @@ pub enum InstructionInfo {
 
     /// Store `value` into `addr`.
     ///
-    /// `Store { ty=T, addr: &, value: T } -> void`
-    Store { addr: Value, value: Value },
+    /// `Store { addr: &, ty=T, value: T } -> void`
+    Store { addr: Value, ty: Type, value: Value },
 
     /// Call `target` with arguments `args`.
     ///

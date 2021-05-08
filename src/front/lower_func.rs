@@ -247,7 +247,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (then_end, then_value) =
                             s.append_expr_loaded(then_start, scope, then_value)?;
 
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: then_value.ir };
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: then_value.ir };
                         s.append_instr(then_end.block, store);
 
                         Ok(then_end)
@@ -256,7 +256,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (else_end, else_value) =
                             s.append_expr_loaded(else_start, scope, else_value)?;
 
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: else_value.ir };
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: else_value.ir };
                         s.append_instr(else_end.block, store);
 
                         Ok(else_end)
@@ -562,7 +562,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //optionally store the value
                 if let Some(value) = value {
-                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value: value.ir };
+                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), ty: ty_ir, value: value.ir };
                     self.append_instr(after_value.block, store);
                 }
 
@@ -573,7 +573,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_value, value) =
                     self.append_expr_loaded(after_addr, scope, &assign.right)?;
 
-                let store = ir::InstructionInfo::Store { addr: addr.ir, value: value.ir };
+                let ty_ir = self.types.map_type(self.prog, value.ty);
+                let store = ir::InstructionInfo::Store { addr: addr.ir, ty: ty_ir, value: value.ir };
                 self.append_instr(after_value.block, store);
 
                 Ok(after_value)
@@ -634,7 +635,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 index_scope.maybe_declare(&for_stmt.index, item)?;
 
                 //index = start
-                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, value: start_value.ir });
+                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, ty: index_ty_ir, value: start_value.ir });
 
                 //index < end
                 let cond = |s: &mut Self, cond_start: Flow| {
@@ -667,6 +668,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                     let store = ir::InstructionInfo::Store {
                         addr: index_slot,
+                        ty: index_ty_ir,
                         value: ir::Value::Instr(inc),
                     };
                     s.append_instr(body_end.block, store);
@@ -717,6 +719,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             //immediately copy the param into the slot
             let store = ir::InstructionInfo::Store {
                 addr: ir::Value::Slot(slot),
+                ty: ty_ir,
                 value: ir::Value::Param(ir_param),
             };
             self.append_instr(start.block, store);

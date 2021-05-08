@@ -452,7 +452,8 @@ impl AsmFuncBuilder<'_, '_, '_> {
             let instr_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
 
             match self.prog.get_instr(*instr) {
-                InstructionInfo::Store { addr, value } => {
+                InstructionInfo::Store { addr, ty, value } => {
+                    assert_eq!(*ty, self.prog.type_of_value(*value));
                     self.append_instr(";Store");
                     self.append_value_to_reg(Register::B, addr, 0);
                     self.append_value_to_mem(Register::B.mem(), value, 0);

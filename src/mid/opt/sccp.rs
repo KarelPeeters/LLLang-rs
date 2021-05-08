@@ -162,8 +162,9 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         Usage::Main | Usage::CallTarget { .. } =>
                             unreachable!("this value should never change: {:?}", usage),
 
-                        //don't need to visit because their result already starts out overdefined
-                        Usage::Addr { .. } | Usage::TupleFieldPtrBase { .. } => {}
+                        //don't need to visit because their lattice value doesn't get affected by this operand
+                        Usage::LoadAddr { .. } | Usage::StoreAddr { .. } => {}
+                        Usage::TupleFieldPtrBase { .. } => {}
                         Usage::ArrayIndexPtrBase { .. } | Usage::ArrayIndexPtrIndex { .. } => {}
 
                         //don't need to visit because result is void

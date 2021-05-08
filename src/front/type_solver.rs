@@ -330,10 +330,10 @@ impl<'ast> TypeProblem<'ast> {
     fn unify_both_known(&mut self, left: TypeVar, right: TypeVar) {
         //TODO how to avoid cloning in this function?
 
-        let left = self.state[left.0].info.as_ref().unwrap();
-        let right = self.state[right.0].info.as_ref().unwrap();
+        let left_info = self.state[left.0].info.as_ref().unwrap();
+        let right_info = self.state[right.0].info.as_ref().unwrap();
 
-        match (left, right) {
+        match (left_info, right_info) {
             (TypeInfo::Placeholder(_), _) | (_, TypeInfo::Placeholder(_)) => panic!("placeholder"),
 
             (TypeInfo::Void, TypeInfo::Void) => {}
@@ -374,7 +374,11 @@ impl<'ast> TypeProblem<'ast> {
             }
 
             _ => {
-                panic!("Type mismatch: {:?} and {:?}", left, right)
+                panic!(
+                    "Type mismatch: \n{:?}={:?} ({:?})\n{:?}={:?} ({:?})\n",
+                    left, left_info, self.state[left.0].origin,
+                    right, right_info, self.state[right.0].origin,
+                )
             }
         }
     }
