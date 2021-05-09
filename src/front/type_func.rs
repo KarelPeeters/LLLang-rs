@@ -81,18 +81,26 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let value_ty = self.problem.unknown_int(expr_origin);
-
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
-                self.problem.equal(value_ty, left_ty);
-                self.problem.equal(value_ty, right_ty);
 
                 match kind {
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod =>
-                        value_ty,
-                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt =>
+                    BinaryOp::Add | BinaryOp::Sub => {
+                        self.problem.add_sub_constraint(left_ty, right_ty);
+                        left_ty
+                    }
+                    BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                        let value_ty = self.problem.unknown_int(expr_origin);
+                        self.problem.equal(value_ty, left_ty);
+                        self.problem.equal(value_ty, right_ty);
+                        value_ty
+                    }
+                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
+                        let value_ty = self.problem.unknown_int(expr_origin);
+                        self.problem.equal(value_ty, left_ty);
+                        self.problem.equal(value_ty, right_ty);
                         self.problem.ty_bool()
+                    }
                 }
             }
             ast::ExpressionKind::Unary { kind, inner } => {

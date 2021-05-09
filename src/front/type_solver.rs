@@ -53,7 +53,8 @@ pub struct TypeProblem<'ast> {
 
     //constraints
     matches: VecDeque<(TypeVar, TypeVar)>,
-    index_matches: VecDeque<IndexMatch<'ast>>,
+    index_constraints: VecDeque<IndexConstraint<'ast>>,
+    add_sub_constraints: VecDeque<AddSubConstraint>,
 
     //basic types
     ty_void: TypeVar,
@@ -66,8 +67,13 @@ pub struct TypeSolution {
     state: Vec<Type>,
 }
 
+struct AddSubConstraint {
+    left: TypeVar,
+    right: TypeVar,
+}
+
 #[derive(Debug, Copy, Clone)]
-struct IndexMatch<'ast> {
+struct IndexConstraint<'ast> {
     target: TypeVar,
     result: TypeVar,
     index: IndexKind<'ast>,
@@ -95,7 +101,8 @@ impl<'ast> Default for TypeProblem<'ast> {
         let mut problem = TypeProblem {
             state: vec![],
             matches: Default::default(),
-            index_matches: Default::default(),
+            index_constraints: Default::default(),
+            add_sub_constraints: Default::default(),
 
             ty_void: TypeVar(usize::MAX),
             ty_bool: TypeVar(usize::MAX),
@@ -175,27 +182,34 @@ impl<'ast> TypeProblem<'ast> {
     /// Create a new TypeVar representing the type of a tuple index expression.
     pub fn tuple_index(&mut self, origin: Origin<'ast>, target: TypeVar, index: u32) -> TypeVar {
         let result = self.unknown(origin);
-        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Tuple(index) });
+        self.index_constraints.push_back(IndexConstraint { target, result, index: IndexKind::Tuple(index) });
         result
     }
 
     /// Create a new TypeVar representing the type of a struct index expression.
     pub fn struct_index(&mut self, origin: Origin<'ast>, target: TypeVar, index: &'ast str) -> TypeVar {
         let result = self.unknown(origin);
-        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Struct(index) });
+        self.index_constraints.push_back(IndexConstraint { target, result, index: IndexKind::Struct(index) });
         result
     }
 
     /// Create a new TypeVar representing the result type of an array index expression.
     pub fn array_index(&mut self, origin: Origin<'ast>, target: TypeVar) -> TypeVar {
         let result = self.unknown(origin);
-        self.index_matches.push_back(IndexMatch { target, result, index: IndexKind::Array });
+        self.index_constraints.push_back(IndexConstraint { target, result, index: IndexKind::Array });
         result
     }
 
     /// Require that two types match
     pub fn equal(&mut self, left: TypeVar, right: TypeVar) {
         self.matches.push_back((left, right))
+    }
+
+    /// Require the following:
+    /// * if `left` is an integer type `right` should be the same type
+    /// * if `left` is a pointer type `right` should be the type Int
+    pub fn add_sub_constraint(&mut self, left: TypeVar, right: TypeVar) {
+        self.add_sub_constraints.push_back(AddSubConstraint { left, right });
     }
 }
 
@@ -235,6 +249,7 @@ impl<'ast> TypeProblem<'ast> {
     /// Run a single iteration of the solver, returns whether any progress was made.
     fn solve_iter(&mut self, types: &mut TypeStore<'ast>) -> bool {
         self.apply_index_constraints(types);
+        self.apply_add_sub_constraints();
 
         //process all currently known matches
         // new ones (or ones that need to be kept) are appended to self.matches
@@ -248,9 +263,9 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     fn apply_index_constraints(&mut self, types: &mut TypeStore<'ast>) {
-        let mut index_matches = std::mem::take(&mut self.index_matches);
+        let mut temp = std::mem::take(&mut self.index_constraints);
 
-        index_matches.retain(|&IndexMatch { target, result, index }| {
+        temp.retain(|&IndexConstraint { target, result, index }| {
             let target = if let Some(target) = &self.state[target.0].info {
                 target
             } else {
@@ -283,8 +298,38 @@ impl<'ast> TypeProblem<'ast> {
             false
         });
 
-        assert!(self.index_matches.is_empty());
-        self.index_matches = index_matches;
+        assert!(self.index_constraints.is_empty());
+        self.index_constraints = temp;
+    }
+
+    fn apply_add_sub_constraints(&mut self) {
+        let mut temp = std::mem::take(&mut self.add_sub_constraints);
+
+        temp.retain(|&AddSubConstraint { left, right }| {
+            let left_info = if let Some(left) = &self.state[left.0].info {
+                left
+            } else {
+                return true;
+            };
+
+            let required_right_ty = match left_info {
+                &TypeInfo::Int => TypeInfo::Int,
+                &TypeInfo::Byte => TypeInfo::Byte,
+                &TypeInfo::Pointer(_) => TypeInfo::Int,
+                _ => panic!(
+                    "Expected either pointer type or integer type for {:?} at {:?}, got {:?}",
+                    left, self.state[0].origin, left_info
+                )
+            };
+
+            let right_match = self.known(Origin::FullyKnown, required_right_ty);
+            self.matches.push_back((right, right_match));
+
+            false
+        });
+
+        assert!(self.add_sub_constraints.is_empty());
+        self.add_sub_constraints = temp;
     }
 
     /// Get the type inferred for the given TypeVar.
@@ -415,7 +460,7 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
         }
 
         writeln!(f, "    ],\n    index constraints: [")?;
-        for &IndexMatch { target, result, index } in &self.index_matches {
+        for &IndexConstraint { target, result, index } in &self.index_constraints {
             writeln!(f, "        {:?}[{:?}] == {:?}", target, index, result)?;
         }
         writeln!(f, "    ],")?;

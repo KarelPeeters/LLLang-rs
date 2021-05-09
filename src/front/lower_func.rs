@@ -103,6 +103,17 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
+    fn append_negate(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
+        let ty_ir = self.prog.type_of_value(value);
+        let instr = ir::InstructionInfo::Arithmetic {
+            kind: ir::ArithmeticOp::Sub,
+            left: ir::Value::Const(ir::Const::new(ty_ir, 0)),
+            right: value,
+        };
+        ir::Value::Instr(self.append_instr(block, instr))
+    }
+
+    #[must_use]
     fn append_load(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
             LRValue::Left(value) => {
@@ -275,11 +286,27 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_right, value_right) =
                     self.append_expr_loaded(after_left, scope, right)?;
 
-                let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
-                let instr = self.append_instr(after_right.block, instr);
-
                 let result_ty = self.expr_type(expr);
-                (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: ir::Value::Instr(instr) }))
+                let result = if let Some(inner_ty) = self.types[result_ty].unwrap_ptr() {
+                    //pointer offset
+                    let offset_ir = match kind {
+                        ast::BinaryOp::Add =>
+                            value_right.ir,
+                        ast::BinaryOp::Sub =>
+                            self.append_negate(after_right.block, value_right.ir),
+                        _ => panic!("Unexpected binary op kind for pointer result type, should be add or sub")
+                    };
+
+                    let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
+                    let instr = ir::InstructionInfo::PointerOffSet { base: value_left.ir, ty: inner_ty_ir, index: offset_ir };
+                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                } else {
+                    //basic binary operation
+                    let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
+                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                };
+
+                (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: result }))
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
@@ -305,15 +332,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (after_inner, inner) =
                             self.append_expr_loaded(flow, scope, inner)?;
                         let ty = inner.ty;
-                        let ty_ir = self.types.map_type(self.prog, ty);
 
-                        let instr = self.append_instr(after_inner.block, ir::InstructionInfo::Arithmetic {
-                            kind: ir::ArithmeticOp::Sub,
-                            left: ir::Value::Const(ir::Const::new(ty_ir, 0)),
-                            right: inner.ir,
-                        });
-
-                        (after_inner, LRValue::Right(TypedValue { ty, ir: ir::Value::Instr(instr) }))
+                        let result = self.append_negate(after_inner.block, inner.ir);
+                        (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }
             }
