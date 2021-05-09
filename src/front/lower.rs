@@ -85,14 +85,11 @@ impl<'a> MappingTypeStore<'a> {
         let ir_ty = match &self.inner[ty] {
             ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
             TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
-            TypeInfo::Void => prog.type_void(),
-            TypeInfo::Bool => prog.type_bool(),
+            TypeInfo::Void => prog.ty_ptr(),
+            TypeInfo::Bool => prog.ty_bool(),
             TypeInfo::Byte => prog.define_type_int(8),
             TypeInfo::Int => prog.define_type_int(32),
-            &TypeInfo::Pointer(inner) => {
-                let inner = self.map_type(prog, inner);
-                prog.define_type_ptr(inner)
-            }
+            TypeInfo::Pointer(_) => prog.ty_ptr(),
             TypeInfo::Tuple(TupleTypeInfo { fields }) => {
                 let fields = fields.clone().iter()
                     .map(|&f_ty| self.map_type(prog, f_ty))
@@ -267,7 +264,7 @@ fn map_constant<'a>(
         }
         ExpressionKind::BoolLit { value } => {
             check_type_match(&store, init, store.type_bool(), ty)?;
-            let ty_bool_ir = ir_prog.type_bool();
+            let ty_bool_ir = ir_prog.ty_bool();
             let value = *value as i32;
             LRValue::Right(TypedValue { ty, ir: ir::Value::Const(ir::Const { ty: ty_bool_ir, value }) })
         }

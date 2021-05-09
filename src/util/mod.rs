@@ -30,3 +30,26 @@ pub fn zip_eq<L: ExactSizeIterator, R: ExactSizeIterator>(
     assert_eq!(left.len(), right.len(), "iterators are not the same length");
     left.zip(right)
 }
+
+#[allow(unused_macros)]
+macro_rules! assert_match {
+    ($value: expr, $($pattern: pat)|+) => {
+        match $value {
+            $($pattern)|+ => (),
+            ref value =>
+                panic!("assert_match failed: `{:?}` does not match `{}`", value, stringify!($($pattern)|+)),
+        }
+    };
+}
+
+#[allow(unused_macros)]
+macro_rules! unwrap_match {
+    ($value: expr, $($pattern: pat)|+ => $result: expr) => {
+        match $value {
+            $($pattern)|+ =>
+                $result,
+            ref value =>
+                panic!("unwrap_match failed: `{:?}` does not match `{}`", value, stringify!($($pattern)|+)),
+        }
+    };
+}

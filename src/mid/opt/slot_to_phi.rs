@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::use_info::{Usage, UseInfo};
-use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, StackSlot, Value};
+use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, StackSlot, Type, Value};
 
 ///Replace slots and the associated loads and stores with phi values where possible
 pub fn slot_to_phi(prog: &mut Program) -> bool {
@@ -33,8 +33,8 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
     //figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
-        use_info[Value::Slot(slot)].iter()
-            .all(|usage| matches!(usage, Usage::Addr { .. } ))
+        let inner_ty = prog.get_slot(slot).inner_ty;
+        use_info[Value::Slot(slot)].iter().all(|usage| is_load_or_store_addr_with_type(prog, usage, inner_ty))
     }).collect();
 
     //create all phis
@@ -71,37 +71,36 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
         //replace loads
         for &usage in slot_usages {
-            if let Usage::Addr { pos } = usage {
-                let instr_info = prog.get_instr(pos.instr);
-                match instr_info {
-                    &InstructionInfo::Load { addr } => {
-                        debug_assert_eq!(Value::Slot(slot), addr);
+            match usage {
+                Usage::LoadAddr { pos } => {
+                    //some assertions
+                    let instr_info = prog.get_instr(pos.instr);
+                    let addr = unwrap_match!(instr_info, InstructionInfo::Load { addr, .. } => *addr);
+                    assert_eq!(Value::Slot(slot), addr);
 
-                        //found a load, build a value for it and replace it
-                        let load_index = prog.get_block(pos.block).instructions.iter()
-                            .position(|&instr| instr == pos.instr).unwrap();
+                    //build value corresponding to this load
+                    let load_index = prog.get_block(pos.block).instructions.iter()
+                        .position(|&instr| instr == pos.instr).unwrap();
 
-                        let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
-                        use_info.replace_usages(prog, Value::Instr(pos.instr), value);
-                    }
-                    &InstructionInfo::Store { addr, .. } => {
-                        //nothing to do here, this will be removed later
-                        debug_assert_eq!(Value::Slot(slot), addr);
-                    }
-                    _ => unreachable!("instr type: {:?}", instr_info),
+                    let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
+                    use_info.replace_usages(prog, Value::Instr(pos.instr), value);
                 }
-            } else {
-                unreachable!("usage type: {:?}", usage);
+                Usage::StoreAddr { pos } => {
+                    //some assertions
+                    let instr_info = prog.get_instr(pos.instr);
+                    let addr = unwrap_match!(instr_info, InstructionInfo::Store { addr, .. } => *addr);
+                    assert_eq!(Value::Slot(slot), addr);
+
+                    //nothing to actually do here, we're only replacing loads
+                }
+                _ => unreachable!("usage type: {:?}", usage),
             }
         }
 
         //remove loads & stores
         for &usage in slot_usages {
-            if let Usage::Addr { pos } = usage {
-                remove_item(&mut prog.get_block_mut(pos.block).instructions, &pos.instr).unwrap();
-            } else {
-                unreachable!("usage type: {:?}", usage)
-            }
+            let pos = unwrap_match!(usage, Usage::LoadAddr { pos } | Usage::StoreAddr { pos } => pos);
+            remove_item(&mut prog.get_block_mut(pos.block).instructions, &pos.instr).unwrap();
         }
     }
 
@@ -110,6 +109,16 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
         .retain(|slot| !replaced_slots.contains(&slot));
 
     replaced_slots.len()
+}
+
+fn is_load_or_store_addr_with_type(prog: &Program, usage: &Usage, expected_ty: Type) -> bool {
+    let pos = match usage {
+        Usage::LoadAddr { pos } | Usage::StoreAddr { pos } => pos,
+        _ => return false,
+    };
+    let instr = prog.get_instr(pos.instr);
+    let ty = unwrap_match!(instr, InstructionInfo::Load { ty, .. } | InstructionInfo::Store{ ty, .. } => *ty);
+    ty == expected_ty
 }
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of
@@ -128,11 +137,11 @@ fn get_value_for_slot(
 
     //find a matching store in the current block
     for &instr in prog.get_block(block).instructions[0..instr_pos].iter().rev() {
-        if let &InstructionInfo::Store { addr, value } = prog.get_instr(instr) {
+        if let &InstructionInfo::Store { addr, value, ty: _ } = prog.get_instr(instr) {
             if addr == Value::Slot(slot) {
                 //if the stored value is a load that will be also replaced by this pass we need to keep recursing
                 if let Value::Instr(value_instr) = value {
-                    if let &InstructionInfo::Load { addr: Value::Slot(value_slot) } = prog.get_instr(value_instr) {
+                    if let &InstructionInfo::Load { addr: Value::Slot(value_slot), ty: _ } = prog.get_instr(value_instr) {
                         if replaced_slots.contains(&value_slot) {
                             //find the block that contains the load
                             let block = *dom_info.blocks.iter().find(|&&block| {

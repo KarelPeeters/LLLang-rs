@@ -90,7 +90,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
     #[must_use]
     fn define_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
-        let slot = ir::StackSlotInfo::new(inner_ty, &mut self.prog);
+        let slot = ir::StackSlotInfo { inner_ty };
         let slot = self.prog.define_slot(slot);
         self.prog.get_func_mut(self.ir_func).slots.push(slot);
         slot
@@ -103,12 +103,27 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
+    fn append_negate(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
+        let ty_ir = self.prog.type_of_value(value);
+        let instr = ir::InstructionInfo::Arithmetic {
+            kind: ir::ArithmeticOp::Sub,
+            left: ir::Value::Const(ir::Const::new(ty_ir, 0)),
+            right: value,
+        };
+        ir::Value::Instr(self.append_instr(block, instr))
+    }
+
+    #[must_use]
     fn append_load(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
             LRValue::Left(value) => {
                 let inner_ty = self.types[value.ty].unwrap_ptr()
                     .expect("Left should have pointer type");
-                let load_instr = self.append_instr(block, ir::InstructionInfo::Load { addr: value.ir });
+                let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
+
+                let load_instr = ir::InstructionInfo::Load { ty: inner_ty_ir, addr: value.ir };
+                let load_instr = self.append_instr(block, load_instr);
+
                 TypedValue { ty: inner_ty, ir: ir::Value::Instr(load_instr) }
             }
             LRValue::Right(value) =>
@@ -121,7 +136,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     fn never_value(&mut self, ty: cst::Type) -> LRValue {
         //TODO replace this with actual "never" value
         let ty_ptr = self.types.define_type_ptr(ty);
-        let ty_ptr_ir = self.types.map_type(&mut self.prog, ty_ptr);
+        let ty_ptr_ir = self.types.map_type(self.prog, ty_ptr);
 
         LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Undef(ty_ptr_ir) })
     }
@@ -161,14 +176,14 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         let result: (Flow, LRValue) = match &expr.kind {
             ast::ExpressionKind::Null => {
                 let ty = self.expr_type(expr);
-                let ir_ty = self.types.map_type(&mut self.prog, ty);
+                let ir_ty = self.types.map_type(self.prog, ty);
 
                 let cst = ir::Value::Const(ir::Const { ty: ir_ty, value: 0 });
                 (flow, LRValue::Right(TypedValue { ty, ir: cst }))
             }
             ast::ExpressionKind::BoolLit { value } => {
                 let ty_bool = self.types.type_bool();
-                let ty_bool_ir = self.prog.type_bool();
+                let ty_bool_ir = self.prog.ty_bool();
 
                 let cst = ir::Value::Const(ir::Const { ty: ty_bool_ir, value: *value as i32 });
                 (flow, LRValue::Right(TypedValue { ty: ty_bool, ir: cst }))
@@ -204,8 +219,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty_byte_ptr = self.types.define_type_ptr(ty_byte);
 
                 let data = ir::DataInfo {
-                    ty: self.types.map_type(&mut self.prog, ty_byte_ptr),
-                    inner_ty: self.types.map_type(&mut self.prog, ty_byte),
+                    ty: self.types.map_type(self.prog, ty_byte_ptr),
+                    inner_ty: self.types.map_type(self.prog, ty_byte),
                     bytes: value.bytes().collect(),
                 };
                 let data = self.prog.define_data(data);
@@ -226,7 +241,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             }
             ast::ExpressionKind::Ternary { condition, then_value, else_value } => {
                 let ty = self.expr_type(expr);
-                let ty_ir = self.types.map_type(&mut self.prog, ty);
+                let ty_ir = self.types.map_type(self.prog, ty);
 
                 let result_slot = self.define_slot(ty_ir);
                 let (after_cond, cond) =
@@ -243,7 +258,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (then_end, then_value) =
                             s.append_expr_loaded(then_start, scope, then_value)?;
 
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: then_value.ir };
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: then_value.ir };
                         s.append_instr(then_end.block, store);
 
                         Ok(then_end)
@@ -252,14 +267,14 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (else_end, else_value) =
                             s.append_expr_loaded(else_start, scope, else_value)?;
 
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), value: else_value.ir };
+                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: else_value.ir };
                         s.append_instr(else_end.block, store);
 
                         Ok(else_end)
                     },
                 )?;
 
-                let load = ir::InstructionInfo::Load { addr: ir::Value::Slot(result_slot) };
+                let load = ir::InstructionInfo::Load { ty: ty_ir, addr: ir::Value::Slot(result_slot) };
                 let load = self.append_instr(end_start.block, load);
                 let result_value = ir::Value::Instr(load);
 
@@ -271,11 +286,27 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_right, value_right) =
                     self.append_expr_loaded(after_left, scope, right)?;
 
-                let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
-                let instr = self.append_instr(after_right.block, instr);
-
                 let result_ty = self.expr_type(expr);
-                (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: ir::Value::Instr(instr) }))
+                let result = if let Some(inner_ty) = self.types[result_ty].unwrap_ptr() {
+                    //pointer offset
+                    let offset_ir = match kind {
+                        ast::BinaryOp::Add =>
+                            value_right.ir,
+                        ast::BinaryOp::Sub =>
+                            self.append_negate(after_right.block, value_right.ir),
+                        _ => panic!("Unexpected binary op kind for pointer result type, should be add or sub")
+                    };
+
+                    let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
+                    let instr = ir::InstructionInfo::PointerOffSet { base: value_left.ir, ty: inner_ty_ir, index: offset_ir };
+                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                } else {
+                    //basic binary operation
+                    let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
+                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                };
+
+                (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: result }))
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
@@ -301,15 +332,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let (after_inner, inner) =
                             self.append_expr_loaded(flow, scope, inner)?;
                         let ty = inner.ty;
-                        let ty_ir = self.types.map_type(&mut self.prog, ty);
 
-                        let instr = self.append_instr(after_inner.block, ir::InstructionInfo::Arithmetic {
-                            kind: ir::ArithmeticOp::Sub,
-                            left: ir::Value::Const(ir::Const::new(ty_ir, 0)),
-                            right: inner.ir,
-                        });
-
-                        (after_inner, LRValue::Right(TypedValue { ty, ir: ir::Value::Instr(instr) }))
+                        let result = self.append_negate(after_inner.block, inner.ir);
+                        (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }
             }
@@ -365,14 +390,16 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     })
                 };
 
+                let tuple_ty = self.expr_type(target);
+                let tuple_ty_ir = self.types.map_type(self.prog, tuple_ty);
+
                 let result_ty = self.expr_type(expr);
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
-                let result_ty_ptr_ir = self.types.map_type(&mut self.prog, result_ty_ptr);
 
                 let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr {
+                    tuple_ty: tuple_ty_ir,
                     base: target_value.ir,
                     index,
-                    result_ty: result_ty_ptr_ir,
                 };
                 let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
 
@@ -383,17 +410,24 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_index, index) = self.append_expr_loaded(after_target, scope, index)?;
 
                 let result_ty = self.expr_type(expr);
+                let result_ty_ir = self.types.map_type(self.prog, result_ty);
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
-                let result_ty_ptr_ir = self.types.map_type(&mut self.prog, result_ty_ptr);
 
-                let array_index_ptr = ir::InstructionInfo::ArrayIndexPtr {
+                let array_index_ptr = ir::InstructionInfo::PointerOffSet {
+                    ty: result_ty_ir,
                     base: target_value.ir,
                     index: index.ir,
-                    result_ty: result_ty_ptr_ir,
                 };
                 let array_index_ptr = self.append_instr(after_index.block, array_index_ptr);
 
                 (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(array_index_ptr) }))
+            }
+            ast::ExpressionKind::Cast { value, ty: _ } => {
+                let (after_value, value) = self.append_expr_loaded(flow, scope, value)?;
+                let result_ty = self.expr_type(expr);
+
+                // only the type changes, the (untyped) pointer value stays the same
+                (after_value, LRValue::Right(TypedValue { ty: result_ty, ir: value.ir }))
             }
             ast::ExpressionKind::Return { value } => {
                 let (after_value, value) = if let Some(value) = value {
@@ -401,7 +435,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 } else {
                     //check that function return type is indeed void
                     let ty_void = self.types.type_void();
-                    (flow, TypedValue { ty: ty_void, ir: ir::Value::Undef(self.prog.type_void()) })
+                    (flow, TypedValue { ty: ty_void, ir: ir::Value::Undef(self.prog.ty_ptr()) })
                 };
 
                 let ret = ir::Terminator::Return { value: value.ir };
@@ -539,7 +573,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //construct the types
                 let ty = self.type_solution[*self.decl_type_map.get(&(decl as *const _)).unwrap()];
                 let ty_ptr = self.types.define_type_ptr(ty);
-                let ty_ir = self.types.map_type(&mut self.prog, ty);
+                let ty_ir = self.types.map_type(self.prog, ty);
 
                 //define the slot
                 let slot = self.define_slot(ty_ir);
@@ -549,7 +583,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //optionally store the value
                 if let Some(value) = value {
-                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), value: value.ir };
+                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), ty: ty_ir, value: value.ir };
                     self.append_instr(after_value.block, store);
                 }
 
@@ -560,7 +594,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_value, value) =
                     self.append_expr_loaded(after_addr, scope, &assign.right)?;
 
-                let store = ir::InstructionInfo::Store { addr: addr.ir, value: value.ir };
+                let ty_ir = self.types.map_type(self.prog, value.ty);
+                let store = ir::InstructionInfo::Store { addr: addr.ir, ty: ty_ir, value: value.ir };
                 self.append_instr(after_value.block, store);
 
                 Ok(after_value)
@@ -601,7 +636,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //figure out the index type
                 let index_ty = self.expr_type(&for_stmt.start);
                 let index_ty_ptr = self.types.define_type_ptr(index_ty);
-                let index_ty_ir = self.types.map_type(&mut self.prog, index_ty);
+                let index_ty_ir = self.types.map_type(self.prog, index_ty);
 
                 //evaluate the range
                 let (flow, start_value) =
@@ -621,18 +656,19 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 index_scope.maybe_declare(&for_stmt.index, item)?;
 
                 //index = start
-                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, value: start_value.ir });
+                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, ty: index_ty_ir, value: start_value.ir });
 
                 //index < end
                 let cond = |s: &mut Self, cond_start: Flow| {
-                    let load = s.append_instr(cond_start.block, ir::InstructionInfo::Load {
-                        addr: index_slot,
-                    });
-                    let cond = s.append_instr(cond_start.block, ir::InstructionInfo::Comparison {
+                    let load = ir::InstructionInfo::Load { ty: index_ty_ir, addr: index_slot };
+                    let load = s.append_instr(cond_start.block, load);
+
+                    let cond = ir::InstructionInfo::Comparison {
                         kind: ir::LogicalOp::Lt,
                         left: ir::Value::Instr(load),
                         right: end_value.ir,
-                    });
+                    };
+                    let cond = s.append_instr(cond_start.block, cond);
 
                     Ok((cond_start, ir::Value::Instr(cond)))
                 };
@@ -641,18 +677,22 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let body = |s: &mut Self, body_start: Flow| {
                     let body_end = s.append_nested_block(body_start, &index_scope, &for_stmt.body)?;
 
-                    let load = s.append_instr(body_end.block, ir::InstructionInfo::Load {
-                        addr: index_slot,
-                    });
-                    let inc = s.append_instr(body_end.block, ir::InstructionInfo::Arithmetic {
+                    let load = ir::InstructionInfo::Load { ty: index_ty_ir, addr: index_slot };
+                    let load = s.append_instr(body_end.block, load);
+
+                    let inc = ir::InstructionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
                         left: ir::Value::Instr(load),
                         right: ir::Value::Const(ir::Const { ty: index_ty_ir, value: 1 }),
-                    });
-                    s.append_instr(body_end.block, ir::InstructionInfo::Store {
+                    };
+                    let inc = s.append_instr(body_end.block, inc);
+
+                    let store = ir::InstructionInfo::Store {
                         addr: index_slot,
+                        ty: index_ty_ir,
                         value: ir::Value::Instr(inc),
-                    });
+                    };
+                    s.append_instr(body_end.block, store);
 
                     Ok(body_end)
                 };
@@ -698,10 +738,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let slot = self.define_slot(ty_ir);
 
             //immediately copy the param into the slot
-            self.append_instr(start.block, ir::InstructionInfo::Store {
+            let store = ir::InstructionInfo::Store {
                 addr: ir::Value::Slot(slot),
+                ty: ty_ir,
                 value: ir::Value::Param(ir_param),
-            });
+            };
+            self.append_instr(start.block, store);
 
             let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
@@ -715,7 +757,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         if end.needs_return {
             if self.ret_ty == self.types.type_void() {
                 //automatically insert return
-                let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.type_void()) };
+                let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.ty_ptr()) };
                 self.prog.get_block_mut(end.block).terminator = ret;
             } else {
                 return Err(Error::MissingReturn(&decl.ast.id));

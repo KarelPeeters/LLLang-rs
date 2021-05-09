@@ -21,10 +21,14 @@ pub struct InstructionPos {
 pub enum Usage {
     //program main
     Main,
-    //address in Load or Store
-    Addr { pos: InstructionPos },
+
+    //address in Load
+    LoadAddr { pos: InstructionPos },
+    //address in Store
+    StoreAddr { pos: InstructionPos },
     //Store value
     StoreValue { pos: InstructionPos },
+
     //Call target
     CallTarget { pos: InstructionPos },
     //Call argument
@@ -32,25 +36,31 @@ pub enum Usage {
         pos: InstructionPos,
         index: usize,
     },
+
     //operand in Arithmetic or Comparison
     BinaryOperand { pos: InstructionPos },
+
     //target of TupleFieldPtr
     TupleFieldPtrBase { pos: InstructionPos },
     //target of ArrayIndexPtr
     ArrayIndexPtrBase { pos: InstructionPos },
     //index of ArrayIndexPtr
+
     ArrayIndexPtrIndex { pos: InstructionPos },
     //values passed to target as phi value
+
     TargetPhiValue {
         func: Function,
         target_kind: TargetKind,
         phi_index: usize,
     },
+
     //branch terminator uses value as cond
     BranchCond {
         func: Function,
         from_block: Block,
     },
+
     //return terminator uses value as return value
     ReturnValue {
         func: Function,
@@ -76,12 +86,13 @@ pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
     instr_info: &InstructionInfo,
     mut f: F,
 ) {
+    // match patterns in this function don't use .. since newly added fields could mean newly added usages!
     match instr_info {
-        &InstructionInfo::Load { addr } => {
-            f(addr, Usage::Addr { pos })
+        &InstructionInfo::Load { addr, ty: _ } => {
+            f(addr, Usage::LoadAddr { pos })
         }
-        &InstructionInfo::Store { addr, value } => {
-            f(addr, Usage::Addr { pos });
+        &InstructionInfo::Store { addr, value, ty: _ } => {
+            f(addr, Usage::StoreAddr { pos });
             f(value, Usage::StoreValue { pos });
         }
         &InstructionInfo::Call { target, ref args } => {
@@ -95,10 +106,10 @@ pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
             f(left, Usage::BinaryOperand { pos });
             f(right, Usage::BinaryOperand { pos });
         }
-        &InstructionInfo::TupleFieldPtr { base, index: _, result_ty: _ } => {
+        &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
             f(base, Usage::TupleFieldPtrBase { pos });
         }
-        &InstructionInfo::ArrayIndexPtr { base, index, result_ty: _ } => {
+        &InstructionInfo::PointerOffSet { base, index, ty: _ } => {
             f(base, Usage::ArrayIndexPtrBase { pos });
             f(index, Usage::ArrayIndexPtrIndex { pos });
         }
@@ -220,9 +231,14 @@ impl UseInfo {
                         panic!("Replacing main func not yet supported")
                     }
                 }
-                Usage::Addr { pos } => {
+                Usage::LoadAddr { pos } => {
                     match prog.get_instr_mut(pos.instr) {
-                        InstructionInfo::Load { addr } => repl(count, addr, old, new),
+                        InstructionInfo::Load { addr, .. } => repl(count, addr, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::StoreAddr { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Store { addr, .. } => repl(count, addr, old, new),
                         _ => unreachable!()
                     }
@@ -267,14 +283,14 @@ impl UseInfo {
                 }
                 Usage::ArrayIndexPtrBase { pos } => {
                     match prog.get_instr_mut(pos.instr) {
-                        InstructionInfo::ArrayIndexPtr { base, .. } =>
+                        InstructionInfo::PointerOffSet { base, .. } =>
                             repl(count, base, old, new),
                         _ => unreachable!()
                     }
                 }
                 Usage::ArrayIndexPtrIndex { pos } => {
                     match prog.get_instr_mut(pos.instr) {
-                        InstructionInfo::ArrayIndexPtr { index, .. } =>
+                        InstructionInfo::PointerOffSet { index, .. } =>
                             repl(count, index, old, new),
                         _ => unreachable!()
                     }

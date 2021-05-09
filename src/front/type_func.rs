@@ -81,18 +81,26 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let value_ty = self.problem.unknown_int(expr_origin);
-
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
-                self.problem.equal(value_ty, left_ty);
-                self.problem.equal(value_ty, right_ty);
 
                 match kind {
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod =>
-                        value_ty,
-                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt =>
+                    BinaryOp::Add | BinaryOp::Sub => {
+                        self.problem.add_sub_constraint(left_ty, right_ty);
+                        left_ty
+                    }
+                    BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                        let value_ty = self.problem.unknown_int(expr_origin);
+                        self.problem.equal(value_ty, left_ty);
+                        self.problem.equal(value_ty, right_ty);
+                        value_ty
+                    }
+                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
+                        let value_ty = self.problem.unknown_int(expr_origin);
+                        self.problem.equal(value_ty, left_ty);
+                        self.problem.equal(value_ty, right_ty);
                         self.problem.ty_bool()
+                    }
                 }
             }
             ast::ExpressionKind::Unary { kind, inner } => {
@@ -153,6 +161,17 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 self.problem.equal(self.problem.ty_int(), index_ty);
                 self.problem.array_index(expr_origin, target_ty)
+            }
+            ast::ExpressionKind::Cast { value, ty } => {
+                let before_ty = self.visit_expr(scope, value)?;
+
+                //require that the value expression has a pointer type
+                let before_inner_ty = self.problem.unknown(expr_origin);
+                let before_ty_match = self.problem.known(expr_origin, TypeInfo::Pointer(before_inner_ty));
+                self.problem.equal(before_ty, before_ty_match);
+
+                let after_ty = self.resolve_type(scope, ty)?;
+                self.problem.fully_known(self.types, after_ty)
             }
             ast::ExpressionKind::Return { value } => {
                 let value_ty = if let Some(value) = value {
