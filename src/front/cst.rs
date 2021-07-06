@@ -310,6 +310,24 @@ impl<'ast, T: Copy> TypeInfo<'ast, T> {
             _ => None,
         }
     }
+
+    pub fn auto_deref<'s>(ty: T, lookup: impl Fn(T) -> &'s TypeInfo<'ast, T>) -> (u32, T)
+        where 'ast: 's, T: 'static
+    {
+        let mut ty = ty;
+        let mut count = 0;
+
+        loop {
+            let info = lookup(ty);
+            match info {
+                TypeInfo::Pointer(inner) => {
+                    ty = *inner;
+                    count += 1;
+                }
+                _ => return (count, ty),
+            }
+        }
+    }
 }
 
 impl<'ast, T> TypeInfo<'ast, T> {

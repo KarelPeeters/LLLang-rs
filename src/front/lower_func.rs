@@ -361,11 +361,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_args, LRValue::Right(TypedValue { ty: ret_ty, ir: ir::Value::Instr(call) }))
             }
             ast::ExpressionKind::DotIndex { target, index } => {
-                //TODO currently we only allow LValue(&Struct),
-                //  but we could add support for RValue(Struct) and RValue(&Struct) as well
-
+                //TODO add RValue(T) => RValue(field)
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
-                let target_inner_ty = self.types[target_value.ty].unwrap_ptr().unwrap();
+                let (deref_count, target_inner_ty) = TypeInfo::auto_deref(target_value.ty, &|ty| &self.types[ty]);
+                assert!(deref_count > 0, "lvalue should contain a pointer");
 
                 let index = match (&self.types[target_inner_ty], index) {
                     (TypeInfo::Tuple(_), ast::DotIndexIndex::Tuple { index, .. }) => {
@@ -396,6 +395,16 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let result_ty = self.expr_type(expr);
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
 
+                //deref until we end up with a pointer to the tuple
+                let mut curr = target_value.ir;
+                for _ in 0..(deref_count - 1) {
+                    let load = ir::InstructionInfo::Load {
+                        addr: curr,
+                        ty: self.prog.ty_ptr()
+                    };
+                    curr = ir::Value::Instr(self.append_instr(after_target.block, load));
+                }
+
                 let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr {
                     tuple_ty: tuple_ty_ir,
                     base: target_value.ir,
@@ -406,6 +415,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(struct_sub_ptr) }))
             }
             ast::ExpressionKind::ArrayIndex { target, index } => {
+                todo!("autoderef");
+
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
                 let (after_index, index) = self.append_expr_loaded(after_target, scope, index)?;
 

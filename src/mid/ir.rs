@@ -313,7 +313,7 @@ pub enum InstructionInfo {
 
     /// Compute the pointer to element `index` of a hypothetical array containing elements of type `T` starting at `base`.
     /// Intuitively this is `&base[index]` or equivalently `base + index * sizeof(T)`.
-    /// `value` can be negative..
+    /// `value` can be negative.
     ///
     /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
     PointerOffSet { ty: Type, base: Value, index: Value },

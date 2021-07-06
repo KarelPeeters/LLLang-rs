@@ -262,22 +262,36 @@ impl<'ast> TypeProblem<'ast> {
         progress
     }
 
+    /// Dereference `target` until a non-pointer type is hit.
+    /// Returns `None` if one of the encountered types was not inferred yet.
+    fn auto_deref(&mut self, target: TypeVar) -> Option<&'_ VarTypeInfo> {
+        // we use placeholder as a None alternative here, this is okay because placeholder types can never be in info
+        // if we end up with a placeholder, the previous TypeVar is returned and the final return expression will yield
+        // None as expected
+        static PH: VarTypeInfo = TypeInfo::Placeholder(usize::MAX);
+
+        let result = TypeInfo::auto_deref(target, |var| {
+            self.state[var.0].info.as_ref().unwrap_or(&PH)
+        }).1;
+        self.state[result.0].info.as_ref()
+    }
+
     fn apply_index_constraints(&mut self, types: &mut TypeStore<'ast>) {
         let mut temp = std::mem::take(&mut self.index_constraints);
 
         temp.retain(|&IndexConstraint { target, result, index }| {
-            let target = if let Some(target) = &self.state[target.0].info {
-                target
+            let target_info = if let Some(target_info) = self.auto_deref(target) {
+                target_info
             } else {
                 //we don't know the target type yet, so we can't make progress
                 return true;
             };
 
-            match (target, index) {
+            match (target_info, index) {
                 (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
-                    let target_result = target.fields.get(index as usize)
+                    let target_result = *target.fields.get(index as usize)
                         .expect("Tuple index out of bounds");
-                    self.matches.push_back((*target_result, result))
+                    self.matches.push_back((target_result, result))
                 }
                 (TypeInfo::Array(target), IndexKind::Array) => {
                     let target_result = target.inner;
@@ -291,7 +305,7 @@ impl<'ast> TypeProblem<'ast> {
                     let known_ty = self.fully_known(types, field_ty);
                     self.matches.push_back((result, known_ty));
                 }
-                (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
+                (_, _) => panic!("Expected {} type, got {:?} for {:?}", index.name(), target_info, target),
             }
 
             //we applied this constraint, it can now be removed
