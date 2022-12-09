@@ -5,7 +5,7 @@ use itertools::Itertools;
 
 use crate::front::{ast, cst};
 use crate::front::ast::ExpressionKind;
-use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, Type, TypeInfo, TypeStore};
+use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
@@ -26,7 +26,7 @@ pub enum LRValue {
 impl LRValue {
     /// Get the type of this value as seen by the end user, taking into account that LValues are automatically
     /// dereferenced.
-    pub fn ty(self, types: &TypeStore) -> Type {
+    pub fn ty(self, types: &TypeStore) -> cst::Type {
         match self {
             LRValue::Left(value) => types[value.ty].unwrap_ptr()
                 .unwrap_or_else(|| panic!("LRValue::Left({:?}) should have pointer type", value)),
@@ -155,7 +155,6 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     for (_, module) in &prog.items.modules {
         for &cst_func in &module.codegen_funcs {
             let func_decl = &prog.items.funcs[cst_func];
-
 
             if let Some(ir_func) = all_funcs.get(&cst_func).unwrap().0 {
                 //build the type problem for expressions within the function

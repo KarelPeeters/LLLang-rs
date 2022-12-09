@@ -239,6 +239,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 Ok(())
             }
+            ast::StatementKind::Loop(loop_stmt) => {
+                self.visit_nested_block(scope, &loop_stmt.body)?;
+                Ok(())
+            }
             ast::StatementKind::While(while_stmt) => {
                 let cond_ty = self.visit_expr(scope, &while_stmt.cond)?;
                 self.problem.equal(cond_ty, self.problem.ty_bool());

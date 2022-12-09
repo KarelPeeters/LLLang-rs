@@ -126,6 +126,7 @@ pub enum StatementKind {
     Assignment(Assignment),
     Expression(Box<Expression>),
     If(IfStatement),
+    Loop(LoopStatement),
     While(WhileStatement),
     For(ForStatement),
     Block(Block),
@@ -153,6 +154,12 @@ pub struct IfStatement {
     pub cond: Box<Expression>,
     pub then_block: Block,
     pub else_block: Option<Block>,
+}
+
+#[derive(Debug)]
+pub struct LoopStatement {
+    pub span: Span,
+    pub body: Block,
 }
 
 #[derive(Debug)]

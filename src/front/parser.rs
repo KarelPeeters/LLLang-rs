@@ -62,6 +62,7 @@ declare_tokens![
     Mut("mut"),
     If("if"),
     Else("else"),
+    Loop("loop"),
     While("while"),
     For("for"),
     In("in"),
@@ -424,7 +425,7 @@ impl<'s> Parser<'s> {
     /// pop and return the next token if the type matches, otherwise do nothing and return None
     fn accept(&mut self, ty: TT) -> Result<Option<Token>> {
         if self.at(ty) {
-            self.pop().map(Option::Some)
+            self.pop().map(Some)
         } else {
             Ok(None)
         }
@@ -623,6 +624,13 @@ impl<'s> Parser<'s> {
                     then_block,
                     else_block,
                 }), false)
+            }
+            TT::Loop => {
+                self.pop()?;
+
+                let body = self.block()?;
+                let span = Span::new(start_pos, self.last_popped_end);
+                (ast::StatementKind::Loop(ast::LoopStatement { span, body }), false)
             }
             TT::While => {
                 self.pop()?;

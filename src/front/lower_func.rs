@@ -30,9 +30,9 @@ pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
 
 /// Information about the innermost loop, used for `break` and `continue` statements.
 pub struct LoopInfo {
-    cond: ir::Block,
+    header: ir::Block,
     end: ir::Block,
-    end_needs_return: bool,
+    has_reachable_break: bool,
 }
 
 fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
@@ -55,6 +55,12 @@ fn new_target(block: ir::Block) -> ir::Target {
     ir::Target { block, phi_values: Vec::new() }
 }
 
+fn new_jump(block: ir::Block) -> ir::Terminator {
+    ir::Terminator::Jump {
+        target: new_target(block)
+    }
+}
+
 fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) -> ir::Terminator {
     ir::Terminator::Branch {
         cond,
@@ -72,7 +78,7 @@ enum ContinueOrBreak {
 /// doesn't implement Copy so it's easy to spot when it is accidentally used twice.
 struct Flow {
     block: ir::Block,
-    needs_return: bool,
+    reachable: bool,
 }
 
 impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'ast, 'cst, 'ts, F> {
@@ -81,10 +87,15 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
-    fn new_flow(&mut self, needs_return: bool) -> Flow {
+    fn new_block(&mut self) -> ir::Block {
+        self.prog.define_block(ir::BlockInfo::new())
+    }
+
+    #[must_use]
+    fn new_flow(&mut self, reachable: bool) -> Flow {
         Flow {
-            block: self.prog.define_block(ir::BlockInfo::new()),
-            needs_return,
+            block: self.new_block(),
+            reachable,
         }
     }
 
@@ -146,19 +157,19 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         E: FnOnce(&mut Self, Flow) -> Result<'ast, Flow>
     >(&mut self, flow: Flow, cond: ir::Value, then_func: T, else_func: E) -> Result<'ast, Flow> {
         //create flows
-        let then_start = self.new_flow(flow.needs_return);
+        let then_start = self.new_flow(flow.reachable);
         let then_start_block = then_start.block;
         let then_end = then_func(self, then_start)?;
 
-        let else_start = self.new_flow(flow.needs_return);
+        let else_start = self.new_flow(flow.reachable);
         let else_start_block = else_start.block;
         let else_end = else_func(self, else_start)?;
 
-        let end_start = self.new_flow(then_end.needs_return || else_end.needs_return);
+        let end_start = self.new_flow(then_end.reachable || else_end.reachable);
 
         //connect everything
         let branch = new_branch(cond, then_start_block, else_start_block);
-        let jump_end = ir::Terminator::Jump { target: new_target(end_start.block) };
+        let jump_end = new_jump(end_start.block);
 
         self.prog.get_block_mut(flow.block).terminator = branch;
         self.prog.get_block_mut(then_end.block).terminator = jump_end.clone();
@@ -476,10 +487,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         let target = match kind {
             ContinueOrBreak::Continue => {
-                loop_info.cond
+                loop_info.header
             }
             ContinueOrBreak::Break => {
-                loop_info.end_needs_return |= flow.needs_return;
+                loop_info.has_reachable_break |= flow.reachable;
                 loop_info.end
             }
         };
@@ -517,45 +528,56 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         }
     }
 
-    fn append_loop<
-        C: FnOnce(&mut Self, Flow) -> Result<'ast, (Flow, ir::Value)>,
-        B: FnOnce(&mut Self, Flow) -> Result<'ast, Flow>
-    >(&mut self, flow: Flow, cond: C, body: B) -> Result<'ast, Flow> {
-        //condition
-        let cond_start = self.new_flow(flow.needs_return);
-        let cond_start_block = cond_start.block;
-        let (cond_end, cond) = cond(self, cond_start)?;
-
-        //end
-        //needs_return will be set incrementally by all blocks that jump to end
-        let mut end_start = self.new_flow(false);
+    fn append_loop<B: FnOnce(&mut Self, Flow) -> Result<'ast, Flow>>(&mut self, flow: Flow, body: B) -> Result<'ast, Flow> {
+        // bookkeeping
+        // we don't make an end flow yet since we don't know if it's going to be reachable
+        let body_start = self.new_flow(flow.reachable);
+        let end_start = self.new_block();
 
         let loop_info = LoopInfo {
-            cond: cond_start_block,
-            end: end_start.block,
-            end_needs_return: false,
+            header: body_start.block,
+            end: end_start,
+            has_reachable_break: false,
         };
         self.loop_stack.push(loop_info);
 
-        //body
-        let body_start = self.new_flow(cond_end.needs_return);
+        // body
         let body_start_block = body_start.block;
         let body_end = body(self, body_start)?;
+        let has_reachable_exit = self.loop_stack.pop().unwrap().has_reachable_break;
 
-        let loop_info = self.loop_stack.pop().unwrap();
-        end_start.needs_return |= loop_info.end_needs_return;
+        // doesn't matter, the loop stops the flow of reachability
+        let _ = body_end.reachable;
 
-        //connect everything
-        let branch = new_branch(cond, body_start_block, end_start.block);
-        end_start.needs_return |= cond_end.needs_return;
-        let jump_cond = ir::Terminator::Jump { target: new_target(cond_start_block) };
+        // connect everything
+        self.prog.get_block_mut(flow.block).terminator = new_jump(body_start_block);
+        self.prog.get_block_mut(body_end.block).terminator = new_jump(body_start_block);
 
-        self.prog.get_block_mut(flow.block).terminator = jump_cond.clone();
-        self.prog.get_block_mut(cond_end.block).terminator = branch;
-        self.prog.get_block_mut(body_end.block).terminator = jump_cond;
-
-        //continue withing code to end
+        let end_start = Flow { block: end_start, reachable: has_reachable_exit };
         Ok(end_start)
+    }
+
+    fn append_while_loop<
+        C: FnOnce(&mut Self, Flow) -> Result<'ast, (Flow, ir::Value)>,
+        B: FnOnce(&mut Self, Flow) -> Result<'ast, Flow>
+    >(&mut self, flow: Flow, cond: C, body: B) -> Result<'ast, Flow> {
+        self.append_loop(flow, |s, flow| {
+            let (cond_end, cond) = cond(s, flow)?;
+
+            s.append_if(cond_end, cond, |s, flow| {
+                // condition true, run the body (and then automatically loop back)
+                body(s, flow)
+            }, |s, flow| {
+                // condition false, break loop
+                let loop_info = s.loop_stack.last_mut().unwrap();
+
+                loop_info.has_reachable_break |= flow.reachable;
+                s.prog.get_block_mut(flow.block).terminator = new_jump(loop_info.end);
+
+                // continue writing dead code
+                Ok(s.new_flow(false))
+            })
+        })
     }
 
     fn append_statement(&mut self, flow: Flow, scope: &mut Scope<ScopedItem>, stmt: &'ast ast::Statement) -> Result<'ast, Flow> {
@@ -619,8 +641,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     },
                 )
             }
+            ast::StatementKind::Loop(loop_stmt) => {
+                self.append_loop(flow, |s: &mut Self, body_start| {
+                    s.append_nested_block(body_start, scope, &loop_stmt.body)
+                })
+            }
             ast::StatementKind::While(while_stmt) => {
-                self.append_loop(
+                self.append_while_loop(
                     flow,
                     |s: &mut Self, cond_start: Flow| {
                         let (flow, cond) =
@@ -697,7 +724,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     Ok(body_end)
                 };
 
-                self.append_loop(flow, cond, body)
+                self.append_while_loop(flow, cond, body)
             }
             ast::StatementKind::Block(block) => {
                 self.append_nested_block(flow, scope, block)
@@ -754,7 +781,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             expect("can only generate code for functions with a body");
         let end = self.append_nested_block(start, &scope, body)?;
 
-        if end.needs_return {
+        if end.reachable {
             if self.ret_ty == self.types.type_void() {
                 //automatically insert return
                 let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.ty_ptr()) };
