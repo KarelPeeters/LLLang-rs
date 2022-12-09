@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos};
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Program, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Program, Target, Value};
 
 #[derive(Default)]
 struct Visited {
@@ -32,6 +32,13 @@ impl Visited {
             self.blocks.push_back(block)
         }
     }
+
+    fn add_target(&mut self, target: &Target) {
+        self.add_block(target.block);
+        for &value in &target.phi_values {
+            self.add_value(value);
+        }
+    }
 }
 
 fn collect_used(prog: &Program) -> Visited {
@@ -44,7 +51,7 @@ fn collect_used(prog: &Program) -> Visited {
             ty: _, func_ty: _, global_name: _, debug_name: _
         } = prog.get_func(func);
 
-        todo.add_block(entry.block);
+        todo.add_target(entry);
         for &param in params {
             todo.add_value(Value::Param(param));
         }
@@ -69,10 +76,7 @@ fn collect_used(prog: &Program) -> Visited {
             }
 
             terminator.for_each_target(|target| {
-                todo.add_block(target.block);
-                for &value in &target.phi_values {
-                    todo.add_value(value);
-                }
+                todo.add_target(target)
             });
         }
     }
