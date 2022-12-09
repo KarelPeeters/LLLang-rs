@@ -186,7 +186,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {
         return Err(CompileError::Assemble);
     }
 
-    let result = Command::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.27.29110\\bin\\Hostx64\\x86\\link.exe")
+    let result = Command::new(r#"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.29.30133\bin\Hostx64\x86\link.exe"#)
         .current_dir(asm_path.parent().unwrap())
         .arg("/nologo")
         .arg("/debug")
@@ -194,7 +194,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {
         .arg("/nodefaultlib")
         .arg("/entry:main")
         .arg(asm_path.with_extension("obj").file_name().unwrap())
-        .arg("C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.18362.0\\um\\x86\\kernel32.lib")
+        .arg(r#"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x86\kernel32.lib"#)
         .status().with_context(|| "Running link.exe")?;
 
     if !result.success() {
