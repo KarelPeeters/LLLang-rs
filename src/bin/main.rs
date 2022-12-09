@@ -113,14 +113,28 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
 }
 
 fn run_optimizations(prog: &mut mid::ir::Program) {
+    let opts: &[fn(&mut mid::ir::Program) -> bool] = &[
+        mid::opt::slot_to_phi::slot_to_phi,
+        mid::opt::sccp::sccp,
+        mid::opt::flow_simplify::flow_simplify,
+        mid::opt::inline::inline,
+    ];
+
+    // TODO remove assertion checks that GC is idempotent
+    mid::opt::gc::gc(prog);
+    assert!(!mid::opt::gc::gc(prog));
+
     loop {
         let mut changed = false;
 
-        changed |= mid::opt::gc::gc(prog);
-        changed |= mid::opt::slot_to_phi::slot_to_phi(prog);
-        changed |= mid::opt::gc::gc(prog);
-        changed |= mid::opt::sccp::sccp(prog);
-        changed |= mid::opt::flow_simplify::flow_simplify(prog);
+        for opt in opts {
+            if opt(prog) {
+                mid::opt::gc::gc(prog);
+                assert!(!mid::opt::gc::gc(prog));
+
+                changed = true;
+            }
+        }
 
         if !changed { break; }
     }

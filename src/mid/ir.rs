@@ -12,7 +12,7 @@ macro_rules! gen_node_and_program_accessors {
         new_index_type!(pub $node);
         )*
 
-        #[derive(Debug, Default)]
+        #[derive(Debug, Default, Clone)]
         pub struct Arenas {
             $(
             pub $mul: Arena<$node, $info>,
@@ -58,7 +58,7 @@ gen_node_and_program_accessors![
 
 new_index_type!(pub Type);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     //TODO we've lost distinct indices! is there an easy way to get that back?
     //all values that may be used multiple times are stored as nodes
@@ -218,7 +218,7 @@ impl TypeInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
@@ -252,17 +252,17 @@ impl FunctionInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParameterInfo {
     pub ty: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StackSlotInfo {
     pub inner_ty: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockInfo {
     pub phis: Vec<Phi>,
     pub instructions: Vec<Instruction>,
@@ -280,12 +280,12 @@ impl BlockInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PhiInfo {
     pub ty: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InstructionInfo {
     /// Load a value of type `ty` from `addr`.
     ///
@@ -370,6 +370,38 @@ impl InstructionInfo {
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
         }
     }
+
+    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
+        // avoid using ".." here to avoid accidentally forgetting to update this function
+        match self {
+            InstructionInfo::Load { addr, ty: _ } => *addr = f(*addr),
+            InstructionInfo::Store { addr, ty: _, value } => {
+                *addr = f(*addr);
+                *value = f(*value);
+            }
+            InstructionInfo::Call { target, args } => {
+                *target = f(*target);
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            InstructionInfo::Arithmetic { kind: _, left, right } => {
+                *left = f(*left);
+                *right = f(*right);
+            }
+            InstructionInfo::Comparison { kind: _, left, right } => {
+                *left = f(*left);
+                *right = f(*right);
+            }
+            InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
+                *base = f(*base);
+            }
+            InstructionInfo::PointerOffSet { ty: _, base, index } => {
+                *base = f(*base);
+                *index = f(*index);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -386,7 +418,36 @@ pub struct Target {
     pub phi_values: Vec<Value>,
 }
 
+impl Target {
+    pub fn replace_blocks(&mut self, f: impl FnOnce(Block) -> Block) {
+        self.block = f(self.block);
+    }
+
+    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
+        for value in &mut self.phi_values {
+            *value = f(*value);
+        }
+    }
+}
+
 impl Terminator {
+    pub fn replace_blocks(&mut self, mut f: impl FnMut(Block) -> Block) {
+        self.for_each_target_mut(|target| target.replace_blocks(&mut f));
+    }
+
+    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
+        match self {
+            Terminator::Jump { target } => target.replace_values(f),
+            Terminator::Branch { cond, true_target, false_target } => {
+                *cond = f(*cond);
+                true_target.replace_values(&mut f);
+                false_target.replace_values(&mut f);
+            }
+            Terminator::Return { value } => *value = f(*value),
+            Terminator::Unreachable => (),
+        }
+    }
+
     pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
         match self {
             Terminator::Jump { target } => f(target),
@@ -394,7 +455,7 @@ impl Terminator {
                 f(true_target);
                 f(false_target);
             }
-            Terminator::Return { .. } => {}
+            Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
         }
     }
@@ -406,7 +467,7 @@ impl Terminator {
                 f(true_target);
                 f(false_target);
             }
-            Terminator::Return { .. } => {}
+            Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
         }
     }
@@ -446,7 +507,7 @@ impl Value {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataInfo {
     pub ty: Type,
     pub inner_ty: Type,
@@ -474,13 +535,18 @@ pub struct ExternInfo {
 //Visitors
 //TODO think about how to structure this, right now it's kind of crappy and non consistent
 impl Program {
-    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
-    pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, func: Function, mut f: F) -> Result<(), E> {
-        let func = self.get_func(func);
+    /// Collect the blocks reachable from `start` while staying within the same function.
+    pub fn collect_blocks(&self, start: Block) -> Vec<Block> {
+        let mut blocks = vec![];
+        self.visit_blocks(start, |block| blocks.push(block));
+        blocks
+    }
 
+    /// Visit the blocks reachable from `start` while staying within the same function.
+    pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry.block);
+        blocks_left.push_front(start);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
@@ -495,12 +561,12 @@ impl Program {
         Ok(())
     }
 
-    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, func: Function, mut f: F) -> Result<(), E> {
-        let func = self.get_func(func);
-
+    // TODO this is sketchy, what if the user changes the terminator right before we're visiting the block?
+    /// Visit the blocks reachable from `start` while staying within the same function
+    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, start: Block, mut f: F) -> Result<(), E> {
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(func.entry.block);
+        blocks_left.push_front(start);
 
         while let Some(block) = blocks_left.pop_front() {
             if !blocks_seen.insert(block) { continue; }
@@ -515,19 +581,20 @@ impl Program {
         Ok(())
     }
 
-    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
-    pub fn visit_blocks<F: FnMut(Block)>(&self, func: Function, mut f: F) {
+    /// Visit the blocks reachable from `start` while staying within the same function.
+    pub fn visit_blocks<F: FnMut(Block)>(&self, start: Block, mut f: F) {
         //change this to use ! once that's stable
-        self.try_visit_blocks::<(), _>(func, |block| {
+        self.try_visit_blocks::<(), _>(start, |block| {
             f(block);
             Ok(())
         }).unwrap();
     }
 
-    /// Visit all the blocks reachable from the entry of `func` in breadth-first order.
-    pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, func: Function, mut f: F) {
+    // TODO this is sketchy, what if the user changes the terminator right before we're visiting the block?
+    /// Visit the blocks reachable from `start` while staying within the same function.
+    pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, start: Block, mut f: F) {
         //change this to use ! once that's stable
-        self.try_visit_blocks_mut::<(), _>(func, |prog, block| {
+        self.try_visit_blocks_mut::<(), _>(start, |prog, block| {
             f(prog, block);
             Ok(())
         }).unwrap();
@@ -653,7 +720,7 @@ impl Display for Program {
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
-            self.try_visit_blocks(func, |block| {
+            self.try_visit_blocks(self.get_func(func).entry.block, |block| {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
 

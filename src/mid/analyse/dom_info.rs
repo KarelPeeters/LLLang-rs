@@ -20,7 +20,7 @@ impl DomInfo {
         let entry_block = func_info.entry.block;
 
         let mut blocks = Vec::new();
-        prog.visit_blocks(func, |block| blocks.push(block));
+        prog.visit_blocks(prog.get_func(func).entry.block, |block| blocks.push(block));
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());

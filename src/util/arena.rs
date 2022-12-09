@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-use indexmap::map::{IndexMap, Entry};
+use indexmap::map::{Entry, IndexMap};
 
 macro_rules! new_index_type {
     ($vis:vis $name:ident) => {
@@ -56,6 +56,7 @@ impl Debug for Idx {
     }
 }
 
+#[derive(Clone)]
 pub struct Arena<K: IndexType, T> {
     //TODO for now this is implemented as a map, but this can be improved
     //  to just be a vec using generational indices
@@ -89,6 +90,10 @@ impl<K: IndexType, T> Arena<K, T> {
 
     pub fn iter(&self) -> impl Iterator<Item=(K, &T)> {
         self.into_iter()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item=K> + '_ {
+        self.into_iter().map(|(k, _)| k)
     }
 
     pub fn retain<F: FnMut(K, &T) -> bool>(&mut self, mut keep: F) {
@@ -146,6 +151,7 @@ impl<'s, K: IndexType, T: 's> Iterator for ArenaIterator<'s, K, T> {
     }
 }
 
+#[derive(Clone)]
 pub struct ArenaSet<K: IndexType, T: Eq + Hash + Clone> {
     //TODO this implementation should also be optimized
     //TODO this clone bound should be removed

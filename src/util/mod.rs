@@ -53,3 +53,22 @@ macro_rules! unwrap_match {
         }
     };
 }
+
+pub trait VecExt {
+    type T;
+    fn index_of(&self, value: &Self::T) -> Option<usize>;
+}
+
+impl<T: Eq> VecExt for &[T] {
+    type T = T;
+    fn index_of(&self, value: &Self::T) -> Option<usize> {
+        self.iter().position(|cand| cand == value)
+    }
+}
+
+impl<T: Eq> VecExt for Vec<T> {
+    type T = T;
+    fn index_of(&self, value: &Self::T) -> Option<usize> {
+        self.iter().position(|cand| cand == value)
+    }
+}

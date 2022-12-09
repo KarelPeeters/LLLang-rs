@@ -127,7 +127,7 @@ impl AsmBuilder<'_> {
         }
 
         //TODO maybe figure out the stack size required for the largest call here and then get rid of stack_delta?
-        prog.visit_blocks(func, |block| {
+        prog.visit_blocks(prog.get_func(func).entry.block, |block| {
             let block_info = prog.get_block(block);
 
             for &phi in &block_info.phis {
@@ -188,7 +188,7 @@ impl AsmBuilder<'_> {
 
         // generate the main code
         // the entry block is visited first so we don't even need to jump to it
-        prog.visit_blocks(func, |block| {
+        prog.visit_blocks(prog.get_func(func).entry.block, |block| {
             func_builder.append_block(block);
         });
     }
