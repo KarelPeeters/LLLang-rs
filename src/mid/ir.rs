@@ -2,6 +2,8 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
+use derive_more::From;
+
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
@@ -410,8 +412,7 @@ impl Terminator {
     }
 }
 
-//TODO maybe this enum could implement From to make all the wrapping easier?
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
     Undef(Type),
     Const(Const),

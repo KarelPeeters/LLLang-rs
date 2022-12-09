@@ -370,10 +370,11 @@ impl TargetKind {
 
 static EMPTY_USAGE_VEC: Vec<Usage> = Vec::new();
 
-impl std::ops::Index<Value> for UseInfo {
+impl<T: Into<Value>> std::ops::Index<T> for UseInfo {
     type Output = Vec<Usage>;
 
-    fn index(&self, index: Value) -> &Self::Output {
+    fn index(&self, index: T) -> &Self::Output {
+        let index = index.into();
         self.usages.get(&index).unwrap_or(&EMPTY_USAGE_VEC)
     }
 }

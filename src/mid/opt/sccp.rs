@@ -218,7 +218,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
             Todo::FuncReturnUsers(func) => {
                 let return_lattice = map.eval_func_return(func);
 
-                for &usage in &use_info[Value::Func(func)] {
+                for &usage in &use_info[func] {
                     if let Usage::CallTarget { pos } = usage {
                         map.merge_value(&mut todo, Value::Instr(pos.instr), return_lattice);
                         todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
