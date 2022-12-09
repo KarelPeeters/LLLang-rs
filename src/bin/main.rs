@@ -11,15 +11,10 @@ use derive_more::From;
 use itertools::Itertools;
 use walkdir::{DirEntry, WalkDir};
 
-use crate::front::ast;
-use crate::front::parser::ParseError;
-use crate::front::pos::FileId;
-
-#[macro_use]
-mod util;
-pub mod front;
-pub mod back;
-pub mod mid;
+use lllang::{back, front, mid};
+use lllang::front::ast;
+use lllang::front::parser::ParseError;
+use lllang::front::pos::FileId;
 
 #[derive(Debug, From)]
 enum CompileError {
