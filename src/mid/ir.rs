@@ -68,9 +68,13 @@ pub struct Program {
     types: ArenaSet<Type, TypeInfo>,
 
     //predefined types
+    #[allow(dead_code)]
     ty_void: Type,
+    #[allow(dead_code)]
     ty_ptr: Type,
+    #[allow(dead_code)]
     ty_bool: Type,
+    #[allow(dead_code)]
     ty_int: Type,
 
     //TODO change program to have multiple possible entries with arbitrary signatures instead
@@ -362,7 +366,7 @@ impl InstructionInfo {
                     .expect("tuple_ty should be a tuple type")
                     .fields.get(*index as usize)
                     .unwrap_or_else(|| panic!("tuple index {} out of range for {:?} {}", index, tuple_ty, prog.format_type(*tuple_ty)))
-            },
+            }
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
         }
     }
