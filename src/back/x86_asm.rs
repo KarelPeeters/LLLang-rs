@@ -395,7 +395,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         register_size
     }
 
-    /// ```
+    /// ```ignore
     /// A = A / B
     /// D = A % B
     /// ```
