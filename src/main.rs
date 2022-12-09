@@ -23,7 +23,7 @@ pub mod mid;
 
 #[derive(Debug, From)]
 enum CompileError {
-    IO(std::io::Error),
+    IO(std::io::Error, String),
     Walk(walkdir::Error),
     InvalidFileName(OsString),
     DuplicateModule(String),
@@ -32,14 +32,26 @@ enum CompileError {
     Link,
 }
 
-type Result<T> = std::result::Result<T, CompileError>;
+type CompileResult<T> = Result<T, CompileError>;
+
+trait IoError {
+    type T;
+    fn with_context<S: Into<String>>(self, f: impl FnOnce() -> S) -> CompileResult<Self::T>;
+}
+
+impl<T> IoError for Result<T, std::io::Error> {
+    type T = T;
+    fn with_context<S: Into<String>>(self, f: impl FnOnce() -> S) -> CompileResult<T> {
+        self.map_err(|e| CompileError::IO(e, f().into()))
+    }
+}
 
 fn parse_and_add_module_if_ll(
     prog: &mut front::Program<Option<ast::ModuleContent>>,
     file_count: &mut usize,
     entry: DirEntry,
     skip_path_components: usize,
-) -> Result<()> {
+) -> CompileResult<()> {
     let path = entry.path();
 
     //check that this is a .ll file
@@ -74,7 +86,7 @@ fn parse_and_add_module_if_ll(
     println!("{:?}: {:?}", id, path);
 
     //load and parse the source code
-    let src = read_to_string(path)?;
+    let src = read_to_string(path).with_context(|| format!("Reading module {:?}", path))?;
     let module_ast = front::parser::parse_module(id, &src)?;
 
     module.content = Some(module_ast);
@@ -82,7 +94,7 @@ fn parse_and_add_module_if_ll(
 }
 
 /// Parse the main file and all of the lib files into a single program
-fn parse_all(ll_path: &Path, include_std: bool) -> Result<front::Program<Option<ast::ModuleContent>>> {
+fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<Option<ast::ModuleContent>>> {
     let mut prog = front::Program::default();
     let mut file_count: usize = 0;
 
@@ -119,48 +131,48 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
     }
 }
 
-fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Result<PathBuf> {
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
     println!("----Parse------");
     let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
-    File::create(&ast_file)?
-        .write_fmt(format_args!("{:#?}", ast_program))?;
+    File::create(&ast_file).with_context(|| format!("Creating ast file {:?}", ast_file))?
+        .write_fmt(format_args!("{:#?}", ast_program)).with_context(|| "Writing to ast file")?;
 
     println!("----Collect----");
     let resolved = front::resolve::resolve(&ast_program)
         .expect("failed to collect"); //TODO ? instead of panic here
     let cst_file = ll_path.with_extension("cst");
-    File::create(&cst_file)?
-        .write_fmt(format_args!("{:#?}", resolved))?;
+    File::create(&cst_file).with_context(|| format!("Creating cst file {:?}", cst_file))?
+        .write_fmt(format_args!("{:#?}", resolved)).with_context(|| "Writing to cst file")?;
 
     println!("----Lower------");
     let mut ir_program = front::lower::lower(resolved)
         .expect("failed to lower"); //TODO ? instead of panic here
     let ir_file = ll_path.with_extension("ir");
-    File::create(&ir_file)?
-        .write_fmt(format_args!("{}", ir_program))?;
+    File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
+        .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
 
     println!("----Optimize---");
     let ir_opt_file = ll_path.with_extension("ir_opt");
     if optimize {
         run_optimizations(&mut ir_program);
-        File::create(&ir_opt_file)?
-            .write_fmt(format_args!("{}", ir_program))?;
+        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
+            .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
     } else {
         //clear file
-        File::create(&ir_opt_file)?.write_all(&[])?;
+        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
     }
 
     println!("----Backend----");
     let asm = back::x86_asm::lower(&ir_program);
     let asm_file = ll_path.with_extension("asm");
-    File::create(&asm_file)?
-        .write_all(asm.as_bytes())?;
+    File::create(&asm_file).with_context(|| format!("Creating ASM file {:?}", asm_file))?
+        .write_all(asm.as_bytes()).with_context(|| "Writing to ASM file")?;
 
     Ok(asm_file)
 }
 
-fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
+fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {
     println!("----Assemble---");
     let result = Command::new("nasm")
         .current_dir(asm_path.parent().unwrap())
@@ -168,7 +180,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         .arg("-fwin32")
         .arg("-g")
         .arg(asm_path.file_name().unwrap())
-        .status()?;
+        .status().with_context(|| "Running nasm")?;
 
     if !result.success() {
         return Err(CompileError::Assemble);
@@ -183,7 +195,7 @@ fn compile_asm_to_exe(asm_path: &Path) -> Result<PathBuf> {
         .arg("/entry:main")
         .arg(asm_path.with_extension("obj").file_name().unwrap())
         .arg("C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.18362.0\\um\\x86\\kernel32.lib")
-        .status()?;
+        .status().with_context(|| "Running link.exe")?;
 
     if !result.success() {
         return Err(CompileError::Link);
@@ -228,7 +240,7 @@ enum Level {
     ASM,
 }
 
-fn main() -> Result<()> {
+fn main() -> CompileResult<()> {
     let opts: Opts = Opts::parse();
 
     let (file, do_run) = match opts.command {
@@ -257,7 +269,7 @@ fn main() -> Result<()> {
     let exe_path = compile_asm_to_exe(&asm_path)?;
 
     if do_run {
-        run_exe(&exe_path)?;
+        run_exe(&exe_path).with_context(|| format!("Running executable {:?}", exe_path))?;
     }
 
     Ok(())
