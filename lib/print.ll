@@ -19,7 +19,7 @@ fun print_char(char: byte) {
     print_str(&char, 1);
 }
 
-fun print_int(x: byte) {
+fun print_int(x: int) {
     if x == 0 {
         print_char(CHAR_ZERO);
         return;
@@ -29,11 +29,12 @@ fun print_int(x: byte) {
         x = -x;
     }
 
-    let buffer: [byte; 3];
+    let buffer: [byte; 16];
     let i = 0;
 
     while x != 0 {
-        buffer[i] = x % 10;
+        let tmp: int = (x % 10);
+        buffer[i] = *((&tmp) as &byte);
         x = x / 10;
         i = i + 1;
     }
@@ -49,7 +50,7 @@ fun println_str(s: &byte, len: int) {
     print_newline();
 }
 
-fun println_int(x: byte) {
+fun println_int(x: int) {
     print_int(x);
     print_newline();
 }
