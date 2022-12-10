@@ -28,6 +28,8 @@ pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
     pub type_solution: TypeSolution,
 
     pub loop_stack: Vec<LoopInfo>,
+
+    pub func_debug_name: &'ast String,
 }
 
 /// Information about the innermost loop, used for `break` and `continue` statements.
@@ -71,13 +73,6 @@ fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) ->
     }
 }
 
-fn maybe_id_debug_name(id: &MaybeIdentifier) -> String {
-    match id {
-        MaybeIdentifier::Identifier(id) => id.string.clone(),
-        MaybeIdentifier::Placeholder(_span) => "_".to_owned(),
-    }
-}
-
 enum ContinueOrBreak {
     Break,
     Continue,
@@ -93,6 +88,13 @@ struct Flow {
 impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'ast, 'cst, 'ts, F> {
     fn expr_type(&self, expr: &ast::Expression) -> cst::Type {
         self.type_solution[*self.expr_type_map.get(&(expr as *const _)).unwrap()]
+    }
+
+    fn maybe_id_debug_name(&self, id: &MaybeIdentifier) -> String {
+        match id {
+            MaybeIdentifier::Identifier(id) => format!("{}.{}", self.func_debug_name, id.string),
+            MaybeIdentifier::Placeholder(_span) => format!("{}._", self.func_debug_name),
+        }
     }
 
     #[must_use]
@@ -644,7 +646,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty_ir = self.types.map_type(self.prog, ty);
 
                 //define the slot
-                let slot = self.define_slot(ty_ir, Some(maybe_id_debug_name(&decl.id)));
+                let debug_name = self.maybe_id_debug_name(&decl.id);
+                let slot = self.define_slot(ty_ir, Some(debug_name));
                 let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.maybe_declare(&decl.id, item)?;
@@ -719,7 +722,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //declare slot for index
                 let mut index_scope = scope.nest();
-                let index_slot = self.define_slot(index_ty_ir, Some(maybe_id_debug_name(&for_stmt.index)));
+                let debug_name = self.maybe_id_debug_name(&for_stmt.index);
+                let index_slot = self.define_slot(index_ty_ir, Some(debug_name));
                 let index_slot = ir::Value::Slot(index_slot);
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
@@ -808,7 +812,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             self.prog.get_func_mut(self.ir_func).params.push(ir_param);
 
             //allocate a slot for the parameter so its address can be taken
-            let slot = self.define_slot(ty_ir, Some(maybe_id_debug_name(&param.id)));
+            let debug_name = self.maybe_id_debug_name(&param.id);
+            let slot = self.define_slot(ty_ir, Some(debug_name));
 
             //immediately copy the param into the slot
             let store = ir::InstructionInfo::Store {

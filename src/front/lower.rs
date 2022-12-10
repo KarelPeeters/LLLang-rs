@@ -200,6 +200,8 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
                     expr_type_map: &expr_type_map,
                     decl_type_map: &decl_type_map,
                     type_solution: solution,
+
+                    func_debug_name: &func_decl.ast.id.string,
                 }.lower_func(func_decl)?;
             }
         }
