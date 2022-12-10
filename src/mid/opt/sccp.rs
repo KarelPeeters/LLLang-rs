@@ -140,7 +140,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         //don't need to visit because result is void
                         Usage::StoreValue { .. } => {}
 
-                        Usage::BinaryOperand { pos } => {
+                        Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
                         Usage::TargetPhiValue { target_kind, phi_index } => {

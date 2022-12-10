@@ -44,7 +44,8 @@ pub enum Usage<P = InstructionPos> {
     },
 
     //operand in Arithmetic or Comparison
-    BinaryOperand { pos: P },
+    BinaryOperandLeft { pos: P },
+    BinaryOperandRight { pos: P },
 
     //target of TupleFieldPtr
     TupleFieldPtrBase { pos: P },
@@ -115,8 +116,8 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
         }
         &InstructionInfo::Arithmetic { kind: _, left, right } |
         &InstructionInfo::Comparison { kind: _, left, right } => {
-            f(left, Usage::BinaryOperand { pos });
-            f(right, Usage::BinaryOperand { pos });
+            f(left, Usage::BinaryOperandLeft { pos });
+            f(right, Usage::BinaryOperandRight { pos });
         }
         &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
             f(base, Usage::TupleFieldPtrBase { pos });
@@ -268,14 +269,20 @@ impl UseInfo {
                         _ => unreachable!()
                     }
                 }
-                Usage::BinaryOperand { pos } => {
+                Usage::BinaryOperandLeft { pos } => {
                     match prog.get_instr_mut(pos.instr) {
-                        InstructionInfo::Arithmetic { left, right, .. } |
-                        InstructionInfo::Comparison { left, right, .. } => {
-                            let mut replaced_any = false;
-                            replaced_any |= maybe_repl(count, left, old, new);
-                            replaced_any |= maybe_repl(count, right, old, new);
-                            assert!(replaced_any);
+                        InstructionInfo::Arithmetic { left, .. } |
+                        InstructionInfo::Comparison { left, .. } => {
+                            repl(count, left, old, new)
+                        }
+                        _ => unreachable!()
+                    }
+                }
+                Usage::BinaryOperandRight { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::Arithmetic { right, .. } |
+                        InstructionInfo::Comparison { right, .. } => {
+                            repl(count, right, old, new)
                         }
                         _ => unreachable!()
                     }
