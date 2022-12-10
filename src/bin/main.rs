@@ -112,27 +112,46 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
     Ok(prog)
 }
 
+fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> bool {
+    let nodes_before = prog.nodes.total_node_count();
+    let changed = pass(prog);
+    let nodes_after = prog.nodes.total_node_count();
+
+    if nodes_after != nodes_before {
+        assert!(
+            changed,
+            "The number of nodes changed from {} to {}, but the pass reported no change",
+            nodes_before, nodes_after
+        );
+    }
+
+    changed
+}
+
+fn run_gc(prog: &mut mid::ir::Program) -> bool {
+    let changed = run_single_pass(prog, mid::opt::gc::gc);
+    // TODO maybe only do this in debug mode
+    assert!(!run_single_pass(prog, mid::opt::gc::gc), "GC has to be idempotent");
+    changed
+}
+
 fn run_optimizations(prog: &mut mid::ir::Program) {
-    let opts: &[fn(&mut mid::ir::Program) -> bool] = &[
+    let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
         mid::opt::slot_to_phi::slot_to_phi,
         mid::opt::sccp::sccp,
         mid::opt::flow_simplify::flow_simplify,
         mid::opt::inline::inline,
     ];
 
-    // TODO remove assertion checks that GC is idempotent
-    mid::opt::gc::gc(prog);
-    assert!(!mid::opt::gc::gc(prog));
+    run_gc(prog);
 
     loop {
         let mut changed = false;
 
-        for opt in opts {
-            if opt(prog) {
-                mid::opt::gc::gc(prog);
-                assert!(!mid::opt::gc::gc(prog));
-
-                changed = true;
+        for pass in passes {
+            if run_single_pass(prog, pass) {
+                run_gc(prog);
+                changed |= true;
             }
         }
 
