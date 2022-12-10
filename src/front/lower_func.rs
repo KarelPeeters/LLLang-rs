@@ -467,6 +467,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 self.append_break_or_continue(flow, expr, ContinueOrBreak::Continue)?,
             ast::ExpressionKind::Break =>
                 self.append_break_or_continue(flow, expr, ContinueOrBreak::Break)?,
+            ast::ExpressionKind::StructLiteral { .. } => todo!("struct literal"),
         };
 
         //check that the returned value's type is indeed expect_ty

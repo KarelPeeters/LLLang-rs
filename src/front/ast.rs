@@ -231,6 +231,11 @@ pub enum ExpressionKind {
     Return { value: Option<Box<Expression>> },
     Continue,
     Break,
+
+    StructLiteral {
+        struct_path: Path,
+        fields: Vec<(Identifier, Expression)>,
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

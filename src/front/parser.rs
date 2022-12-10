@@ -285,9 +285,22 @@ impl<'s> Tokenizer<'s> {
     }
 }
 
+#[derive(Debug)]
+struct Restrictions {
+    no_struct_literal: bool,
+    no_ternary: bool,
+}
+
+impl Restrictions {
+    const NONE: Restrictions = Restrictions { no_struct_literal: false, no_ternary: false };
+    const NO_STRUCT_LITERAL: Restrictions = Restrictions { no_struct_literal: true, no_ternary: false };
+    const NO_TERNARY: Restrictions = Restrictions { no_struct_literal: false, no_ternary: true };
+}
+
 struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
     last_popped_end: Pos,
+    restrictions: Restrictions,
 }
 
 const EXPR_START_TOKENS: &[TT] = &[
@@ -401,7 +414,6 @@ enum PostFixStateKind {
     Cast { ty: ast::Type },
 }
 
-
 #[allow(dead_code)]
 impl<'s> Parser<'s> {
     fn pop(&mut self) -> Result<Token> {
@@ -496,6 +508,17 @@ impl<'s> Parser<'s> {
 }
 
 impl<'s> Parser<'s> {
+    fn set_restrict<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
+        let old = std::mem::replace(&mut self.restrictions, res);
+        let result = f(self);
+        self.restrictions = old;
+        result
+    }
+
+    fn clear_restrict<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.set_restrict(Restrictions::NONE, f)
+    }
+
     fn module(&mut self) -> Result<ast::ModuleContent> {
         let (_, items) = self.list(TT::Eof, None, Self::item)?;
         Ok(ast::ModuleContent { items })
@@ -611,7 +634,7 @@ impl<'s> Parser<'s> {
             }
             TT::If => {
                 self.pop()?;
-                let cond = self.expression()?;
+                let cond = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.boxed_expression())?;
                 let then_block = self.block()?;
 
                 let else_block = self.accept(TT::Else)?
@@ -620,7 +643,7 @@ impl<'s> Parser<'s> {
 
                 (ast::StatementKind::If(ast::IfStatement {
                     span: Span::new(start_pos, self.last_popped_end),
-                    cond: Box::new(cond),
+                    cond,
                     then_block,
                     else_block,
                 }), false)
@@ -635,7 +658,7 @@ impl<'s> Parser<'s> {
             TT::While => {
                 self.pop()?;
 
-                let cond = Box::new(self.expression()?);
+                let cond = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.boxed_expression())?;
                 let body = self.block()?;
 
                 let span = Span::new(start_pos, self.last_popped_end);
@@ -648,9 +671,12 @@ impl<'s> Parser<'s> {
                 let index_ty = self.maybe_type_decl()?;
 
                 self.expect(TT::In, "in")?;
-                let start = Box::new(self.expression()?);
+                let start = self.boxed_expression()?;
                 self.expect(TT::DoubleDot, "range separator")?;
-                let end = Box::new(self.expression()?);
+
+                let end = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| {
+                    s.boxed_expression()
+                })?;
 
                 let body = self.block()?;
 
@@ -658,22 +684,23 @@ impl<'s> Parser<'s> {
                 (ast::StatementKind::For(ast::ForStatement { span, index, index_ty, start, end, body }), false)
             }
             TT::OpenC => {
-                (ast::StatementKind::Block(self.block()?), false)
+                let block = self.clear_restrict(|s| s.block())?;
+                (ast::StatementKind::Block(block), false)
             }
             _ => {
-                let left = self.expression()?;
+                let left = self.boxed_expression()?;
 
                 let kind = if self.accept(TT::Eq)?.is_some() {
                     //assignment
-                    let right = self.expression()?;
+                    let right = self.boxed_expression()?;
                     ast::StatementKind::Assignment(ast::Assignment {
                         span: Span::new(left.span.start, right.span.end),
-                        left: Box::new(left),
-                        right: Box::new(right),
+                        left,
+                        right,
                     })
                 } else {
                     //expression
-                    ast::StatementKind::Expression(Box::new(left))
+                    ast::StatementKind::Expression(left)
                 };
 
                 (kind, true)
@@ -695,17 +722,21 @@ impl<'s> Parser<'s> {
 
         let ty = self.maybe_type_decl()?;
         let init = self.accept(TT::Eq)?
-            .map(|_| self.expression().map(Box::new))
+            .map(|_| self.boxed_expression())
             .transpose()?;
 
         Ok(ast::Declaration { span: Span::new(start_pos, self.last_popped_end), mutable, ty, id, init })
+    }
+
+    fn boxed_expression(&mut self) -> Result<Box<ast::Expression>> {
+        Ok(Box::new(self.expression()?))
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
         let expr = self.precedence_climb_binop(0)?;
         let start = expr.span.start;
 
-        if self.accept(TT::QuestionMark)?.is_some() {
+        if !self.restrictions.no_ternary && self.accept(TT::QuestionMark)?.is_some() {
             let then_value = self.expression()?;
             self.expect(TT::Colon, "continue ternary expression")?;
             let else_value = self.expression()?;
@@ -829,7 +860,7 @@ impl<'s> Parser<'s> {
                 TT::OpenS => {
                     //array indexing
                     self.pop()?;
-                    let index = Box::new(self.expression()?);
+                    let index = self.boxed_expression()?;
                     self.expect(TT::CloseS, "")?;
 
                     (POSTFIX_DEFAULT_LEVEL, PostFixStateKind::ArrayIndex { index })
@@ -906,6 +937,11 @@ impl<'s> Parser<'s> {
             }
             TT::Id => {
                 let path = self.path()?;
+
+                if !self.restrictions.no_struct_literal && self.at(TT::OpenC) {
+                    return self.struct_literal(path);
+                }
+
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::Path(path),
@@ -913,7 +949,7 @@ impl<'s> Parser<'s> {
             }
             TT::OpenB => {
                 self.pop()?;
-                let expr = self.expression()?;
+                let expr = self.clear_restrict(|s| s.expression())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
                 Ok(expr)
             }
@@ -924,7 +960,7 @@ impl<'s> Parser<'s> {
                 let value = if self.peek().ty == TT::Semi {
                     None
                 } else {
-                    Some(Box::new(self.expression()?))
+                    Some(self.boxed_expression()?)
                 };
 
                 Ok(ast::Expression {
@@ -946,6 +982,28 @@ impl<'s> Parser<'s> {
             }
             _ => Err(Self::unexpected_token(self.peek(), EXPR_START_TOKENS, "expression"))
         }
+    }
+
+    fn struct_literal(&mut self, tuple_path: ast::Path) -> Result<ast::Expression> {
+        self.expect(TT::OpenC, "start of struct literal")?;
+
+        let (_, fields) = self.list(TT::CloseC, Some(TT::Comma), |s| {
+            let id = s.identifier("tuple literal field")?;
+            s.expect(TT::Colon, "tuple literal field separator")?;
+
+            let value = s.set_restrict(Restrictions::NO_TERNARY, |s| {
+                s.expression()
+            })?;
+
+            Ok((id, value))
+        })?;
+
+        let span = Span::new(tuple_path.span.start, self.last_popped_end);
+        let kind = ast::ExpressionKind::StructLiteral {
+            struct_path: tuple_path,
+            fields,
+        };
+        Ok(ast::Expression { span, kind })
     }
 
     fn path(&mut self) -> Result<ast::Path> {
@@ -1051,6 +1109,7 @@ pub fn parse_module(file: FileId, input: &str) -> Result<ast::ModuleContent> {
     let mut parser = Parser {
         tokenizer: Tokenizer::new(file, input)?,
         last_popped_end: Pos { file, line: 1, col: 1 },
+        restrictions: Restrictions::NONE,
     };
     parser.module()
 }

@@ -189,6 +189,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             }
             ast::ExpressionKind::Continue => self.problem.unknown_default_void(expr_origin),
             ast::ExpressionKind::Break => self.problem.unknown_default_void(expr_origin),
+            ast::ExpressionKind::StructLiteral { .. } => todo!("struct literal"),
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);
