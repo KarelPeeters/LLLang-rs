@@ -13,10 +13,9 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
     let funcs = prog.nodes.funcs.keys().collect_vec();
     for func in funcs {
         let entry = &prog.get_func(func).entry;
-        let (delta, endpoint) = EndPoint::find(prog, entry.clone(), &[]);
+        let (delta, new_target) = EndPoint::find_target(prog, entry.clone(), None);
         count_skipped += delta;
-
-        prog.get_func_mut(func).entry = endpoint.to_target();
+        prog.get_func_mut(func).entry = new_target;
     }
 
     // simplify block terminators
@@ -25,12 +24,12 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
         let info = prog.get_block_mut(block);
         let old_term = std::mem::replace(&mut info.terminator, Terminator::Unreachable);
 
-        let new_term = match old_term {
+        let new_term = match old_term.clone() {
             Terminator::Jump { target } => {
                 // convert to the final terminator
-                let (delta, endpoint) = EndPoint::find(prog, target.clone(), &[block]);
+                let (delta, new_term) = EndPoint::find_terminator(prog, target.clone(), Some(block));
                 count_skipped += delta;
-                endpoint.to_terminator()
+                new_term
             }
             Terminator::Branch { cond, true_target, false_target } => {
                 match &cond {
@@ -44,17 +43,14 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
                         let target = if cst.value != 0 { true_target } else { false_target };
                         count_branch_removed += 1;
 
-                        let (delta, endpoint) = EndPoint::find(prog, target, &[block]);
+                        let (delta, new_term) = EndPoint::find_terminator(prog, target, Some(block));
                         count_skipped += delta;
-                        endpoint.to_terminator()
+                        new_term
                     }
                     _ => {
                         // general condition, we can still try to replace the targets
-                        let (true_delta, true_endpoint) = EndPoint::find(prog, true_target, &[block]);
-                        let (false_delta, false_endpoint) = EndPoint::find(prog, false_target, &[block]);
-                        let true_target = true_endpoint.to_target();
-                        let false_target = false_endpoint.to_target();
-
+                        let (true_delta, true_target) = EndPoint::find_target(prog, true_target, Some(block));
+                        let (false_delta, false_target) = EndPoint::find_target(prog, false_target, Some(block));
                         count_skipped += true_delta + false_delta;
                         Terminator::Branch { cond, true_target, false_target }
                     }
@@ -75,16 +71,26 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
 
 #[derive(Debug)]
 struct EndPoint {
+    count_skipped: usize,
     fallback_target: Target,
     terminator: Option<Terminator>,
 }
 
 impl EndPoint {
-    fn find(prog: &mut Program, target: Target, blocks_seen: &[Block]) -> (usize, Self) {
-        let mut blocks_seen: HashSet<Block> = blocks_seen.iter().copied().collect();
+    fn find_target(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Target) {
+        Self::find(prog, start, start_block).to_target()
+    }
 
-        let Target { mut block, mut phi_values } = target;
+    fn find_terminator(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Terminator) {
+        Self::find(prog, start, start_block).to_terminator()
+    }
+
+    fn find(prog: &Program, start: Target, start_block: Option<Block>) -> Self {
+        let mut blocks_seen = HashSet::new();
+        blocks_seen.extend(start_block.iter());
         let mut count_skipped = 0;
+
+        let Target { mut block, mut phi_values } = start;
 
         loop {
             if !blocks_seen.insert(block) {
@@ -112,30 +118,37 @@ impl EndPoint {
                     phi_values = new_phi_values.clone();
                 }
                 terminator => {
-                    let endpoint = EndPoint {
+                    return EndPoint {
+                        count_skipped,
                         fallback_target: Target { block, phi_values },
                         terminator: Some(terminator.clone()),
                     };
-                    return (count_skipped, endpoint);
                 }
             }
         }
 
-        let endpoint = EndPoint {
+        EndPoint {
+            count_skipped,
             fallback_target: Target { block, phi_values },
             terminator: None,
+        }
+    }
+
+    fn to_target(self) -> (usize, Target) {
+        let count_skipped = if self.terminator.is_some() {
+            self.count_skipped - 1
+        } else {
+            self.count_skipped
         };
-        (count_skipped, endpoint)
+
+        (count_skipped, self.fallback_target)
     }
 
-    fn to_target(self) -> Target {
-        self.fallback_target
-    }
-
-    fn to_terminator(self) -> Terminator {
-        match self.terminator {
+    fn to_terminator(self) -> (usize, Terminator) {
+        let terminator = match self.terminator {
             None => Terminator::Jump { target: self.fallback_target },
             Some(terminator) => terminator,
-        }
+        };
+        (self.count_skipped, terminator)
     }
 }
