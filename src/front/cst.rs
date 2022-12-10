@@ -151,7 +151,6 @@ pub struct ItemStore<'a> {
     pub consts: Arena<Const, ConstDecl<'a>>,
 }
 
-
 #[derive(Debug, Default)]
 pub struct CollectedModule {
     /// The scope that only contains items actually defined in this module.
@@ -198,6 +197,15 @@ impl<'a> ItemStore<'a> {
         scope.find(Some(&self.root_scope), &path.id).map(|&v| v)
     }
 
+    pub fn resolve_path_type(&self, scope_kind: ScopeKind, scope: &Scope<ScopedItem>, path: &'a ast::Path) -> Result<'a, Type> {
+        let item = self.resolve_path(scope_kind, scope, path)?;
+        if let ScopedItem::Type(ty) = item {
+            Ok(ty)
+        } else {
+            Err(item.err_unexpected_kind(error::ItemType::Type, path))
+        }
+    }
+
     pub fn resolve_type(
         &self,
         scope_kind: ScopeKind,
@@ -211,14 +219,7 @@ impl<'a> ItemStore<'a> {
             ast::TypeKind::Bool => Ok(types.ty_bool),
             ast::TypeKind::Byte => Ok(types.ty_byte),
             ast::TypeKind::Int => Ok(types.ty_int),
-            ast::TypeKind::Path(path) => {
-                let item = self.resolve_path(scope_kind, scope, path)?;
-                if let ScopedItem::Type(ty) = item {
-                    Ok(ty)
-                } else {
-                    Err(item.err_unexpected_kind(error::ItemType::Type, path))
-                }
-            }
+            ast::TypeKind::Path(path) => self.resolve_path_type(scope_kind, scope, path),
             ast::TypeKind::Ref(inner) => {
                 let inner = self.resolve_type(scope_kind, scope, types, &*inner)?;
                 Ok(types.types.push(TypeInfo::Pointer(inner)))
@@ -276,7 +277,7 @@ impl ScopedItem {
 
         assert_ne!(actual, expected);
 
-        error::Error::UnexpectedItemType { expected, actual, path }
+        Error::UnexpectedItemType { expected, actual, path }
     }
 }
 

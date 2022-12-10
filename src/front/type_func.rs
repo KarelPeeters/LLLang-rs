@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
 
 use crate::front::{ast, cst, error};
 use crate::front::ast::{BinaryOp, DotIndexIndex};
 use crate::front::cst::{FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
-use crate::front::error::Result;
+use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{Origin, TypeProblem, TypeVar};
@@ -29,6 +29,10 @@ pub struct TypeFuncState<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
 impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
     fn resolve_type(&mut self, scope: &Scope<ScopedItem>, ty: &'ast ast::Type) -> Result<'ast, cst::Type> {
         self.items.resolve_type(ScopeKind::Real, scope, &mut self.types.inner, ty)
+    }
+
+    fn resolve_path_type(&mut self, scope: &Scope<ScopedItem>, path: &'ast ast::Path) -> Result<'ast, cst::Type> {
+        self.items.resolve_path_type(ScopeKind::Real, scope, path)
     }
 
     fn visit_expr(
@@ -189,7 +193,43 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             }
             ast::ExpressionKind::Continue => self.problem.unknown_default_void(expr_origin),
             ast::ExpressionKind::Break => self.problem.unknown_default_void(expr_origin),
-            ast::ExpressionKind::StructLiteral { .. } => todo!("struct literal"),
+            ast::ExpressionKind::StructLiteral { struct_path, fields } => {
+                let struct_ty = self.resolve_path_type(scope, struct_path)?;
+                let struct_ty_info = if let TypeInfo::Struct(struct_ty_info) = &self.types[struct_ty] {
+                    struct_ty_info.clone()
+                } else {
+                    return Err(Error::StructLiteralForNonStructType {
+                        span: expr.span,
+                        ty: self.types.format_type(struct_ty).to_string(),
+                        fields: fields.iter().map(|(id, _)| id).collect(),
+                    });
+                };
+
+                let fields_set: HashSet<_> = fields.iter().map(|(id, _)| &*id.string).collect();
+                let expected_set: HashSet<_> = struct_ty_info.fields.iter().map(|info| info.id).collect();
+
+                if fields_set != expected_set {
+                    return Err(Error::StructLiteralInvalidFields {
+                        span: expr.span,
+                        expected: struct_ty_info.fields.iter().map(|info| info.id.to_owned()).collect(),
+                        actual: fields.iter().map(|(id, _)| id.string.clone()).collect(),
+                    })
+                }
+
+                // require that field types match
+                for (field_id, field_value) in fields {
+                    let field_value_ty = self.visit_expr(scope, field_value)?;
+
+                    let field_info = struct_ty_info.fields.iter()
+                        .find(|field| field.id == &field_id.string)
+                        .unwrap();
+                    let field_ty = self.problem.fully_known(&self.types, field_info.ty);
+
+                    self.problem.equal(field_ty, field_value_ty);
+                }
+
+                self.problem.fully_known(&self.types, struct_ty)
+            }
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);

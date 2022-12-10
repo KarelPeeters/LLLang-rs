@@ -43,6 +43,16 @@ pub enum Error<'a> {
         lit: String,
         ty: TypeString,
     },
+    StructLiteralForNonStructType {
+        span: Span,
+        ty: TypeString,
+        fields: Vec<&'a ast::Identifier>,
+    },
+    StructLiteralInvalidFields {
+        span: Span,
+        expected: Vec<String>,
+        actual: Vec<String>,
+    },
 
     //lrvalue
     ExpectedLValue(&'a ast::Expression),
