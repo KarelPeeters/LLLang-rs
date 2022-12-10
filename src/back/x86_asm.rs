@@ -1,10 +1,11 @@
 use std::cmp::max;
 
+use indexmap::IndexSet;
 use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, Data, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
 use crate::util::zip_eq;
 
 pub fn lower(prog: &Program) -> String {
@@ -14,6 +15,7 @@ pub fn lower(prog: &Program) -> String {
         block_numbers: Default::default(),
         func_numbers: Default::default(),
         data_numbers: Default::default(),
+        used_externs: Default::default(),
     }.lower()
 }
 
@@ -45,6 +47,7 @@ struct AsmBuilder<'p> {
     block_numbers: IndexMap<Block, usize>,
     func_numbers: IndexMap<Function, usize>,
     data_numbers: IndexMap<Data, usize>,
+    used_externs: IndexSet<Extern>,
 }
 
 struct AsmFuncBuilder<'p, 'o, 'r> {
@@ -75,14 +78,12 @@ impl AsmBuilder<'_> {
         let mut output = Output::default();
 
         //call main function
+        // TODO at some point replace this with an ugly main function in lib that calls the nicer main
         let main_func_number = self.func_number(self.prog.main);
         output.append_ln("_main:");
         output.append_instr(&format!("call func_{}", main_func_number));
         output.append_instr("push eax");
         output.append_instr("call _ExitProcess@4");
-
-        //hardcode dependency TODO eventually remove this
-        output.header.push_str("extern _ExitProcess@4\n");
 
         //write out all of the functions
         for (func, func_info) in &self.prog.nodes.funcs {
@@ -100,6 +101,18 @@ impl AsmBuilder<'_> {
                 output.text.push_str(&format!("{}", b));
             }
             output.text.push('\n');
+        }
+
+        // add externs to header
+        const EXIT_PROCESS_NAME: &str = "_ExitProcess@4";
+        let mut has_exit_process = false;
+        for ext in self.used_externs {
+            let name = &self.prog.get_ext(ext).name;
+            output.header.push_str(&format!("extern {}\n", name));
+            has_exit_process |= name == EXIT_PROCESS_NAME;
+        }
+        if !has_exit_process {
+            output.header.push_str(&format!("extern {}\n", EXIT_PROCESS_NAME));
         }
 
         //format everything together
@@ -309,11 +322,11 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let stack_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
                 self.append_mem_copy(target, MemRegOffset::stack(stack_delta + stack_pos), layout.size);
             }
-            Value::Extern(ext) => {
+            &Value::Extern(ext) => {
                 assert_eq!(layout.size, 4);
-                let name = &self.prog.get_ext(*ext).name;
+                let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, dword {}", target, name));
-                self.header.push_str(&format!("extern {}\n", name))
+                self.parent.used_externs.insert(ext);
             }
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
@@ -374,11 +387,11 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let stack_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
                 self.append_instr(&format!("mov {}, [esp+{}]", target, stack_delta + stack_pos));
             }
-            Value::Extern(ext) => {
+            &Value::Extern(ext) => {
                 assert_eq!(layout.size, 4);
-                let name = &self.prog.get_ext(*ext).name;
+                let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, {}", target, name));
-                self.header.push_str(&format!("extern {}\n", name))
+                self.parent.used_externs.insert(ext);
             }
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
