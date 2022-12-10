@@ -12,22 +12,17 @@ struct Vec {
 }
 
 fn vec_new() -> Vec {
-    let vec: Vec;
-    vec.buf = null;
-    vec.cap = 0;
-    vec.len = 0;
-    return vec;
+    return Vec {
+        buf: null,
+        cap: 0,
+        len: 0,
+    };
 }
 
 fn vec_clear(vec_ptr: &Vec) {
     let vec = *vec_ptr;
-
     free(vec.buf as &void);
-    vec.buf = null;
-    vec.cap = 0;
-    vec.len = 0;
-
-    *vec_ptr = vec;
+    *vec_ptr = vec_new();
 }
 
 fn vec_ensure_space(vec_ptr: &Vec, space: int) {
