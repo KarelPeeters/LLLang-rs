@@ -96,7 +96,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
     #[must_use]
     fn new_block(&mut self) -> ir::Block {
-        self.prog.define_block(ir::BlockInfo::new())
+        self.prog.define_block(ir::BlockInfo::new(Some(self.ir_func)))
     }
 
     #[must_use]
@@ -109,7 +109,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
     #[must_use]
     fn define_slot(&mut self, inner_ty: ir::Type, debug_name: Option<String>) -> ir::StackSlot {
-        let slot = ir::StackSlotInfo { inner_ty, debug_name };
+        let slot = ir::StackSlotInfo { inner_ty, debug_name, owning_func: Some(self.ir_func) };
         let slot = self.prog.define_slot(slot);
         self.prog.get_func_mut(self.ir_func).slots.push(slot);
         slot
@@ -766,7 +766,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let ty_ptr = self.types.define_type_ptr(ty);
 
             //create the param
-            let ir_param = self.prog.define_param(ir::ParameterInfo { ty: ty_ir });
+            let ir_param = self.prog.define_param(ir::ParameterInfo { ty: ty_ir, owning_func: Some(self.ir_func) });
             self.prog.get_func_mut(self.ir_func).params.push(ir_param);
 
             //allocate a slot for the parameter so its address can be taken

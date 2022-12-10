@@ -226,14 +226,14 @@ fn map_function<'a>(
             Ok((None, ir::Value::Extern(prog.define_ext(ext))))
         }
         (ext, true) => {
-            let mut func_ir = ir::FunctionInfo::new(ty_func_ir, prog);
+            let func_ir = prog.new_function(ty_func_ir);
+            let func_ir_info = prog.get_func_mut(func_ir);
 
-            func_ir.debug_name = Some(decl.ast.id.string.clone());
+            func_ir_info.debug_name = Some(decl.ast.id.string.clone());
             if ext {
-                func_ir.global_name = Some(decl.ast.id.string.clone())
+                func_ir_info.global_name = Some(decl.ast.id.string.clone())
             }
 
-            let func_ir = prog.define_func(func_ir);
             Ok((Some(func_ir), ir::Value::Func(func_ir)))
         }
     }?;

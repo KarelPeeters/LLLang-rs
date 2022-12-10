@@ -6,6 +6,10 @@ use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, ParameterInfo, Ph
 use crate::util::zip_eq;
 
 impl Program {
+    /// Deep clone the given function.
+    ///
+    /// New replacement argument can immediately be provided, if None the new function is created with matching parameters.
+    /// In the latter case the user should take care to fix the `owning_func` of those new parameters.
     pub fn deep_clone_function(&mut self, func: Function, replace_args: Option<&[Value]>) -> FunctionInfo {
         let old_info = self.get_func(func);
 
@@ -19,15 +23,15 @@ impl Program {
         if let Some(replace_args) = replace_args {
             assert_eq!(old_params.len(), replace_args.len());
             for (&old_param, &new_arg) in zip_eq(&old_params, replace_args) {
-                let &ParameterInfo { ty } = self.get_param(old_param);
+                let &ParameterInfo { ty, owning_func: _ } = self.get_param(old_param);
                 assert_eq!(ty, self.type_of_value(new_arg));
 
                 assert!(map_param.insert(old_param, new_arg).is_none());
             }
         } else {
             for &old_param in &old_params {
-                let &ParameterInfo { ty } = self.get_param(old_param);
-                let new_param = self.define_param(ParameterInfo { ty });
+                let &ParameterInfo { ty, owning_func: _ } = self.get_param(old_param);
+                let new_param = self.define_param(ParameterInfo { ty, owning_func: None });
 
                 new_params.push(new_param);
                 assert!(map_param.insert(old_param, Value::Param(new_param)).is_none());
@@ -36,8 +40,8 @@ impl Program {
 
         let mut new_slots = vec![];
         let map_slot: HashMap<_, _> = old_slots.iter().map(|&old_slot| {
-            let &StackSlotInfo { inner_ty, ref debug_name } = self.get_slot(old_slot);
-            let new_slot = self.define_slot(StackSlotInfo { inner_ty, debug_name: debug_name.clone() });
+            let &StackSlotInfo { inner_ty, ref debug_name, owning_function: _ } = self.get_slot(old_slot);
+            let new_slot = self.define_slot(StackSlotInfo { inner_ty, debug_name: debug_name.clone(), owning_func: None });
             new_slots.push(new_slot);
             (old_slot, new_slot)
         }).collect();

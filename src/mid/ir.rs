@@ -96,10 +96,11 @@ impl Default for Program {
         let main_func_ty = FunctionType { params: Vec::new(), ret: ty_int };
         let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
 
-        let block = nodes.blocks.push(BlockInfo::new());
+        let block = nodes.blocks.push(BlockInfo::new(None));
         let entry = Target { block, phi_values: vec![] };
         let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
         let main = nodes.funcs.push(main_info);
+        nodes.blocks[block].owning_func = Some(main);
 
         Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_int, main }
     }
@@ -230,15 +231,6 @@ pub struct FunctionInfo {
 }
 
 impl FunctionInfo {
-    /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
-    pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
-        let ty = prog.define_type_func(func_ty.clone());
-        let block = prog.define_block(BlockInfo::new());
-        let entry = Target { block, phi_values: vec![] };
-
-        Self::new_given_parts(func_ty, ty, entry)
-    }
-
     fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target) -> Self {
         Self {
             ty,
@@ -255,11 +247,13 @@ impl FunctionInfo {
 #[derive(Debug, Clone)]
 pub struct ParameterInfo {
     pub ty: Type,
+    pub owning_func: Option<Function>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StackSlotInfo {
     pub inner_ty: Type,
+    pub owning_func: Option<Function>,
     pub debug_name: Option<String>,
 }
 
@@ -268,12 +262,14 @@ pub struct BlockInfo {
     pub phis: Vec<Phi>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
+    pub owning_func: Option<Function>,
 }
 
 impl BlockInfo {
     /// Create a new empty block with unreachable terminator.
-    pub fn new() -> BlockInfo {
+    pub fn new(owning_func: Option<Function>) -> BlockInfo {
         BlockInfo {
+            owning_func,
             phis: Vec::new(),
             instructions: Vec::new(),
             terminator: Terminator::Unreachable,
@@ -531,6 +527,22 @@ impl Const {
 pub struct ExternInfo {
     pub name: String,
     pub ty: Type,
+}
+
+//Builders
+impl Program {
+    /// Create a new function with the given type. The entry blocks starts out empty with an unreachable terminator.
+    pub fn new_function(&mut self, func_ty: FunctionType) -> Function {
+        let ty = self.define_type_func(func_ty.clone());
+        let block = self.define_block(BlockInfo::new(None));
+        let entry = Target { block, phi_values: vec![] };
+
+        let func_info = FunctionInfo::new_given_parts(func_ty, ty, entry);
+        let func = self.define_func(func_info);
+
+        self.get_block_mut(block).owning_func = Some(func);
+        func
+    }
 }
 
 //Visitors
