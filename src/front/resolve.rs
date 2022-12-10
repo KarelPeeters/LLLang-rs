@@ -8,11 +8,11 @@ use crate::front::ast::{Item, ModuleContent};
 use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 
-type AstProgram = front::Program<Option<ast::ModuleContent>>;
+type AstProgram = front::Program<Option<ModuleContent>>;
 type CstProgram<'a> = front::Program<(&'a Option<ModuleContent>, cst::Module)>;
 
 /// Resolve all items in the program into a format more suitable for codegen.
-pub fn resolve(ast: &front::Program<Option<ast::ModuleContent>>) -> Result<ResolvedProgram> {
+pub fn resolve(ast: &front::Program<Option<ModuleContent>>) -> Result<ResolvedProgram> {
     let (mut state, mapped) = first_pass(ast)?;
     second_pass(&mut state, &mapped)?;
     third_pass(&mut state, &mapped)?;
@@ -171,10 +171,15 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
                     //already handled
                     Item::UseDecl(_) => {}
                     Item::Struct(struct_ast) => {
-                        let fields = struct_ast.fields.iter().map(|field| {
+                        let fields: Vec<StructFieldInfo> = struct_ast.fields.iter().map(|field| {
                             let ty = items.resolve_type(ScopeKind::Real, module_scope, types, &field.ty)?;
                             Ok(StructFieldInfo { id: &*field.id.string, ty })
                         }).try_collect()?;
+
+                        let unique_field_count = fields.iter().map(|field| field.id).unique().count();
+                        if unique_field_count != fields.len() {
+                            return Err(Error::DuplicateStructFields(&struct_ast.id));
+                        }
 
                         let info = TypeInfo::Struct(StructTypeInfo { decl: struct_ast, fields });
 

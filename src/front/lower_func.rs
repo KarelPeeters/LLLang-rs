@@ -472,8 +472,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             ast::ExpressionKind::StructLiteral { struct_path: _, fields } => {
                 let struct_ty = self.expr_type(expr);
                 let struct_ty_info = unwrap_match!(&self.types[struct_ty], cst::TypeInfo::Struct(info) => info).clone();
-                let struct_ty_ir = self.types.map_type(self.prog, struct_ty);
+                assert_eq!(fields.len(), struct_ty_info.fields.len());
 
+                let struct_ty_ir = self.types.map_type(self.prog, struct_ty);
                 let slot = self.define_slot(struct_ty_ir, None);
 
                 let after_stores = fields.iter().try_fold(flow, |flow, (field_id, field_value)| {

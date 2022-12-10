@@ -80,12 +80,12 @@ pub enum Error<'a> {
     NotInLoop {
         expr: &'a ast::Expression,
     },
-
     UnexpectedItemType {
         expected: ItemType,
         actual: ItemType,
         path: &'a ast::Path,
     },
+    DuplicateStructFields(&'a ast::Identifier),
 }
 
 

@@ -207,8 +207,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 let fields_set: HashSet<_> = fields.iter().map(|(id, _)| &*id.string).collect();
                 let expected_set: HashSet<_> = struct_ty_info.fields.iter().map(|info| info.id).collect();
+                assert_eq!(expected_set.len(), struct_ty_info.fields.len());
 
-                if fields_set != expected_set {
+                if fields.len() != struct_ty_info.fields.len() || fields_set != expected_set {
                     return Err(Error::StructLiteralInvalidFields {
                         span: expr.span,
                         expected: struct_ty_info.fields.iter().map(|info| info.id.to_owned()).collect(),
