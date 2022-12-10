@@ -55,7 +55,7 @@ declare_tokens![
     Extern("extern"),
     Use("use"),
     Struct("struct"),
-    Fun("fun"),
+    Fn("fn"),
     Return("return"),
     Let("let"),
     Const("const"),
@@ -506,10 +506,10 @@ impl<'s> Parser<'s> {
 
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
-            TT::Fun | TT::Extern => self.function().map(ast::Item::Function),
+            TT::Fn | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => self.const_().map(ast::Item::Const),
             TT::Use => self.use_decl().map(ast::Item::UseDecl),
-            _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fun, TT::Extern, TT::Const, TT::Use], "start of item"))
+            _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
     }
 
@@ -559,7 +559,7 @@ impl<'s> Parser<'s> {
         let start_pos = self.peek().span.start;
 
         let ext = self.accept(TT::Extern)?.is_some();
-        self.expect(TT::Fun, "function declaration")?;
+        self.expect(TT::Fn, "function declaration")?;
         let id = self.identifier("function name")?;
 
         self.expect(TT::OpenB, "start of parameters")?;

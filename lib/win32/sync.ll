@@ -1,9 +1,9 @@
-extern fun _WaitForSingleObject@8(
+extern fn _WaitForSingleObject@8(
   hHandle: int,
   dwMilliseconds: int,
 ) -> int;
 
-extern fun _WaitForMultipleObjects@16(
+extern fn _WaitForMultipleObjects@16(
   nCount: int,
   lpHandles: &int,
   bWaitAll: bool,

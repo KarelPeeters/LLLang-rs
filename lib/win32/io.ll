@@ -7,9 +7,9 @@ const FILE_APPEND_DATA: int = 4; //0x0004
 const OPEN_ALWAYS: int = 4; //4
 const FILE_ATTRIBUTE_NORMAL: int = 128; //0x00000080
 
-extern fun _GetStdHandle@4(nStdHandle: int) -> int;
+extern fn _GetStdHandle@4(nStdHandle: int) -> int;
 
-extern fun _CreateFileA@28(
+extern fn _CreateFileA@28(
     lpFileName: &byte,
     dwDesiredAccess: int,
     dwShareMode: int,
@@ -19,7 +19,7 @@ extern fun _CreateFileA@28(
     hTemplateFile: &void,
 ) -> int;
 
-extern fun _WriteFile@20(
+extern fn _WriteFile@20(
     hFile: int,
     lpBuffer: &byte,
     nNumberOfBytesToWrite: int,

@@ -1,3 +1,3 @@
-extern fun _GetPhysicallyInstalledSystemMemory@4(
+extern fn _GetPhysicallyInstalledSystemMemory@4(
   TotalMemoryInKilobytes: &int,
 ) -> bool;

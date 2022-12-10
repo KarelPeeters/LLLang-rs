@@ -1,7 +1,7 @@
-fun max(x: int, y: int) -> int {
+fn max(x: int, y: int) -> int {
     return x >= y ? x : y;
 }
 
-fun min(x: int, y: int) -> int {
+fn min(x: int, y: int) -> int {
     return x <= y ? x : y;
 }

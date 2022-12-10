@@ -11,7 +11,7 @@ struct Vec {
     len: int,
 }
 
-fun vec_new() -> Vec {
+fn vec_new() -> Vec {
     let vec: Vec;
     vec.buf = null;
     vec.cap = 0;
@@ -19,7 +19,7 @@ fun vec_new() -> Vec {
     return vec;
 }
 
-fun vec_clear(vec_ptr: &Vec) {
+fn vec_clear(vec_ptr: &Vec) {
     let vec = *vec_ptr;
 
     free(vec.buf as &void);
@@ -30,7 +30,7 @@ fun vec_clear(vec_ptr: &Vec) {
     *vec_ptr = vec;
 }
 
-fun vec_ensure_space(vec_ptr: &Vec, space: int) {
+fn vec_ensure_space(vec_ptr: &Vec, space: int) {
     let vec = *vec_ptr;
 
     if vec.cap - vec.len < space {
@@ -46,7 +46,7 @@ fun vec_ensure_space(vec_ptr: &Vec, space: int) {
     *vec_ptr = vec;
 }
 
-fun vec_push(vec_ptr: &Vec, value: byte) {
+fn vec_push(vec_ptr: &Vec, value: byte) {
     let vec = *vec_ptr;
 
     vec_ensure_space(&vec, 1);
@@ -56,7 +56,7 @@ fun vec_push(vec_ptr: &Vec, value: byte) {
     *vec_ptr = vec;
 }
 
-fun print_vec(vec_ptr: &Vec) {
+fn print_vec(vec_ptr: &Vec) {
     let vec = *vec_ptr;
 
     print_str("[", 1);

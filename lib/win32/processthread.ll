@@ -1,6 +1,6 @@
-extern fun _ExitProcess@4(exitCode: int);
+extern fn _ExitProcess@4(exitCode: int);
 
-extern fun _CreateThread@24(
+extern fn _CreateThread@24(
   lpThreadAttributes: &void,
   dwStackSize: int,
   lpStartAddress: (&int) -> int,
