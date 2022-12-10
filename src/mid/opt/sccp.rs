@@ -3,7 +3,8 @@ use std::collections::{HashSet, VecDeque};
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Value};
+use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
 ///Try to prove values are constant and replace them
@@ -15,37 +16,6 @@ pub fn sccp(prog: &mut Program) -> bool {
 
     println!("sccp replaced {} values", replaced_value_count);
     replaced_value_count != 0
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Lattice {
-    Undef,
-    Const(Value),
-    Overdef,
-}
-
-impl Lattice {
-    fn merge(left: Lattice, right: Lattice) -> Lattice {
-        match (left, right) {
-            (Lattice::Overdef, _) | (_, Lattice::Overdef) =>
-                Lattice::Overdef,
-            (Lattice::Undef, other) | (other, Lattice::Undef) =>
-                other,
-            (Lattice::Const(left), Lattice::Const(right)) =>
-                if left == right { Lattice::Const(left) } else { Lattice::Overdef },
-        }
-    }
-
-    fn as_value_of_type(self, ty: Type) -> Option<Value> {
-        match self {
-            Lattice::Undef => Some(Value::Undef(ty)),
-            Lattice::Const(value) => {
-                assert!(value.is_const_like());
-                Some(value)
-            }
-            Lattice::Overdef => None,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -60,7 +30,7 @@ impl LatticeMap {
             Value::Undef(_) =>
                 Lattice::Undef,
             Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) =>
-                Lattice::Const(value),
+                Lattice::Known(value),
             Value::Param(_) | Value::Phi(_) | Value::Instr(_) =>
                 *self.values.get(&value).unwrap_or(&Lattice::Undef),
             Value::Slot(_) => Lattice::Overdef,
@@ -258,7 +228,7 @@ fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
             //undefined behaviour, don't mark anything
             (false, false)
         }
-        Lattice::Const(cst) => {
+        Lattice::Known(cst) => {
             if let Value::Const(cst) = cst {
                 //if this is an actual boolean const we can fully evaluate it
                 assert_eq!(prog.ty_bool(), cst.ty);
@@ -314,8 +284,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
             if let (
-                Lattice::Const(Value::Const(left)),
-                Lattice::Const(Value::Const(right))
+                Lattice::Known(Value::Const(left)),
+                Lattice::Known(Value::Const(right))
             ) = (map.eval(left), map.eval(right)) {
                 //TODO this probably doesn't handle wrapping correctly yet
                 assert_eq!(left.ty, right.ty);
@@ -331,7 +301,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     ArithmeticOp::Mod => left % right,
                 };
 
-                Lattice::Const(Value::Const(Const { ty, value: result }))
+                Lattice::Known(Value::Const(Const { ty, value: result }))
             } else {
                 //TODO sometimes this can be inferred as well, eg "0 * x"
                 Lattice::Overdef
@@ -339,8 +309,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         }
         &InstructionInfo::Comparison { kind, left, right } => {
             if let (
-                Lattice::Const(Value::Const(left)),
-                Lattice::Const(Value::Const(right))
+                Lattice::Known(Value::Const(left)),
+                Lattice::Known(Value::Const(right))
             ) = (map.eval(left), map.eval(right)) {
                 //TODO this probably doesn't handle wrapping correctly yet
                 assert_eq!(left.ty, right.ty);
@@ -355,7 +325,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lt => left < right,
                 };
 
-                Lattice::Const(Value::Const(Const { ty: prog.ty_bool(), value: result as i32 }))
+                Lattice::Known(Value::Const(Const { ty: prog.ty_bool(), value: result as i32 }))
             } else {
                 //TODO sometimes this can be inferred as well, eg "0 & x"
                 Lattice::Overdef
@@ -371,6 +341,9 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
     for (&value, &lattice_value) in &lattice_map.values {
         assert!(matches!(value, Value::Phi(_) | Value::Instr(_) | Value::Param(_)));
+        if let Lattice::Known(cst) = lattice_value {
+            assert!(cst.is_const_like());
+        }
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(ty) {

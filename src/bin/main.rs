@@ -138,10 +138,11 @@ fn run_gc(prog: &mut mid::ir::Program) -> bool {
 fn run_optimizations(prog: &mut mid::ir::Program) {
     let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
         mid::opt::slot_to_phi::slot_to_phi,
-        mid::opt::sccp::sccp,
-        mid::opt::flow_simplify::flow_simplify,
-        mid::opt::dce::dce,
         mid::opt::inline::inline,
+        mid::opt::sccp::sccp,
+        mid::opt::phi_combine::phi_combine,
+        mid::opt::dce::dce,
+        mid::opt::flow_simplify::flow_simplify,
     ];
 
     run_gc(prog);
