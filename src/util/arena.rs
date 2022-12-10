@@ -92,6 +92,10 @@ impl<K: IndexType, T> Arena<K, T> {
         self.into_iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item=(K, &mut T)> {
+        self.into_iter()
+    }
+
     pub fn keys(&self) -> impl Iterator<Item=K> + '_ {
         self.into_iter().map(|(k, _)| k)
     }
@@ -133,6 +137,11 @@ pub struct ArenaIterator<'s, K, T> {
     ph: PhantomData<K>,
 }
 
+pub struct ArenaIteratorMut<'s, K, T> {
+    inner: indexmap::map::IterMut<'s, usize, T>,
+    ph: PhantomData<K>,
+}
+
 impl<'s, K: IndexType, T> IntoIterator for &'s Arena<K, T> {
     type Item = (K, &'s T);
     type IntoIter = ArenaIterator<'s, K, T>;
@@ -142,8 +151,26 @@ impl<'s, K: IndexType, T> IntoIterator for &'s Arena<K, T> {
     }
 }
 
+impl<'s, K: IndexType, T> IntoIterator for &'s mut Arena<K, T> {
+    type Item = (K, &'s mut T);
+    type IntoIter = ArenaIteratorMut<'s, K, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ArenaIteratorMut { inner: self.map.iter_mut(), ph: PhantomData }
+    }
+}
+
 impl<'s, K: IndexType, T: 's> Iterator for ArenaIterator<'s, K, T> {
     type Item = (K, &'s T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+            .map(|(&i, v)| (K::new(Idx::new(i)), v))
+    }
+}
+
+impl<'s, K: IndexType, T: 's> Iterator for ArenaIteratorMut<'s, K, T> {
+    type Item = (K, &'s mut T);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()

@@ -65,7 +65,7 @@ pub struct Program {
     pub nodes: Arenas,
     //TODO maybe look into adding a cell here so we can modify this when we have a &Program for usability
     //the types are stored separately in a set for interning
-    types: ArenaSet<Type, TypeInfo>,
+    pub types: ArenaSet<Type, TypeInfo>,
 
     //predefined types
     #[allow(dead_code)]

@@ -11,6 +11,12 @@ pub struct InstructionPos {
     pub instr: Instruction,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct BlockPos {
+    pub func: Function,
+    pub block: Block,
+}
+
 //TODO figure out a way to fake type safety here, eg guarantee that the linked instruction is indeed
 // a call or a load or whatever
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
@@ -50,37 +56,43 @@ pub enum Usage<P = InstructionPos> {
     //values passed to target as phi value
 
     TargetPhiValue {
-        func: Function,
         target_kind: TargetKind,
         phi_index: usize,
     },
 
     //branch terminator uses value as cond
     BranchCond {
-        func: Function,
-        from_block: Block,
+        pos: BlockPos,
     },
 
     //return terminator uses value as return value
     ReturnValue {
-        func: Function,
-        from_block: Block,
+        pos: BlockPos,
     },
+
+    // TODO add "global" usage for functions with global_name set
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone)]
+pub struct BlockUsage {
+    pub target_kind: TargetKind,
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum TargetKind {
-    Entry,
-    Jump(Block),
-    BranchTrue(Block),
-    BranchFalse(Block),
+    EntryFrom(Function),
+    JumpFrom(BlockPos),
+    BranchTrueFrom(BlockPos),
+    BranchFalseFrom(BlockPos),
 }
 
 #[derive(Debug)]
 pub struct UseInfo {
-    usages: IndexMap<Value, Vec<Usage>>,
+    value_usages: IndexMap<Value, Vec<Usage>>,
+    block_usages: IndexMap<Block, Vec<BlockUsage>>,
 }
 
+// TODO maybe create additional "InstrUsage" enum for only these Usages?
 pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
     pos: P,
     instr_info: &InstructionInfo,
@@ -116,11 +128,12 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
     }
 }
 
+// TODO use visitor here as well
 impl UseInfo {
     pub fn new(prog: &Program) -> Self {
-        let mut info = UseInfo { usages: Default::default() };
+        let mut info = UseInfo { value_usages: Default::default(), block_usages: Default::default() };
 
-        info.add_usage(Value::Func(prog.main), Usage::Main);
+        info.add_value_usage(Value::Func(prog.main), Usage::Main);
 
         let mut todo_funcs = VecDeque::new();
         let mut todo_blocks = VecDeque::new();
@@ -133,23 +146,26 @@ impl UseInfo {
             if let Some(func) = todo_funcs.pop_front() {
                 if visited_funcs.insert(func) {
                     let func_info = prog.get_func(func);
+                    let block_pos = BlockPos { func, block: func_info.entry.block };
 
-                    todo_blocks.push_back((func, func_info.entry.block));
-                    info.add_target_usages(func, &func_info.entry, TargetKind::Entry)
+                    todo_blocks.push_back(block_pos);
+                    info.add_target_usages(&func_info.entry, TargetKind::EntryFrom(func))
                 }
             }
 
-            if let Some((func, block)) = todo_blocks.pop_front() {
+            if let Some(block_pos) = todo_blocks.pop_front() {
+                let BlockPos { func, block } = block_pos;
+
                 if visited_blocks.insert(block) {
                     let block_info = prog.get_block(block);
 
                     //instructions
                     for &instr in &block_info.instructions {
                         let instr_info = prog.get_instr(instr);
-                        let pos = InstructionPos { func, block, instr };
+                        let instr_pos = InstructionPos { func, block, instr };
 
-                        for_each_usage_in_instr(pos, instr_info, |value, usage| {
-                            info.add_usage(value, usage);
+                        for_each_usage_in_instr(instr_pos, instr_info, |value, usage| {
+                            info.add_value_usage(value, usage);
 
                             //if the usage is a function visit it too
                             if let Value::Func(func) = value {
@@ -161,18 +177,18 @@ impl UseInfo {
                     //terminator
                     match &block_info.terminator {
                         Terminator::Jump { target } => {
-                            info.add_target_usages(func, target, TargetKind::Jump(block));
-                            todo_blocks.push_back((func, target.block));
+                            info.add_target_usages(target, TargetKind::JumpFrom(block_pos));
+                            todo_blocks.push_back(BlockPos { func, block: target.block });
                         }
                         Terminator::Branch { cond, true_target, false_target } => {
-                            info.add_usage(*cond, Usage::BranchCond { func, from_block: block });
-                            info.add_target_usages(func, true_target, TargetKind::BranchTrue(block));
-                            todo_blocks.push_back((func, true_target.block));
-                            info.add_target_usages(func, false_target, TargetKind::BranchFalse(block));
-                            todo_blocks.push_back((func, false_target.block));
+                            info.add_value_usage(*cond, Usage::BranchCond { pos: block_pos });
+                            info.add_target_usages(true_target, TargetKind::BranchTrueFrom(block_pos));
+                            todo_blocks.push_back(BlockPos { func, block: true_target.block });
+                            info.add_target_usages(false_target, TargetKind::BranchFalseFrom(block_pos));
+                            todo_blocks.push_back(BlockPos { func, block: false_target.block });
                         }
                         Terminator::Return { value } => {
-                            info.add_usage(*value, Usage::ReturnValue { func, from_block: block });
+                            info.add_value_usage(*value, Usage::ReturnValue { pos: block_pos });
                         }
                         Terminator::Unreachable => {}
                     }
@@ -183,41 +199,31 @@ impl UseInfo {
         info
     }
 
-    fn add_usage(&mut self, value: Value, usage: Usage) {
+    fn add_value_usage(&mut self, value: Value, usage: Usage) {
         //we don't care about const
         if let Value::Const(_) = value { return; }
 
-        self.usages.entry(value).or_default().push(usage);
+        self.value_usages.entry(value).or_default().push(usage);
     }
 
-    fn add_target_usages(&mut self, func: Function, target: &Target, target_kind: TargetKind) {
+    fn add_block_usage(&mut self, block: Block, usage: BlockUsage) {
+        self.block_usages.entry(block).or_default().push(usage);
+    }
+
+    fn add_target_usages(&mut self, target: &Target, target_kind: TargetKind) {
         for (phi_idx, &value) in target.phi_values.iter().enumerate() {
-            self.add_usage(value, Usage::TargetPhiValue {
-                func,
+            self.add_value_usage(value, Usage::TargetPhiValue {
                 target_kind,
                 phi_index: phi_idx,
             })
         }
+
+        self.add_block_usage(target.block, BlockUsage { target_kind });
     }
 
     //TODO figure out a way to make all of this a lot more typesafe
-    pub fn replace_usages(&self, prog: &mut Program, old: Value, new: Value) -> usize {
+    pub fn replace_value_usages(&self, prog: &mut Program, old: Value, new: Value) -> usize {
         assert_ne!(old, new);
-
-        fn repl(count: &mut usize, field: &mut Value, old: Value, new: Value) {
-            assert!(maybe_repl(count, field, old, new));
-        }
-
-        fn maybe_repl(count: &mut usize, field: &mut Value, old: Value, new: Value) -> bool {
-            if *field == old {
-                *field = new;
-                *count += 1;
-                true
-            } else {
-                false
-            }
-        }
-
         let count = &mut 0;
 
         for &usage in &self[old] {
@@ -295,18 +301,18 @@ impl UseInfo {
                         _ => unreachable!()
                     }
                 }
-                Usage::TargetPhiValue { func, target_kind, phi_index: phi_idx } => {
-                    let target = target_kind.get_target_mut(prog, func);
+                Usage::TargetPhiValue { target_kind, phi_index: phi_idx } => {
+                    let target = target_kind.get_target_mut(prog);
                     repl(count, &mut target.phi_values[phi_idx], old, new);
                 }
-                Usage::BranchCond { from_block, .. } => {
-                    match &mut prog.get_block_mut(from_block).terminator {
+                Usage::BranchCond { pos } => {
+                    match &mut prog.get_block_mut(pos.block).terminator {
                         Terminator::Branch { cond, .. } => repl(count, cond, old, new),
                         _ => unreachable!()
                     }
                 }
-                Usage::ReturnValue { from_block, .. } => {
-                    match &mut prog.get_block_mut(from_block).terminator {
+                Usage::ReturnValue { pos } => {
+                    match &mut prog.get_block_mut(pos.block).terminator {
                         Terminator::Return { value, .. } => repl(count, value, old, new),
                         _ => unreachable!()
                     }
@@ -316,26 +322,57 @@ impl UseInfo {
 
         *count
     }
+
+    pub fn replace_block_usages(&self, prog: &mut Program, old: Block, new: Block) -> usize {
+        assert_ne!(old, new);
+        let count = &mut 0;
+
+        for &usage in &self[old] {
+            let BlockUsage { target_kind } = usage;
+            let block = &mut target_kind.get_target_mut(prog).block;
+            repl(count, block, old, new);
+        }
+
+        *count
+    }
+
+    pub fn function_only_used_as_call_target(&self, func: Function) -> bool {
+        self[func].iter().all(|usage| {
+            match usage {
+                Usage::CallTarget { .. } => true,
+                _ => false,
+            }
+        })
+    }
 }
 
 impl TargetKind {
-    pub fn get_target(self, prog: &Program, func: Function) -> &Target {
+    pub fn func(self) -> Function {
         match self {
-            TargetKind::Entry => &prog.get_func(func).entry,
-            TargetKind::Jump(block) => {
-                match &prog.get_block(block).terminator {
+            TargetKind::EntryFrom(func) => func,
+            TargetKind::JumpFrom(pos) => pos.func,
+            TargetKind::BranchTrueFrom(pos) => pos.func,
+            TargetKind::BranchFalseFrom(pos) => pos.func,
+        }
+    }
+
+    pub fn get_target(self, prog: &Program) -> &Target {
+        match self {
+            TargetKind::EntryFrom(func) => &prog.get_func(func).entry,
+            TargetKind::JumpFrom(pos) => {
+                match &prog.get_block(pos.block).terminator {
                     Terminator::Jump { target } => target,
                     _ => panic!("Expected to find Terminator::Jump for TargetKind::Jump")
                 }
             }
-            TargetKind::BranchTrue(block) => {
-                match &prog.get_block(block).terminator {
+            TargetKind::BranchTrueFrom(pos) => {
+                match &prog.get_block(pos.block).terminator {
                     Terminator::Branch { true_target, .. } => true_target,
                     _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchTrue")
                 }
             }
-            TargetKind::BranchFalse(block) => {
-                match &prog.get_block(block).terminator {
+            TargetKind::BranchFalseFrom(pos) => {
+                match &prog.get_block(pos.block).terminator {
                     Terminator::Branch { false_target, .. } => false_target,
                     _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchFalse")
                 }
@@ -343,23 +380,23 @@ impl TargetKind {
         }
     }
 
-    pub fn get_target_mut(self, prog: &mut Program, func: Function) -> &mut Target {
+    pub fn get_target_mut(self, prog: &mut Program) -> &mut Target {
         match self {
-            TargetKind::Entry => &mut prog.get_func_mut(func).entry,
-            TargetKind::Jump(block) => {
-                match &mut prog.get_block_mut(block).terminator {
+            TargetKind::EntryFrom(func) => &mut prog.get_func_mut(func).entry,
+            TargetKind::JumpFrom(pos) => {
+                match &mut prog.get_block_mut(pos.block).terminator {
                     Terminator::Jump { target } => target,
                     _ => panic!("Expected to find Terminator::Jump for TargetKind::Jump")
                 }
             }
-            TargetKind::BranchTrue(block) => {
-                match &mut prog.get_block_mut(block).terminator {
+            TargetKind::BranchTrueFrom(pos) => {
+                match &mut prog.get_block_mut(pos.block).terminator {
                     Terminator::Branch { true_target, .. } => true_target,
                     _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchTrue")
                 }
             }
-            TargetKind::BranchFalse(block) => {
-                match &mut prog.get_block_mut(block).terminator {
+            TargetKind::BranchFalseFrom(pos) => {
+                match &mut prog.get_block_mut(pos.block).terminator {
                     Terminator::Branch { false_target, .. } => false_target,
                     _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchFalse")
                 }
@@ -368,13 +405,33 @@ impl TargetKind {
     }
 }
 
-static EMPTY_USAGE_VEC: Vec<Usage> = Vec::new();
-
 impl<T: Into<Value>> std::ops::Index<T> for UseInfo {
-    type Output = Vec<Usage>;
+    type Output = [Usage];
 
     fn index(&self, index: T) -> &Self::Output {
         let index = index.into();
-        self.usages.get(&index).unwrap_or(&EMPTY_USAGE_VEC)
+        self.value_usages.get(&index).map_or(&[], |v| &v)
+    }
+}
+
+impl std::ops::Index<Block> for UseInfo {
+    type Output = [BlockUsage];
+
+    fn index(&self, index: Block) -> &Self::Output {
+        self.block_usages.get(&index).map_or(&[], |v| &v)
+    }
+}
+
+fn repl<T: Eq>(count: &mut usize, field: &mut T, old: T, new: T) {
+    assert!(maybe_repl(count, field, old, new));
+}
+
+fn maybe_repl<T: Eq>(count: &mut usize, field: &mut T, old: T, new: T) -> bool {
+    if *field == old {
+        *field = new;
+        *count += 1;
+        true
+    } else {
+        false
     }
 }

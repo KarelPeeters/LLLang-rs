@@ -59,6 +59,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     let return_ty = prog.get_func(inlined_call.target).func_ty.ret;
     let call_pos = inlined_call.pos;
 
+    // TODO rewrite to enforce fixing slots, using entry, ... with destructing
     let cloned_func = prog.deep_clone_function(inlined_call.target, Some(args.as_slice()));
     let cloned_blocks = prog.collect_blocks(cloned_func.entry.block);
 
@@ -72,7 +73,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     let call_instr = block_before_info.instructions[call_index];
 
     // replace usages of the returned value
-    use_info.replace_usages(prog, call_instr.into(), return_phi.into());
+    use_info.replace_value_usages(prog, call_instr.into(), return_phi.into());
 
     let block_before_info = prog.get_block_mut(block_before);
 

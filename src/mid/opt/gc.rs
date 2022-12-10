@@ -24,10 +24,10 @@ impl Visitor for GcVisitor {
 
                 self.add_target(state, entry);
                 for &param in params {
-                    state.add_value(Value::Param(param));
+                    state.add_value(param);
                 }
                 for &slot in slots {
-                    state.add_value(Value::Slot(slot));
+                    state.add_value(slot);
                 }
             }
             Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
@@ -41,11 +41,11 @@ impl Visitor for GcVisitor {
         let BlockInfo { phis, instructions, terminator } = state.prog.get_block(block);
 
         for &phi in phis {
-            state.add_value(Value::Phi(phi));
+            state.add_value(phi);
         }
 
         for &instr in instructions {
-            state.add_value(Value::Instr(instr));
+            state.add_value(instr);
 
             for_each_usage_in_instr((), &state.prog.get_instr(instr), |value, _| {
                 state.add_value(value);
@@ -60,7 +60,7 @@ impl Visitor for GcVisitor {
 
 fn collect_used(prog: &Program) -> VisitedResult {
     let mut state = VisitState::new(prog);
-    state.add_value(Value::Func(prog.main));
+    state.add_value(prog.main);
     state.run(GcVisitor)
 }
 

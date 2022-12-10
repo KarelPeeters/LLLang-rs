@@ -34,9 +34,20 @@ impl<'a> VisitState<'a> {
         }
     }
 
-    pub fn add_value(&mut self, value: Value) {
-        if self.visited_values.insert(value) {
-            self.todo_values.push_back(value);
+    pub fn add_value(&mut self, value: impl Into<Value>) {
+        let value = value.into();
+
+        match value {
+            Value::Const(_) => {
+                // we don't track const values
+            }
+            Value::Undef(_) | Value::Func(_) | Value::Param(_) | Value::Slot(_) |
+            Value::Phi(_) | Value::Instr(_) | Value::Extern(_) | Value::Data(_) => {
+                // track everything else
+                if self.visited_values.insert(value) {
+                    self.todo_values.push_back(value);
+                }
+            }
         }
     }
 
@@ -58,6 +69,9 @@ impl<'a> VisitState<'a> {
                 continue;
             }
         }
+
+        assert!(self.todo_blocks.is_empty());
+        assert!(self.todo_values.is_empty());
 
         VisitedResult {
             visited_blocks: self.visited_blocks,

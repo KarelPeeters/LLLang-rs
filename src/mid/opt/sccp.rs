@@ -173,8 +173,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         Usage::BinaryOperand { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
-                        Usage::TargetPhiValue { func, target_kind, phi_index } => {
-                            let target = target_kind.get_target(prog, func);
+                        Usage::TargetPhiValue { target_kind, phi_index } => {
+                            let target = target_kind.get_target(prog);
 
                             let phi = prog.get_block(target.block).phis[phi_index];
                             let new_value = map.eval(target.phi_values[phi_index]);
@@ -195,19 +195,19 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                                 _ => unreachable!()
                             }
                         }
-                        Usage::BranchCond { func, from_block } => {
-                            match &prog.get_block(from_block).terminator {
+                        Usage::BranchCond { pos } => {
+                            match &prog.get_block(pos.block).terminator {
                                 Terminator::Branch { cond, true_target, false_target } => {
-                                    visit_branch(prog, &mut map, &mut todo, func, cond, true_target, false_target)
+                                    visit_branch(prog, &mut map, &mut todo, pos.func, cond, true_target, false_target)
                                 }
                                 _ => unreachable!()
                             }
                         }
-                        Usage::ReturnValue { func, from_block } => {
-                            match &prog.get_block(from_block).terminator {
+                        Usage::ReturnValue { pos } => {
+                            match &prog.get_block(pos.block).terminator {
                                 &Terminator::Return { value } => {
                                     //merge in return value
-                                    map.merge_func_return(&mut todo, func, map.eval(value))
+                                    map.merge_func_return(&mut todo, pos.func, map.eval(value))
                                 }
                                 _ => unreachable!()
                             }
@@ -374,7 +374,7 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(ty) {
-            count += use_info.replace_usages(prog, value, lattice_value)
+            count += use_info.replace_value_usages(prog, value, lattice_value)
         }
     }
 

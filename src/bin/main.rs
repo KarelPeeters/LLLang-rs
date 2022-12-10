@@ -140,6 +140,7 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
         mid::opt::slot_to_phi::slot_to_phi,
         mid::opt::sccp::sccp,
         mid::opt::flow_simplify::flow_simplify,
+        mid::opt::dce::dce,
         mid::opt::inline::inline,
     ];
 

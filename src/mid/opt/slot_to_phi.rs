@@ -83,7 +83,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
                         .position(|&instr| instr == pos.instr).unwrap();
 
                     let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
-                    use_info.replace_usages(prog, Value::Instr(pos.instr), value);
+                    use_info.replace_value_usages(prog, Value::Instr(pos.instr), value);
                 }
                 Usage::StoreAddr { pos } => {
                     //some assertions
