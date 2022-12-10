@@ -260,6 +260,7 @@ pub struct ParameterInfo {
 #[derive(Debug, Clone)]
 pub struct StackSlotInfo {
     pub inner_ty: Type,
+    pub debug_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -701,7 +702,7 @@ impl Display for Program {
                 writeln!(f, "    global_name: {}", global_name)?;
             }
             if let Some(debug_name) = &func_info.debug_name {
-                writeln!(f, "    debug_name: {}", debug_name)?;
+                writeln!(f, "    debug_name: {:?}", debug_name)?;
             }
 
             if !func_info.params.is_empty() {
@@ -715,7 +716,12 @@ impl Display for Program {
                 writeln!(f, "    slots:")?;
                 for &slot in &func_info.slots {
                     let slot_info = self.get_slot(slot);
-                    writeln!(f, "      {:?}: &{}", slot, self.format_type(slot_info.inner_ty))?;
+
+                    if let Some(debug_name) = &slot_info.debug_name {
+                        writeln!(f, "      {:?}: &{}, debug_name: {:?}", slot, self.format_type(slot_info.inner_ty), debug_name)?;
+                    } else {
+                        writeln!(f, "      {:?}: &{}", slot, self.format_type(slot_info.inner_ty))?;
+                    }
                 }
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;

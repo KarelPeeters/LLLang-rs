@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::front::{ast, cst};
+use crate::front::ast::MaybeIdentifier;
 use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
@@ -69,6 +70,13 @@ fn new_branch(cond: ir::Value, true_block: ir::Block, false_block: ir::Block) ->
     }
 }
 
+fn maybe_id_debug_name(id: &MaybeIdentifier) -> String {
+    match id {
+        MaybeIdentifier::Identifier(id) => id.string.clone(),
+        MaybeIdentifier::Placeholder(_span) => "_".to_owned(),
+    }
+}
+
 enum ContinueOrBreak {
     Break,
     Continue,
@@ -100,8 +108,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
-    fn define_slot(&mut self, inner_ty: ir::Type) -> ir::StackSlot {
-        let slot = ir::StackSlotInfo { inner_ty };
+    fn define_slot(&mut self, inner_ty: ir::Type, debug_name: Option<String>) -> ir::StackSlot {
+        let slot = ir::StackSlotInfo { inner_ty, debug_name };
         let slot = self.prog.define_slot(slot);
         self.prog.get_func_mut(self.ir_func).slots.push(slot);
         slot
@@ -254,7 +262,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty = self.expr_type(expr);
                 let ty_ir = self.types.map_type(self.prog, ty);
 
-                let result_slot = self.define_slot(ty_ir);
+                let result_slot = self.define_slot(ty_ir, None);
                 let (after_cond, cond) =
                     self.append_expr_loaded(flow, scope, condition)?;
 
@@ -598,7 +606,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty_ir = self.types.map_type(self.prog, ty);
 
                 //define the slot
-                let slot = self.define_slot(ty_ir);
+                let slot = self.define_slot(ty_ir, Some(maybe_id_debug_name(&decl.id)));
                 let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.maybe_declare(&decl.id, item)?;
@@ -673,7 +681,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //declare slot for index
                 let mut index_scope = scope.nest();
-                let index_slot = self.define_slot(index_ty_ir);
+                let index_slot = self.define_slot(index_ty_ir, Some(maybe_id_debug_name(&for_stmt.index)));
                 let index_slot = ir::Value::Slot(index_slot);
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
@@ -762,7 +770,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             self.prog.get_func_mut(self.ir_func).params.push(ir_param);
 
             //allocate a slot for the parameter so its address can be taken
-            let slot = self.define_slot(ty_ir);
+            let slot = self.define_slot(ty_ir, Some(maybe_id_debug_name(&param.id)));
 
             //immediately copy the param into the slot
             let store = ir::InstructionInfo::Store {

@@ -36,8 +36,8 @@ impl Program {
 
         let mut new_slots = vec![];
         let map_slot: HashMap<_, _> = old_slots.iter().map(|&old_slot| {
-            let &StackSlotInfo { inner_ty } = self.get_slot(old_slot);
-            let new_slot = self.define_slot(StackSlotInfo { inner_ty });
+            let &StackSlotInfo { inner_ty, ref debug_name } = self.get_slot(old_slot);
+            let new_slot = self.define_slot(StackSlotInfo { inner_ty, debug_name: debug_name.clone() });
             new_slots.push(new_slot);
             (old_slot, new_slot)
         }).collect();
