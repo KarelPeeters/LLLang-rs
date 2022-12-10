@@ -39,7 +39,6 @@ pub fn inline(prog: &mut Program) -> bool {
     // actually do the inlining
     // TODO actually do all of them, not just the first one
     for &inlined_call in inlined_calls.iter().take(1) {
-        println!("Inlining {:?} into {:?}", inlined_call.target, inlined_call.pos);
         run_inline_call(prog, &use_info, inlined_call);
         changed |= true;
     }
