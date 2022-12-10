@@ -3,11 +3,11 @@ use std::fmt::Formatter;
 
 use itertools::Itertools;
 
-use crate::front::{ast, cst};
+use crate::front::ast;
 use crate::front::cst::{Type, TypeInfo, TypeStore};
 use crate::util::zip_eq;
 
-type VarTypeInfo<'ast> = cst::TypeInfo<'ast, TypeVar>;
+type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
 /// Represents the type of an expression in the program.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -36,7 +36,7 @@ pub enum Origin<'ast> {
 }
 
 impl std::fmt::Debug for Origin<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Origin::FullyKnown => write!(f, "Origin::FullyKnown"),
             Origin::Expression(a) => write!(f, "Origin::Expression({:?})", a.span),
@@ -172,7 +172,10 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Create a new TypeVar with a fully known type.
-    pub fn fully_known(&mut self, types: &cst::TypeStore<'ast>, ty: Type) -> TypeVar {
+    pub fn fully_known(&mut self,
+                       types: &TypeStore<'ast>,
+                       ty: Type,
+    ) -> TypeVar {
         let info = types[ty].map_ty(&mut |&child_ty| {
             self.fully_known(types, child_ty)
         });
@@ -265,7 +268,7 @@ impl<'ast> TypeProblem<'ast> {
     fn apply_index_constraints(&mut self, types: &mut TypeStore<'ast>) {
         let mut temp = std::mem::take(&mut self.index_constraints);
 
-        temp.retain(|&IndexConstraint { target, result, index }| {
+        temp.retain(|&IndexConstraint { target, result, index: index_kind }| {
             let target = if let Some(target) = &self.state[target.0].info {
                 target
             } else {
@@ -273,11 +276,28 @@ impl<'ast> TypeProblem<'ast> {
                 return true;
             };
 
-            match (target, index) {
+            match (target, index_kind) {
                 (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
                     let target_result = target.fields.get(index as usize)
                         .expect("Tuple index out of bounds");
                     self.matches.push_back((*target_result, result))
+                }
+                (TypeInfo::Pointer(inner_target), IndexKind::Tuple(index)) => {
+                    let inner_target = if let Some(inner_target) = &self.state[inner_target.0].info {
+                        inner_target
+                    } else {
+                        return true;
+                    };
+
+                    if let TypeInfo::Tuple(inner_target) = inner_target {
+                        let target_inner_result = *inner_target.fields.get(index as usize)
+                            .expect("Tuple index out of bounds");
+
+                        let target_result = self.known(Origin::FullyKnown, VarTypeInfo::Pointer(target_inner_result));
+                        self.matches.push_back((target_result, result))
+                    } else {
+                        panic!("Expected {} type, got {:?}", index_kind.name(), target)
+                    }
                 }
                 (TypeInfo::Array(target), IndexKind::Array) => {
                     let target_result = target.inner;
@@ -291,7 +311,7 @@ impl<'ast> TypeProblem<'ast> {
                     let known_ty = self.fully_known(types, field_ty);
                     self.matches.push_back((result, known_ty));
                 }
-                (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
+                (_, _) => panic!("Expected {} type, got {:?}", index_kind.name(), target),
             }
 
             //we applied this constraint, it can now be removed

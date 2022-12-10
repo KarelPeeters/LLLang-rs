@@ -395,10 +395,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         target_type: self.types.format_type(target_value.ty).to_string(),
                         index,
                     }),
-                    (_, _) => return Err(Error::ExpectStructOrTupleType {
-                        expression: expr,
-                        actual: self.types.format_type(target_value.ty).to_string(),
-                    })
+                    (_, _) => {
+                        println!("Compiling {:?} with target type {}", expr, self.types.format_type(target_inner_ty));
+                        return Err(Error::ExpectStructOrTupleType {
+                            expression: expr,
+                            actual: self.types.format_type(target_value.ty).to_string(),
+                        });
+                    }
                 };
 
                 let tuple_ty = self.expr_type(target);
