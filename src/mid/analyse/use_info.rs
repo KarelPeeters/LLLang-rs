@@ -18,35 +18,35 @@ pub struct InstructionPos {
 //TODO try to unify some of this code with gc
 //TODO maybe extract a subtype for all instruction operand usages
 #[derive(Debug, Copy, Clone)]
-pub enum Usage {
+pub enum Usage<P = InstructionPos> {
     //program main
     Main,
 
     //address in Load
-    LoadAddr { pos: InstructionPos },
+    LoadAddr { pos: P },
     //address in Store
-    StoreAddr { pos: InstructionPos },
+    StoreAddr { pos: P },
     //Store value
-    StoreValue { pos: InstructionPos },
+    StoreValue { pos: P },
 
     //Call target
-    CallTarget { pos: InstructionPos },
+    CallTarget { pos: P },
     //Call argument
     CallArgument {
-        pos: InstructionPos,
+        pos: P,
         index: usize,
     },
 
     //operand in Arithmetic or Comparison
-    BinaryOperand { pos: InstructionPos },
+    BinaryOperand { pos: P },
 
     //target of TupleFieldPtr
-    TupleFieldPtrBase { pos: InstructionPos },
+    TupleFieldPtrBase { pos: P },
     //target of ArrayIndexPtr
-    ArrayIndexPtrBase { pos: InstructionPos },
+    ArrayIndexPtrBase { pos: P },
     //index of ArrayIndexPtr
 
-    ArrayIndexPtrIndex { pos: InstructionPos },
+    ArrayIndexPtrIndex { pos: P },
     //values passed to target as phi value
 
     TargetPhiValue {
@@ -81,8 +81,8 @@ pub struct UseInfo {
     usages: IndexMap<Value, Vec<Usage>>,
 }
 
-pub fn for_each_usage_in_instr<F: FnMut(Value, Usage)>(
-    pos: InstructionPos,
+pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
+    pos: P,
     instr_info: &InstructionInfo,
     mut f: F,
 ) {

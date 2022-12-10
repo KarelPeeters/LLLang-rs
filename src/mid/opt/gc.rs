@@ -1,87 +1,67 @@
-use std::collections::{HashSet, VecDeque};
+use crate::mid::analyse::use_info::for_each_usage_in_instr;
+use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Program, Target, Value};
+use crate::mid::util::visit::{VisitedResult, Visitor, VisitState};
 
-use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos};
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Program, Target, Value};
+struct GcVisitor;
 
-#[derive(Default)]
-struct Visited {
-    used_blocks: HashSet<Block>,
-    used_values: HashSet<Value>,
-    funcs: VecDeque<Function>,
-    blocks: VecDeque<Block>,
-}
-
-impl Visited {
-    fn add_value(&mut self, value: Value) {
-        if self.used_values.insert(value) {
-            match value {
-                Value::Func(func) => {
-                    //queue this function for visiting
-                    self.funcs.push_back(func)
-                }
-                Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
-                Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
-                    //there are only tracked as values
-                }
-            }
-        }
-    }
-
-    fn add_block(&mut self, block: Block) {
-        if self.used_blocks.insert(block) {
-            self.blocks.push_back(block)
-        }
-    }
-
-    fn add_target(&mut self, target: &Target) {
-        self.add_block(target.block);
+impl GcVisitor {
+    fn add_target(&mut self, state: &mut VisitState, target: &Target) {
+        state.add_block(target.block);
         for &value in &target.phi_values {
-            self.add_value(value);
+            state.add_value(value);
         }
     }
 }
 
-fn collect_used(prog: &Program) -> Visited {
-    let mut todo = Visited::default();
-    todo.add_value(Value::Func(prog.main));
+impl Visitor for GcVisitor {
+    fn visit_value(&mut self, state: &mut VisitState, value: Value) {
+        match value {
+            Value::Func(func) => {
+                let FunctionInfo {
+                    entry, params, slots,
+                    ty: _, func_ty: _, global_name: _, debug_name: _
+                } = state.prog.get_func(func);
 
-    while let Some(func) = todo.funcs.pop_front() {
-        let FunctionInfo {
-            entry, params, slots,
-            ty: _, func_ty: _, global_name: _, debug_name: _
-        } = prog.get_func(func);
-
-        todo.add_target(entry);
-        for &param in params {
-            todo.add_value(Value::Param(param));
-        }
-        for &slot in slots {
-            todo.add_value(Value::Slot(slot));
-        }
-
-        while let Some(block) = todo.blocks.pop_front() {
-            let BlockInfo { phis, instructions, terminator } = prog.get_block(block);
-
-            for &phi in phis {
-                todo.add_value(Value::Phi(phi));
+                self.add_target(state, entry);
+                for &param in params {
+                    state.add_value(Value::Param(param));
+                }
+                for &slot in slots {
+                    state.add_value(Value::Slot(slot));
+                }
             }
-
-            for &instr in instructions {
-                todo.add_value(Value::Instr(instr));
-
-                let pos = InstructionPos { func, block, instr };
-                for_each_usage_in_instr(pos, &prog.get_instr(instr), |value, _| {
-                    todo.add_value(value);
-                });
+            Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
+            Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
+                // no additional tracking here
             }
+        }
+    }
 
-            terminator.for_each_target(|target| {
-                todo.add_target(target)
+    fn visit_block(&mut self, state: &mut VisitState, block: Block) {
+        let BlockInfo { phis, instructions, terminator } = state.prog.get_block(block);
+
+        for &phi in phis {
+            state.add_value(Value::Phi(phi));
+        }
+
+        for &instr in instructions {
+            state.add_value(Value::Instr(instr));
+
+            for_each_usage_in_instr((), &state.prog.get_instr(instr), |value, _| {
+                state.add_value(value);
             });
         }
-    }
 
-    todo
+        terminator.for_each_target(|target| {
+            self.add_target(state, target);
+        });
+    }
+}
+
+fn collect_used(prog: &Program) -> VisitedResult {
+    let mut state = VisitState::new(prog);
+    state.add_value(Value::Func(prog.main));
+    state.run(GcVisitor)
 }
 
 pub fn gc(prog: &mut Program) -> bool {
@@ -89,14 +69,14 @@ pub fn gc(prog: &mut Program) -> bool {
 
     let before_count = prog.nodes.total_node_count();
 
-    prog.nodes.funcs.retain(|n, _| visited.used_values.contains(&Value::Func(n)));
-    prog.nodes.params.retain(|n, _| visited.used_values.contains(&Value::Param(n)));
-    prog.nodes.slots.retain(|n, _| visited.used_values.contains(&Value::Slot(n)));
-    prog.nodes.blocks.retain(|n, _| visited.used_blocks.contains(&n));
-    prog.nodes.phis.retain(|n, _| visited.used_values.contains(&Value::Phi(n)));
-    prog.nodes.instrs.retain(|n, _| visited.used_values.contains(&Value::Instr(n)));
-    prog.nodes.exts.retain(|n, _| visited.used_values.contains(&Value::Extern(n)));
-    prog.nodes.datas.retain(|n, _| visited.used_values.contains(&Value::Data(n)));
+    prog.nodes.funcs.retain(|n, _| visited.visited_values.contains(&Value::Func(n)));
+    prog.nodes.params.retain(|n, _| visited.visited_values.contains(&Value::Param(n)));
+    prog.nodes.slots.retain(|n, _| visited.visited_values.contains(&Value::Slot(n)));
+    prog.nodes.blocks.retain(|n, _| visited.visited_blocks.contains(&n));
+    prog.nodes.phis.retain(|n, _| visited.visited_values.contains(&Value::Phi(n)));
+    prog.nodes.instrs.retain(|n, _| visited.visited_values.contains(&Value::Instr(n)));
+    prog.nodes.exts.retain(|n, _| visited.visited_values.contains(&Value::Extern(n)));
+    prog.nodes.datas.retain(|n, _| visited.visited_values.contains(&Value::Data(n)));
 
     let after_count = prog.nodes.total_node_count();
 
