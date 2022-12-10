@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 use crate::front::{ast, cst};
 use crate::front::ast::MaybeIdentifier;
@@ -392,6 +393,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     }
                     (TypeInfo::Struct(target_ty_info), ast::DotIndexIndex::Struct(id)) => {
                         target_ty_info.find_field_index(&id.string)
+                            .map(|i| i.try_into().unwrap())
                             .ok_or_else(|| Error::StructFieldNotFound {
                                 target,
                                 target_type: self.types.format_type(target_value.ty).to_string(),
@@ -467,7 +469,41 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 self.append_break_or_continue(flow, expr, ContinueOrBreak::Continue)?,
             ast::ExpressionKind::Break =>
                 self.append_break_or_continue(flow, expr, ContinueOrBreak::Break)?,
-            ast::ExpressionKind::StructLiteral { .. } => todo!("struct literal"),
+            ast::ExpressionKind::StructLiteral { struct_path: _, fields } => {
+                let struct_ty = self.expr_type(expr);
+                let struct_ty_info = unwrap_match!(&self.types[struct_ty], cst::TypeInfo::Struct(info) => info).clone();
+                let struct_ty_ir = self.types.map_type(self.prog, struct_ty);
+
+                let slot = self.define_slot(struct_ty_ir, None);
+
+                let after_stores = fields.iter().try_fold(flow, |flow, (field_id, field_value)| {
+                    let field_index = struct_ty_info.find_field_index(&field_id.string).unwrap();
+
+                    let (after_value, field_value) = self.append_expr_loaded(flow, scope, field_value)?;
+                    let field_ty_ir = self.types.map_type(self.prog, field_value.ty);
+
+                    let field_ptr = ir::InstructionInfo::TupleFieldPtr {
+                        tuple_ty: struct_ty_ir,
+                        base: slot.into(),
+                        index: field_index.try_into().unwrap(),
+                    };
+                    let field_ptr = self.append_instr(after_value.block, field_ptr);
+
+                    let store = ir::InstructionInfo::Store {
+                        addr: field_ptr.into(),
+                        ty: field_ty_ir,
+                        value: field_value.ir,
+                    };
+                    self.append_instr(after_value.block, store);
+
+                    Ok(after_value)
+                })?;
+
+                let load = ir::InstructionInfo::Load { addr: slot.into(), ty: struct_ty_ir };
+                let load = self.append_instr(after_stores.block, load);
+
+                (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: load.into() }))
+            }
         };
 
         //check that the returned value's type is indeed expect_ty

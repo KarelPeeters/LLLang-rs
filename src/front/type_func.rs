@@ -220,11 +220,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 for (field_id, field_value) in fields {
                     let field_value_ty = self.visit_expr(scope, field_value)?;
 
-                    let field_info = struct_ty_info.fields.iter()
-                        .find(|field| field.id == &field_id.string)
-                        .unwrap();
-                    let field_ty = self.problem.fully_known(&self.types, field_info.ty);
+                    let field_index = struct_ty_info.find_field_index(&field_id.string).unwrap();
+                    let field_info = &struct_ty_info.fields[field_index];
 
+                    let field_ty = self.problem.fully_known(&self.types, field_info.ty);
                     self.problem.equal(field_ty, field_value_ty);
                 }
 

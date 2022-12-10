@@ -379,10 +379,9 @@ pub struct StructFieldInfo<'ast> {
 }
 
 impl<'ast> StructTypeInfo<'ast> {
-    pub fn find_field_index(&self, index: &str) -> Option<u32> {
+    pub fn find_field_index(&self, index: &str) -> Option<usize> {
         self.fields.iter()
             .position(|field| field.id == index)
-            .map(|i| i as u32)
     }
 }
 
