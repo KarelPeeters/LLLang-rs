@@ -160,6 +160,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let index_ty = self.visit_expr(scope, index)?;
 
                 self.problem.equal(self.problem.ty_int(), index_ty);
+                // TODO allow array indexing on pointers
                 self.problem.array_index(expr_origin, target_ty)
             }
             ast::ExpressionKind::Cast { value, ty } => {

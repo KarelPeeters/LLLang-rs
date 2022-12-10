@@ -4,7 +4,7 @@ const CHAR_NEWLINE: byte = 10;
 const CHAR_ZERO: byte = 48;
 const CHAR_MINUS: byte = 45;
 
-fun print_newline() {
+fun println() {
     let newline = CHAR_NEWLINE;
     print_str(&newline, 1);
 }
@@ -47,10 +47,10 @@ fun print_int(x: int) {
 
 fun println_str(s: &byte, len: int) {
     print_str(s, len);
-    print_newline();
+    println();
 }
 
 fun println_int(x: int) {
     print_int(x);
-    print_newline();
+    println();
 }
