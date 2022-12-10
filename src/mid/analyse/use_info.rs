@@ -27,6 +27,8 @@ pub struct BlockPos {
 pub enum Usage<P = InstructionPos> {
     //program main
     Main,
+    //function with a global name
+    Global,
 
     //address in Load
     LoadAddr { pos: P },
@@ -142,6 +144,13 @@ impl UseInfo {
 
         todo_funcs.push_back(prog.main);
 
+        for (func, func_info) in prog.nodes.funcs.iter() {
+            if func_info.global_name.is_some() {
+                todo_funcs.push_back(func);
+                info.add_value_usage(func.into(), Usage::Global);
+            }
+        }
+
         while !todo_funcs.is_empty() | !todo_blocks.is_empty() {
             if let Some(func) = todo_funcs.pop_front() {
                 if visited_funcs.insert(func) {
@@ -233,8 +242,29 @@ impl UseInfo {
                         prog.main = new;
                         *count += 1;
                     } else {
-                        //TODO remove this once prog.main is a value
-                        panic!("Replacing main func not yet supported")
+                        panic!("Replacing main func with value not supported")
+                    }
+                }
+                Usage::Global => {
+                    let old = unwrap_match!(old, Value::Func(old) => old);
+                    let global_name = prog.get_func_mut(old).global_name.take().unwrap();
+
+                    if let Value::Func(new) = new {
+                        // move global name from old to new function
+                        let new = prog.get_func_mut(new);
+
+                        if let Some(new_global_name) = &new.global_name {
+                            panic!(
+                                "Cannot replace old global function {:?} with function that already has global name {:?}",
+                                global_name,
+                                new_global_name,
+                            );
+                        }
+
+                        new.global_name = Some(global_name);
+                        *count += 1;
+                    } else {
+                        panic!("Replacing global func with value not supported, name is {:?}", global_name)
                     }
                 }
                 Usage::LoadAddr { pos } => {

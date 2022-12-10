@@ -129,7 +129,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
             Todo::ValueUsers(value) => {
                 for &usage in &use_info[value] {
                     match usage {
-                        Usage::Main | Usage::CallTarget { .. } =>
+                        Usage::Main | Usage::Global | Usage::CallTarget { .. } =>
                             unreachable!("this value should never change: {:?}", usage),
 
                         //don't need to visit because their lattice value doesn't get affected by this operand
