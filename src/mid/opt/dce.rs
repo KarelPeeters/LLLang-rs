@@ -175,8 +175,7 @@ fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive_values: &Has
 
     let param_masks: HashMap<Function, Vec<bool>> = calc_param_masks(prog, use_info, alive_values);
 
-    let blocks = prog.nodes.blocks.keys().collect_vec();
-    for &block in &blocks {
+    for block in use_info.blocks() {
         // figure out which phis are alive
         let phi_mask = prog.get_block(block).phis.iter()
             .map(|&phi| {

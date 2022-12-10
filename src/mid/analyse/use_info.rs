@@ -344,6 +344,14 @@ impl UseInfo {
             }
         })
     }
+
+    pub fn values(&self) -> impl Iterator<Item=Value> + '_ {
+        self.value_usages.keys().copied()
+    }
+
+    pub fn blocks(&self) -> impl Iterator<Item=Block> + '_ {
+        self.block_usages.keys().copied()
+    }
 }
 
 impl TargetKind {
