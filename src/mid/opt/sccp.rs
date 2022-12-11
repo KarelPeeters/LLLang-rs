@@ -85,7 +85,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
         match curr {
             Todo::FunctionInit(func) => {
                 if funcs_reachable.insert(func) {
-                    todo.push_back(Todo::BlockInit(func, prog.get_func(func).entry.block))
+                    update_target_reachable(prog, &mut map, &mut todo, func, &prog.get_func(func).entry);
                 }
             }
             Todo::BlockInit(func, block) => {
