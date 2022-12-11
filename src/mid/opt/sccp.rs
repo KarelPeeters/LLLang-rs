@@ -268,8 +268,18 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 _ => Lattice::Overdef,
             }
         }
-        InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
-        InstructionInfo::PointerOffSet { .. } => Lattice::Overdef,
+        &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
+            match map.eval(base) {
+                Lattice::Undef => Lattice::Undef,
+                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
+            }
+        },
+        &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => {
+            match map.eval(base) {
+                Lattice::Undef => Lattice::Undef,
+                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
+            }
+        },
         // this instruction doesn't have a return value, so we can just use anything we want
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
