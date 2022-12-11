@@ -14,8 +14,12 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
     for func in funcs {
         let entry = &prog.get_func(func).entry;
         let (delta, new_target) = EndPoint::find_target(prog, entry.clone(), None);
-        count_skipped += delta;
-        prog.get_func_mut(func).entry = new_target;
+
+        // TODO is there a better way to avoid the "entry into inf loop" edge case?
+        if new_target.block != entry.block {
+            count_skipped += delta;
+            prog.get_func_mut(func).entry = new_target;
+        }
     }
 
     // simplify block terminators
@@ -108,7 +112,6 @@ impl EndPoint {
                 break;
             }
 
-            // TODO is the way this works correct? doesn't it depend on the later choice between terminator and target?
             count_skipped += 1;
 
             match terminator {
