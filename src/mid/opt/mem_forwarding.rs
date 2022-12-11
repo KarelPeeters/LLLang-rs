@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::{BlockUsage, TargetSource, UseInfo};
-use crate::mid::ir::{Block, InstructionInfo, Program, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Const, InstructionInfo, Program, StackSlot, Type, Value};
 use crate::mid::util::lattice::Lattice;
 
 pub fn mem_forwarding(prog: &mut Program) -> bool {
@@ -11,11 +11,11 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
 
         for (index, &instr) in instrs.iter().enumerate() {
             let instr_info = prog.get_instr(instr);
-            if let &InstructionInfo::Load { addr, ty } = instr_info {
-                let location = Location { ptr: addr, ty };
-
+            if let &InstructionInfo::Load { addr, ty: load_ty } = instr_info {
+                let location = Location { ptr: addr, ty: load_ty };
                 let lattice = find_value_for_location_at_instr(prog, &use_info, location, block, Some(index));
-                if let Some(value) = lattice.as_value_of_type(ty) {
+
+                if let Some(value) = lattice.as_value_of_type(load_ty) {
                     replaced += 1;
                     use_info.replace_value_usages(prog, instr.into(), value);
                 }
@@ -137,8 +137,8 @@ fn locations_alias(prog: &Program, left: Location, right: Location) -> Alias {
 }
 
 fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
-    assert_eq!(prog.type_of_value(ptr_left), prog.ty_ptr());
-    assert_eq!(prog.type_of_value(ptr_right), prog.ty_ptr());
+    let ptr_left = simplify_ptr(prog, ptr_left);
+    let ptr_right = simplify_ptr(prog, ptr_right);
 
     if ptr_left.is_undef() || ptr_right.is_undef() {
         return Alias::Undef;
@@ -163,13 +163,10 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
                     if base_alias == Alias::Undef {
                         return base_alias;
                     }
-
-                    let same_index_offset = (inner_ty_left == inner_ty_right) && (index_left == index_right);
-                    let sizes_zero = prog.is_zero_sized_type(inner_ty_left) && prog.is_zero_sized_type(inner_ty_right);
-
-                    if same_index_offset || sizes_zero {
+                    if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
                         return base_alias;
                     }
+                    // the zero-size type case is already handled by simplify_ptr
                 }
 
                 (
@@ -180,7 +177,6 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
                     if base_alias == Alias::Undef {
                         return base_alias;
                     }
-
                     if tuple_ty_left == tuple_ty_right && index_left == index_right {
                         return base_alias;
                     }
@@ -193,6 +189,34 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
     }
 
     Alias::UnknownOrPartial
+}
+
+fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
+    assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
+
+    if let Value::Instr(instr) = ptr {
+        match prog.get_instr(instr) {
+            &InstructionInfo::PointerOffSet { ty, base, index } => {
+                if prog.is_zero_sized_type(ty) {
+                    return simplify_ptr(prog, base);
+                }
+                if let Value::Const(Const { ty: _, value: 0 }) = index {
+                    return simplify_ptr(prog, base);
+                }
+            }
+            &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {
+                // index == 0 is not enough to decay to base pointer, since the layout of tuples is decided by the backend
+                // however, single-element tuples are still guaranteed to have the same layout as the single item inside them
+                let field_count = prog.get_type(tuple_ty).unwrap_tuple().unwrap().fields.len();
+                if field_count == 0 || field_count == 1 {
+                    return simplify_ptr(prog, base);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ptr
 }
 
 // TODO do some proper dataflow analysis here
