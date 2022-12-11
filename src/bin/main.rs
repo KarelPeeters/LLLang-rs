@@ -114,15 +114,30 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
 
 fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> bool {
     let nodes_before = prog.nodes.total_node_count();
-    let changed = pass(prog);
-    let nodes_after = prog.nodes.total_node_count();
+    let str_before = prog.to_string();
 
-    if nodes_after != nodes_before {
-        assert!(
-            changed,
-            "The number of nodes changed from {} to {}, but the pass reported no change",
-            nodes_before, nodes_after
+    let mut changed = pass(prog);
+
+    let nodes_after = prog.nodes.total_node_count();
+    let str_after = prog.to_string();
+
+    if nodes_before != nodes_after {
+        if !changed {
+            eprintln!(
+                "WARNING: The number of nodes changed from {} to {}, but the pass reported no change",
+                nodes_before, nodes_after
+            );
+        }
+        changed = true;
+    }
+
+    let str_changed = str_before != str_after;
+    if changed != str_changed {
+        eprintln!(
+            "WARNING: The pass reported changed={} but the strings show changed={}",
+            changed, str_changed,
         );
+        changed = str_changed;
     }
 
     changed
