@@ -267,7 +267,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 Value::Undef(_) | Value::Const(Const { ty: _, value: 0 }) => Lattice::Undef,
                 _ => Lattice::Overdef,
             }
-        },
+        }
         InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
         InstructionInfo::PointerOffSet { .. } => Lattice::Overdef,
         // this instruction doesn't have a return value, so we can just use anything we want
@@ -290,11 +290,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
             }
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
-            if let (
-                Lattice::Known(Value::Const(left)),
-                Lattice::Known(Value::Const(right))
-            ) = (map.eval(left), map.eval(right)) {
-                //TODO this probably doesn't handle wrapping correctly yet
+            eval_binary(map, left, right, |left, right| {
+                //TODO this probably doesn't handle wrapping correctly
                 assert_eq!(left.ty, right.ty);
                 let ty = left.ty;
                 let (left, right) = (left.value, right.value);
@@ -308,18 +305,12 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     ArithmeticOp::Mod => left % right,
                 };
 
-                Lattice::Known(Value::Const(Const { ty, value: result }))
-            } else {
-                //TODO sometimes this can be inferred as well, eg "0 * x"
-                Lattice::Overdef
-            }
+                Const::new(ty, result)
+            })
         }
         &InstructionInfo::Comparison { kind, left, right } => {
-            if let (
-                Lattice::Known(Value::Const(left)),
-                Lattice::Known(Value::Const(right))
-            ) = (map.eval(left), map.eval(right)) {
-                //TODO this probably doesn't handle wrapping correctly yet
+            eval_binary(map, left, right, |left, right| {
+                //TODO this probably doesn't handle signs correctly
                 assert_eq!(left.ty, right.ty);
                 let (left, right) = (left.value, right.value);
 
@@ -332,15 +323,26 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lt => left < right,
                 };
 
-                Lattice::Known(Value::Const(Const { ty: prog.ty_bool(), value: result as i32 }))
-            } else {
-                //TODO sometimes this can be inferred as well, eg "0 & x"
-                Lattice::Overdef
-            }
+                Const::new(prog.ty_bool(), result as i32)
+            })
         }
     };
 
     map.merge_value(todo, Value::Instr(instr), result)
+}
+
+fn eval_binary(map: &mut LatticeMap, left: Value, right: Value, handle_const: impl Fn(Const, Const) -> Const) -> Lattice {
+    match (map.eval(left), map.eval(right)) {
+        (Lattice::Undef, _) | (_, Lattice::Undef) => Lattice::Undef,
+
+        (Lattice::Known(Value::Const(left)), Lattice::Known(Value::Const(right))) => {
+            let result = handle_const(left, right);
+            Lattice::Known(Value::Const(result))
+        }
+
+        //TODO sometimes this can be inferred as well, eg "0 * x" or "x == x"
+        _ => Lattice::Overdef,
+    }
 }
 
 fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice_map: &LatticeMap) -> usize {
