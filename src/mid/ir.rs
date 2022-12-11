@@ -789,6 +789,13 @@ impl Display for Program {
             }
         }
 
+        if self.nodes.datas.len() > 0 {
+            writeln!(f, "  data:")?;
+            for (data, data_info) in &self.nodes.datas {
+                writeln!(f, "    {:?}: {:?}", data, data_info)?
+            }
+        }
+
         writeln!(f, "}}")?;
         Ok(())
     }
