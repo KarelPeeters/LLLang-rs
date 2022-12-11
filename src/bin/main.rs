@@ -143,6 +143,7 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
         mid::opt::phi_combine::phi_combine,
         mid::opt::dce::dce,
         mid::opt::flow_simplify::flow_simplify,
+        mid::opt::block_threading::block_threading,
         mid::opt::mem_forwarding::mem_forwarding,
     ];
 
