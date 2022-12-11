@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
+use indexmap::IndexSet;
 use indexmap::map::IndexMap;
 
 use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
@@ -89,6 +90,7 @@ pub enum TargetKind {
 
 #[derive(Debug)]
 pub struct UseInfo {
+    funcs: IndexSet<Function>,
     value_usages: IndexMap<Value, Vec<Usage>>,
     block_usages: IndexMap<Block, Vec<BlockUsage>>,
 }
@@ -132,13 +134,17 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
 // TODO use visitor here as well
 impl UseInfo {
     pub fn new(prog: &Program) -> Self {
-        let mut info = UseInfo { value_usages: Default::default(), block_usages: Default::default() };
+        let mut info = UseInfo {
+            funcs: Default::default(),
+            value_usages: Default::default(),
+            block_usages: Default::default(),
+        };
 
         info.add_value_usage(Value::Func(prog.main), Usage::Main);
 
         let mut todo_funcs = VecDeque::new();
         let mut todo_blocks = VecDeque::new();
-        let mut visited_funcs = HashSet::new();
+        let mut visited_funcs = IndexSet::new();
         let mut visited_blocks = HashSet::new();
 
         todo_funcs.push_back(prog.main);
@@ -197,6 +203,8 @@ impl UseInfo {
             }
         }
 
+        assert!(info.funcs.is_empty());
+        info.funcs = visited_funcs;
         info
     }
 
@@ -350,6 +358,10 @@ impl UseInfo {
                 _ => false,
             }
         })
+    }
+
+    pub fn funcs(&self) -> impl Iterator<Item=Function> + '_ {
+        self.funcs.iter().copied()
     }
 
     pub fn values(&self) -> impl Iterator<Item=Value> + '_ {
