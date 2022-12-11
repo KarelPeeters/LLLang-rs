@@ -694,11 +694,6 @@ impl Display for Program {
         writeln!(f, "Program (nodes: {}) {{", self.nodes.total_node_count())?;
         writeln!(f, "  main: {:?}", self.main)?;
 
-        writeln!(f, "  types:")?;
-        for (ty, _) in &self.types {
-            writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?
-        }
-
         for (func, func_info) in &self.nodes.funcs {
             writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
 
@@ -769,6 +764,18 @@ impl Display for Program {
             })?;
             writeln!(f, "  }}")?;
         };
+
+        writeln!(f, "  types:")?;
+        for (ty, _) in &self.types {
+            writeln!(f, "    {:?}: {}", ty, self.format_type(ty))?
+        }
+
+        if self.nodes.exts.len() > 0 {
+            writeln!(f, "  extern:")?;
+            for (ext, ext_info) in &self.nodes.exts {
+                writeln!(f, "    {:?}: {:?}", ext, ext_info)?
+            }
+        }
 
         writeln!(f, "}}")?;
         Ok(())
