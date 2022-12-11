@@ -195,6 +195,8 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     println!("----Lower------");
     let mut ir_program = front::lower::lower(resolved)
         .expect("failed to lower"); //TODO ? instead of panic here
+    // always run a single GC pass to remove all of the dead functions from the saved ir file
+    run_gc(&mut ir_program);
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
         .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
