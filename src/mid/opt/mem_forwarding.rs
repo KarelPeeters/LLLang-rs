@@ -1,0 +1,272 @@
+use crate::mid::analyse::use_info::{BlockUsage, TargetSource, UseInfo};
+use crate::mid::ir::{Block, InstructionInfo, Program, StackSlot, Type, Value};
+use crate::mid::util::lattice::Lattice;
+
+pub fn mem_forwarding(prog: &mut Program) -> bool {
+    let use_info = UseInfo::new(prog);
+    let mut replaced = 0;
+
+    for block in use_info.blocks() {
+        let instrs = prog.get_block(block).instructions.clone();
+
+        for (index, &instr) in instrs.iter().enumerate() {
+            let instr_info = prog.get_instr(instr);
+            if let &InstructionInfo::Load { addr, ty } = instr_info {
+                let location = Location { ptr: addr, ty };
+
+                let lattice = find_value_for_location_at_instr(prog, &use_info, location, block, Some(index));
+                if let Some(value) = lattice.as_value_of_type(ty) {
+                    replaced += 1;
+                    use_info.replace_value_usages(prog, instr.into(), value);
+                }
+            }
+        }
+    }
+
+    println!("mem_forwarding replaced {} values", replaced);
+    replaced > 0
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Location {
+    ptr: Value,
+    ty: Type,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Alias {
+    /// At least one of the pointers if undefined
+    Undef,
+    /// Both storages point to the same place
+    Exactly,
+    /// We don't have enough information to say anything
+    UnknownOrPartial,
+    /// Both storages definitely don't overlap at all
+    No,
+}
+
+#[derive(Debug)]
+enum Origin {
+    /// The pointer is undefined.
+    Undef,
+
+    /// The given slot, from the current function.
+    FuncStackSlot(StackSlot),
+    /// Any slot from the current function.
+    // TODO consider tracking which specific func slots it can be
+    FuncAnyStackSlot,
+
+    /// Some other value external to this function.
+    FuncExternal,
+
+    /// We don't have enough information.
+    Unknown,
+}
+
+fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location: Location, block: Block, index: Option<usize>) -> Lattice {
+    let block_info = prog.get_block(block);
+    let index = index.unwrap_or(block_info.instructions.len());
+
+    // first see if any instruction before the load aliases
+    for &instr in block_info.instructions[0..index].iter().rev() {
+        match prog.get_instr(instr) {
+            &InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
+                let store_location = Location { ptr: store_ptr, ty: store_ty };
+                match locations_alias(prog, location, store_location) {
+                    // propagate undef
+                    Alias::Undef => return Lattice::Overdef,
+                    // we know the exact value last stored to the pointer!
+                    Alias::Exactly => return Lattice::Known(value),
+                    // we have to give up
+                    Alias::UnknownOrPartial => return Lattice::Overdef,
+                    // continue walking backwards
+                    Alias::No => {}
+                }
+            }
+            // call could have side effects, we have to give up
+            // TODO can we do better here?
+            //   * side effect free functions
+            //   * if we don't leak a slot to external or to this call the function can't store to it
+            InstructionInfo::Call { .. } => return Lattice::Overdef,
+
+            InstructionInfo::Load { .. } => {}
+            InstructionInfo::Arithmetic { .. } => {}
+            InstructionInfo::Comparison { .. } => {}
+            InstructionInfo::TupleFieldPtr { .. } => {}
+            InstructionInfo::PointerOffSet { .. } => {}
+        }
+    }
+
+    let mut curr_value = Lattice::Undef;
+
+    for BlockUsage { target_kind } in &use_info[block] {
+        let new_value = match target_kind.source() {
+            // there aren't any preceding stores, depending on the origin the value is undef or overdef
+            TargetSource::Entry(_) => match pointer_origin(prog, location.ptr) {
+                Origin::Undef => Lattice::Undef,
+                Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
+                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
+            },
+            // continue searching along the preceding block
+            TargetSource::Block(pos) => {
+                find_value_for_location_at_instr(prog, use_info, location, pos.block, None)
+            }
+        };
+
+        curr_value = Lattice::merge(curr_value, new_value);
+    }
+
+    curr_value
+}
+
+fn locations_alias(prog: &Program, left: Location, right: Location) -> Alias {
+    let same_ty = left.ty == right.ty;
+
+    match pointers_alias(prog, left.ptr, right.ptr) {
+        Alias::Undef => Alias::Undef,
+        Alias::Exactly => {
+            if same_ty {
+                Alias::Exactly
+            } else {
+                Alias::UnknownOrPartial
+            }
+        }
+        Alias::UnknownOrPartial => Alias::UnknownOrPartial,
+        Alias::No => Alias::No,
+    }
+}
+
+fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
+    assert_eq!(prog.type_of_value(ptr_left), prog.ty_ptr());
+    assert_eq!(prog.type_of_value(ptr_right), prog.ty_ptr());
+
+    if ptr_left.is_undef() || ptr_right.is_undef() {
+        return Alias::Undef;
+    }
+    if ptr_left == ptr_right {
+        return Alias::Exactly;
+    }
+
+    let alias_from_origin = origins_alias(pointer_origin(prog, ptr_left), pointer_origin(prog, ptr_right));
+    if let Alias::No | Alias::Exactly = alias_from_origin {
+        return alias_from_origin;
+    }
+
+    match (ptr_left, ptr_right) {
+        (Value::Instr(instr_left), Value::Instr(instr_right)) => {
+            match (prog.get_instr(instr_left), prog.get_instr(instr_right)) {
+                (
+                    &InstructionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
+                    &InstructionInfo::PointerOffSet { ty: inner_ty_right, base: base_right, index: index_right },
+                ) => {
+                    let base_alias = pointers_alias(prog, base_left, base_right);
+                    if base_alias == Alias::Undef {
+                        return base_alias;
+                    }
+
+                    let same_index_offset = (inner_ty_left == inner_ty_right) && (index_left == index_right);
+                    let sizes_zero = prog.is_zero_sized_type(inner_ty_left) && prog.is_zero_sized_type(inner_ty_right);
+
+                    if same_index_offset || sizes_zero {
+                        return base_alias;
+                    }
+                }
+
+                (
+                    &InstructionInfo::TupleFieldPtr { base: base_left, index: index_left, tuple_ty: tuple_ty_left },
+                    &InstructionInfo::TupleFieldPtr { base: base_right, index: index_right, tuple_ty: tuple_ty_right },
+                ) => {
+                    let base_alias = pointers_alias(prog, base_left, base_right);
+                    if base_alias == Alias::Undef {
+                        return base_alias;
+                    }
+
+                    if tuple_ty_left == tuple_ty_right && index_left == index_right {
+                        return base_alias;
+                    }
+                }
+
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    Alias::UnknownOrPartial
+}
+
+// TODO do some proper dataflow analysis here
+//  specifically this would be useful for things like:
+//    * phis
+//    * load/store forwarding, which is what we're doing here in the first place!)
+fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
+    assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
+
+    match ptr {
+        Value::Undef(_) => Origin::Undef,
+        Value::Const(_) => Origin::FuncExternal,
+        Value::Func(_) => unreachable!(),
+        Value::Param(_) => Origin::FuncExternal,
+        Value::Slot(slot) => Origin::FuncStackSlot(slot),
+        Value::Phi(_) => Origin::Unknown,
+        Value::Instr(instr) => {
+            match prog.get_instr(instr) {
+                InstructionInfo::Load { .. } => Origin::Unknown,
+                InstructionInfo::Store { .. } => unreachable!(),
+                InstructionInfo::Call { .. } => Origin::Unknown,
+                InstructionInfo::Arithmetic { .. } => unreachable!(),
+                InstructionInfo::Comparison { .. } => unreachable!(),
+                &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, base),
+                &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, base),
+            }
+        }
+        Value::Extern(_) => Origin::FuncExternal,
+        Value::Data(_) => Origin::FuncExternal,
+    }
+}
+
+fn origins_alias(left: Origin, right: Origin) -> Alias {
+    match (left, right) {
+        (Origin::Undef, _) | (_, Origin::Undef) => Alias::Undef,
+        (Origin::Unknown, _) | (_, Origin::Unknown) => Alias::UnknownOrPartial,
+        (Origin::FuncExternal, Origin::FuncExternal) => Alias::UnknownOrPartial,
+
+        (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
+            if left == right {
+                Alias::Exactly
+            } else {
+                Alias::No
+            }
+        }
+        (Origin::FuncAnyStackSlot, Origin::FuncAnyStackSlot) => Alias::UnknownOrPartial,
+        (Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot) | (Origin::FuncAnyStackSlot, Origin::FuncStackSlot(_)) => Alias::UnknownOrPartial,
+
+        (Origin::FuncExternal, Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot) => Alias::No,
+        (Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot, Origin::FuncExternal) => Alias::No,
+    }
+}
+
+impl Origin {
+    // TODO start using this when we switch to something more dataflow-like
+    #[allow(dead_code)]
+    fn merge(left: Origin, right: Origin) -> Origin {
+        match (left, right) {
+            (Origin::Unknown, _) | (_, Origin::Unknown) => Origin::Unknown,
+            (Origin::Undef, other) | (other, Origin::Undef) => other,
+
+            (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
+                if left == right {
+                    Origin::FuncStackSlot(left)
+                } else {
+                    Origin::FuncAnyStackSlot
+                }
+            }
+            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::FuncAnyStackSlot,
+
+            (Origin::FuncExternal, Origin::FuncExternal) => Origin::FuncExternal,
+
+            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncExternal) => Origin::Unknown,
+            (Origin::FuncExternal, Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::Unknown,
+        }
+    }
+}

@@ -155,10 +155,23 @@ impl Program {
             Value::Data(data) => self.get_data(data).ty,
         }
     }
+
+    pub fn is_zero_sized_type(&self, ty: Type) -> bool {
+        // maybe in the future we need to change this to be tristate (ie. "don't know" option) but for now it's fine
+        match *self.get_type(ty) {
+            TypeInfo::Void => true,
+            TypeInfo::Integer { bits } => bits == 0,
+            TypeInfo::Pointer => false,
+            TypeInfo::Func(_) => false,
+            TypeInfo::Tuple(TupleType { ref fields }) => fields.iter().all(|&f| self.is_zero_sized_type(f)),
+            TypeInfo::Array(ArrayType { inner, length }) => length == 0 || self.is_zero_sized_type(inner),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeInfo {
+    // TODO replace void with zero-sized int?
     Void,
     Integer { bits: u32 },
     Pointer,
@@ -497,6 +510,10 @@ pub enum Value {
 
 //TODO should this be represented in the type system instead?
 impl Value {
+    pub fn is_undef(self) -> bool {
+        matches!(self, Value::Undef(_))
+    }
+
     pub fn is_const_like(self) -> bool {
         match self {
             Value::Undef(_) => false,

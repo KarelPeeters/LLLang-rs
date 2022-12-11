@@ -88,9 +88,15 @@ pub enum TargetKind {
     BranchFalseFrom(BlockPos),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum TargetSource {
+    Entry(Function),
+    Block(BlockPos),
+}
+
 #[derive(Debug)]
 pub struct UseInfo {
-    funcs: IndexSet<Function>,
+    func_blocks: IndexMap<Function, IndexSet<Block>>,
     value_usages: IndexMap<Value, Vec<Usage>>,
     block_usages: IndexMap<Block, Vec<BlockUsage>>,
 }
@@ -135,7 +141,7 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
 impl UseInfo {
     pub fn new(prog: &Program) -> Self {
         let mut info = UseInfo {
-            funcs: Default::default(),
+            func_blocks: Default::default(),
             value_usages: Default::default(),
             block_usages: Default::default(),
         };
@@ -144,14 +150,15 @@ impl UseInfo {
 
         let mut todo_funcs = VecDeque::new();
         let mut todo_blocks = VecDeque::new();
-        let mut visited_funcs = IndexSet::new();
+        let mut visited_funcs = IndexMap::new();
         let mut visited_blocks = HashSet::new();
 
         todo_funcs.push_back(prog.main);
 
         while !todo_funcs.is_empty() | !todo_blocks.is_empty() {
             if let Some(func) = todo_funcs.pop_front() {
-                if visited_funcs.insert(func) {
+                let prev = visited_funcs.insert(func, IndexSet::default());
+                if prev.is_none() {
                     let func_info = prog.get_func(func);
                     let block_pos = BlockPos { func, block: func_info.entry.block };
 
@@ -203,8 +210,8 @@ impl UseInfo {
             }
         }
 
-        assert!(info.funcs.is_empty());
-        info.funcs = visited_funcs;
+        assert!(info.func_blocks.is_empty());
+        info.func_blocks = visited_funcs;
         info
     }
 
@@ -361,7 +368,11 @@ impl UseInfo {
     }
 
     pub fn funcs(&self) -> impl Iterator<Item=Function> + '_ {
-        self.funcs.iter().copied()
+        self.func_blocks.keys().copied()
+    }
+
+    pub fn func_blocks(&self, func: Function) -> &IndexSet<Block> {
+        self.func_blocks.get(&func).unwrap()
     }
 
     pub fn values(&self) -> impl Iterator<Item=Value> + '_ {
@@ -380,6 +391,15 @@ impl TargetKind {
             TargetKind::JumpFrom(pos) => pos.func,
             TargetKind::BranchTrueFrom(pos) => pos.func,
             TargetKind::BranchFalseFrom(pos) => pos.func,
+        }
+    }
+
+    pub fn source(self) -> TargetSource {
+        match self {
+            TargetKind::EntryFrom(func) => TargetSource::Entry(func),
+            TargetKind::JumpFrom(pos) | TargetKind::BranchTrueFrom(pos) | TargetKind::BranchFalseFrom(pos) => {
+                TargetSource::Block(pos)
+            }
         }
     }
 
