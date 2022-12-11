@@ -379,12 +379,7 @@ impl InstructionInfo {
             }
             InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::TupleFieldPtr { tuple_ty, index, .. } => {
-                *prog.get_type(*tuple_ty).unwrap_tuple()
-                    .expect("tuple_ty should be a tuple type")
-                    .fields.get(*index as usize)
-                    .unwrap_or_else(|| panic!("tuple index {} out of range for {:?} {}", index, tuple_ty, prog.format_type(*tuple_ty)))
-            }
+            InstructionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
         }
     }
