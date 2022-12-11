@@ -261,9 +261,16 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
     let instr_info = prog.get_instr(instr);
 
     let result = match instr_info {
-        InstructionInfo::Load { .. } => Lattice::Overdef,
+        &InstructionInfo::Load { addr, ty: _ } => {
+            match addr {
+                // loading from undef or null ptr returns undef
+                Value::Undef(_) | Value::Const(Const { ty: _, value: 0 }) => Lattice::Undef,
+                _ => Lattice::Overdef,
+            }
+        },
         InstructionInfo::TupleFieldPtr { .. } => Lattice::Overdef,
         InstructionInfo::PointerOffSet { .. } => Lattice::Overdef,
+        // this instruction doesn't have a return value, so we can just use anything we want
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
             if let Value::Func(target) = *target {
