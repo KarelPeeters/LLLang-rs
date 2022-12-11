@@ -313,6 +313,10 @@ pub enum InstructionInfo {
     /// `Comparison { kind, left: iN, right: iN } -> i1`
     Comparison { kind: LogicalOp, left: Value, right: Value },
 
+    // TODO should this really be an instruction?
+    //   kind of, otherwise we may as well switch to sea of nodes and make arithmetic no longer an instruction
+    // TODO how does this fit into the untyped ptr story?
+    //   we can't really remove this since the layout is only decided in the backend... 
     /// Compute the pointer to a tuple field at `index` in `tuple_ty` from a pointer to containing tuple `base`.
     ///
     /// `TupleFieldPtr { base: &, index=1, tuple_ty=(A, B, C) } -> &`
