@@ -368,25 +368,29 @@ pub enum InstructionInfo {
     PointerOffSet { ty: Type, base: Value, index: Value },
 }
 
-//TODO what about signed and unsigned? type or operation?
+#[derive(Debug, Copy, Clone)]
+pub enum Signed {
+    Signed,
+    Unsigned,
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum ArithmeticOp {
     Add,
     Sub,
-    Mul,
-    Div,
-    Mod,
+    Mul(Signed),
+    Div(Signed),
+    Mod(Signed),
 }
 
-//TODO what about signed and unsigned? type or operation?
 #[derive(Debug, Copy, Clone)]
 pub enum LogicalOp {
     Eq,
     Neq,
-    Gt,
-    Gte,
-    Lt,
-    Lte,
+    Gt(Signed),
+    Gte(Signed),
+    Lt(Signed),
+    Lte(Signed),
 }
 
 impl InstructionInfo {

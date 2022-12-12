@@ -1,9 +1,10 @@
 use std::collections::{HashSet, VecDeque};
+use std::num::Wrapping;
 
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -309,29 +310,47 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
             }
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
-            eval_binary(map, left, right, |ty, bits, left, right| {
+            // TODO test whether this correct handles all of the edge cases in mul and div
+            eval_binary(map, left, right, |ty, left, right| {
+                let left_signed = Wrapping(left.value_signed());
+                let right_signed = Wrapping(right.value_signed());
+                let left_unsigned = Wrapping(left.value_unsigned());
+                let right_unsigned = Wrapping(right.value_unsigned());
+
                 let result_full = match kind {
-                    ArithmeticOp::Add => left + right,
-                    ArithmeticOp::Sub => left - right,
-                    ArithmeticOp::Mul => left * right,
-                    //TODO are x/0 and x%0 undefined?
-                    ArithmeticOp::Div => left / right,
-                    ArithmeticOp::Mod => left % right,
+                    // we can choose either, the result would be the same
+                    ArithmeticOp::Add => (left_unsigned + right_unsigned).0,
+                    ArithmeticOp::Sub => (left_unsigned - right_unsigned).0,
+
+                    //TODO should x/0 and x%0 be undefined?
+                    ArithmeticOp::Mul(Signed::Signed) => (left_signed * right_signed).0 as UStorage,
+                    ArithmeticOp::Div(Signed::Signed) => (left_signed / right_signed).0 as UStorage,
+                    ArithmeticOp::Mod(Signed::Signed) => (left_signed % right_signed).0 as UStorage,
+
+                    ArithmeticOp::Mul(Signed::Unsigned) => (left_unsigned * right_unsigned).0,
+                    ArithmeticOp::Div(Signed::Unsigned) => (left_unsigned / right_unsigned).0,
+                    ArithmeticOp::Mod(Signed::Unsigned) => (left_unsigned % right_unsigned).0,
                 };
 
-                let result = BitInt::new_masked(bits, result_full as UStorage);
+                let result = BitInt::new_masked(left.bits(), result_full);
                 Const::new(ty, result)
             })
         }
         &InstructionInfo::Comparison { kind, left, right } => {
-            eval_binary(map, left, right, |_, _, left, right| {
+            eval_binary(map, left, right, |_, left, right| {
                 let result_bool = match kind {
                     LogicalOp::Eq => left == right,
                     LogicalOp::Neq => left != right,
-                    LogicalOp::Gte => left >= right,
-                    LogicalOp::Gt => left > right,
-                    LogicalOp::Lte => left <= right,
-                    LogicalOp::Lt => left < right,
+
+                    LogicalOp::Gt(Signed::Signed) => left.value_signed() > right.value_signed(),
+                    LogicalOp::Gte(Signed::Signed) => left.value_signed() >= right.value_signed(),
+                    LogicalOp::Lt(Signed::Signed) => left.value_signed() < right.value_signed(),
+                    LogicalOp::Lte(Signed::Signed) => left.value_signed() <= right.value_signed(),
+
+                    LogicalOp::Gt(Signed::Unsigned) => left.value_unsigned() > right.value_unsigned(),
+                    LogicalOp::Gte(Signed::Unsigned) => left.value_unsigned() >= right.value_unsigned(),
+                    LogicalOp::Lt(Signed::Unsigned) => left.value_unsigned() < right.value_unsigned(),
+                    LogicalOp::Lte(Signed::Unsigned) => left.value_unsigned() <= right.value_unsigned(),
                 };
 
                 let result = BitInt::new(1, result_bool as u64).unwrap();
@@ -347,7 +366,7 @@ fn eval_binary(
     map: &mut LatticeMap,
     left: Value,
     right: Value,
-    handle_const: impl Fn(Type, u32, i64, i64) -> Const,
+    handle_const: impl Fn(Type, BitInt, BitInt) -> Const,
 ) -> Lattice {
     match (map.eval(left), map.eval(right)) {
         (Lattice::Undef, _) | (_, Lattice::Undef) => Lattice::Undef,
@@ -356,11 +375,8 @@ fn eval_binary(
             assert_eq!(left.ty, right.ty);
             assert_eq!(left.value.bits(), right.value.bits());
             let ty = left.ty;
-            let bits = left.value.bits();
 
-            let (left_full, right_full) = (left.value.value_signed(), right.value.value_signed());
-            let result = handle_const(ty, bits, left_full, right_full);
-
+            let result = handle_const(ty, left.value, right.value);
             Lattice::Known(Value::Const(result))
         }
 

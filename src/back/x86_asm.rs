@@ -6,6 +6,7 @@ use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::mid::ir::{ArithmeticOp, Block, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
 pub fn lower(prog: &Program) -> String {
@@ -412,18 +413,23 @@ impl AsmFuncBuilder<'_, '_, '_> {
     /// A = A / B
     /// D = A % B
     /// ```
-    fn append_div(&mut self, size: RegisterSize) {
+    fn append_div(&mut self, size: RegisterSize, signed: Signed) {
+        let instr = match signed {
+            Signed::Signed => "idiv",
+            Signed::Unsigned => "div",
+        };
+
         // the upper (unused) bits should be clear already, `append_value_to_reg` zero-extends,
         // so we don't need to clear them here
         match size {
             RegisterSize::S8 => {
                 self.append_instr("cwd");
-                self.append_instr("idiv bx");
+                self.append_instr(&format!("{} bx", instr));
                 self.append_instr("mov edx, eax")
             }
             RegisterSize::S16 | RegisterSize::S32 => {
                 self.append_instr(&format!("xor {d}, {d}", d = Register::D.with_size(size)));
-                self.append_instr(&format!("idiv {}", Register::B.with_size(size)));
+                self.append_instr(&format!("{} {}", instr, Register::B.with_size(size)));
             }
         }
     }
@@ -527,19 +533,24 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     let d = Register::D.with_size(size);
 
                     //A = op(A, B)
-                    match kind {
+                    match *kind {
                         ArithmeticOp::Add => self.append_instr(&format!("add {}, {}", a, b)),
                         ArithmeticOp::Sub => self.append_instr(&format!("sub {}, {}", a, b)),
-                        ArithmeticOp::Mul => {
+                        ArithmeticOp::Mul(signed) => {
+                            let instr = match signed {
+                                Signed::Signed => "imul",
+                                Signed::Unsigned => "mul",
+                            };
+
                             if size == RegisterSize::S8 {
-                                self.append_instr("imul bx");
+                                self.append_instr(&format!("{} bx", instr));
                             } else {
-                                self.append_instr(&format!("imul {}, {}", a, b));
+                                self.append_instr(&format!("{} {}, {}", instr, a, b));
                             }
                         }
-                        ArithmeticOp::Div => self.append_div(size),
-                        ArithmeticOp::Mod => {
-                            self.append_div(size);
+                        ArithmeticOp::Div(signed) => self.append_div(size, signed),
+                        ArithmeticOp::Mod(signed) => {
+                            self.append_div(size, signed);
                             self.append_instr(&format!("mov {}, {}", a, d));
                         }
                     }
@@ -555,13 +566,22 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("xor ecx, ecx");
                     self.append_instr(&format!("cmp {}, {}", Register::A.with_size(size), Register::B.with_size(size)));
 
+                    // From the SETcc docs:
+                    //   * signed => "greater" and "less" => gl
+                    //   * unsigned => "above" and "below" => ab
                     match kind {
                         LogicalOp::Eq => self.append_instr("sete cl"),
                         LogicalOp::Neq => self.append_instr("setne cl"),
-                        LogicalOp::Gte => self.append_instr("setge cl"),
-                        LogicalOp::Gt => self.append_instr("setg cl"),
-                        LogicalOp::Lte => self.append_instr("setle cl"),
-                        LogicalOp::Lt => self.append_instr("setl cl"),
+
+                        LogicalOp::Gt(Signed::Signed) => self.append_instr("setg cl"),
+                        LogicalOp::Lt(Signed::Signed) => self.append_instr("setl cl"),
+                        LogicalOp::Gte(Signed::Signed) => self.append_instr("setge cl"),
+                        LogicalOp::Lte(Signed::Signed) => self.append_instr("setle cl"),
+
+                        LogicalOp::Gt(Signed::Unsigned) => self.append_instr("seta cl"),
+                        LogicalOp::Lt(Signed::Unsigned) => self.append_instr("setb cl"),
+                        LogicalOp::Gte(Signed::Unsigned) => self.append_instr("setae cl"),
+                        LogicalOp::Lte(Signed::Unsigned) => self.append_instr("setbe cl"),
                     }
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));
