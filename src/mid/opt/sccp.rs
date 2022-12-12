@@ -141,17 +141,15 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         Usage::Main | Usage::CallTarget { .. } =>
                             unreachable!("this value should never change: {:?}", usage),
 
-                        //don't need to visit because their lattice value doesn't get affected by this operand
-                        Usage::LoadAddr { .. } | Usage::StoreAddr { .. } => {}
-                        Usage::TupleFieldPtrBase { .. } => {}
-                        Usage::ArrayIndexPtrBase { .. } | Usage::ArrayIndexPtrIndex { .. } => {}
-
-                        //don't need to visit because result is void
-                        Usage::StoreValue { .. } => {}
-
-                        Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos } => {
+                        // instructions
+                        Usage::LoadAddr { pos }
+                        | Usage::StoreAddr { pos } | Usage::StoreValue { pos }
+                        | Usage::TupleFieldPtrBase { pos }
+                        | Usage::ArrayIndexPtrBase { pos } | Usage::ArrayIndexPtrIndex { pos }
+                        | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
+
                         Usage::TargetPhiValue { target_kind, phi_index } => {
                             let target = target_kind.get_target(prog);
 
