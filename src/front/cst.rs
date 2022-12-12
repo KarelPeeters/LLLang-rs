@@ -125,13 +125,7 @@ impl<'a> TypeStore<'a> {
                     TypeInfo::Wildcard => write!(f, "_"),
                     TypeInfo::Void => write!(f, "void"),
                     TypeInfo::Bool => write!(f, "bool"),
-                    &TypeInfo::Int(IntTypeInfo { signed, bits }) => {
-                        let letter = match signed {
-                            Signed::Signed => "i",
-                            Signed::Unsigned => "u",
-                        };
-                        write!(f, "{}{}", letter, bits)
-                    }
+                    &TypeInfo::Int(info) => write!(f, "{}", info),
                     TypeInfo::Pointer(inner) => write!(f, "&{}", self.store.format_type(*inner)),
                     TypeInfo::Tuple(info) => write_tuple(&self.store, f, &info.fields),
                     TypeInfo::Function(info) => {
@@ -336,6 +330,16 @@ impl IntTypeInfo {
 
     pub const ISIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: PTR_SIZE_BITS };
     pub const USIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: PTR_SIZE_BITS };
+}
+
+impl Display for IntTypeInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let letter = match self.signed {
+            Signed::Signed => 'i',
+            Signed::Unsigned => 'u',
+        };
+        write!(f, "{}{}", letter, self.bits)
+    }
 }
 
 impl<'ast, T: Copy> TypeInfo<'ast, T> {

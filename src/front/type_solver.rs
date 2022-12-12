@@ -407,7 +407,7 @@ impl<'ast> TypeProblem<'ast> {
             (&TypeInfo::Int(left_info), &TypeInfo::Int(right_info)) => {
                 assert!(
                     left_info == right_info,
-                    "Integer type mismatch between {:?}: {:?} and {:?}: {:?}",
+                    "Integer type mismatch between {:?}: {} and {:?}: {}",
                     left, left_info, right, right_info,
                 );
             }
