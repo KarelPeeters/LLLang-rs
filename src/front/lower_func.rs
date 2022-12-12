@@ -458,7 +458,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 } else {
                     //check that function return type is indeed void
                     let ty_void = self.types.type_void();
-                    (flow, TypedValue { ty: ty_void, ir: ir::Value::Undef(self.prog.ty_void()) })
+                    (flow, TypedValue { ty: ty_void, ir: ir::Value::Void })
                 };
 
                 let ret = ir::Terminator::Return { value: value.ir };
@@ -835,7 +835,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         if end.reachable {
             if self.ret_ty == self.types.type_void() {
                 //automatically insert return
-                let ret = ir::Terminator::Return { value: ir::Value::Undef(self.prog.ty_void()) };
+                let ret = ir::Terminator::Return { value: ir::Value::Void };
                 self.prog.get_block_mut(end.block).terminator = ret;
             } else {
                 return Err(Error::MissingReturn(&decl.ast.id));

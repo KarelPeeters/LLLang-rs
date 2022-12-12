@@ -144,6 +144,7 @@ impl Program {
 
     pub fn type_of_value(&self, value: Value) -> Type {
         match value {
+            Value::Void => self.ty_void,
             Value::Undef(ty) => ty,
             Value::Const(cst) => cst.ty,
             Value::Func(func) => self.get_func(func).ty,
@@ -492,6 +493,7 @@ impl Terminator {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
+    Void,
     Undef(Type),
     Const(Const),
     Func(Function),
@@ -511,6 +513,7 @@ impl Value {
 
     pub fn is_const_like(self) -> bool {
         match self {
+            Value::Void => true,
             Value::Undef(_) => false,
             Value::Const(_) => true,
             Value::Func(_) => true,
@@ -675,7 +678,9 @@ impl Program {
                 let ty = self.prog.format_type(self.prog.type_of_value(self.value));
 
                 match self.value {
-                    Value::Undef(_) =>
+                    Value::Void =>
+                        write!(f, "Void"),
+                    Value::Undef(_ty) =>
                         write!(f, "Undef(: {})", ty),
                     Value::Const(cst) =>
                         write!(f, "Const({}: {})", cst.value, ty),

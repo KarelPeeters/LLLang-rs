@@ -27,7 +27,7 @@ struct LatticeMap {
 impl LatticeMap {
     fn eval(&self, value: Value) -> Lattice {
         match value {
-            Value::Undef(_) =>
+            Value::Void | Value::Undef(_) =>
                 Lattice::Undef,
             Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) =>
                 Lattice::Known(value),
@@ -37,8 +37,15 @@ impl LatticeMap {
         }
     }
 
-    fn merge_value(&mut self, todo: &mut VecDeque<Todo>, value: Value, new: Lattice) {
+    fn merge_value(&mut self, prog: &Program, todo: &mut VecDeque<Todo>, value: Value, new: Lattice) {
         assert!(matches!(value, Value::Param(_) | Value::Phi(_) | Value::Instr(_)));
+
+        // any void value can be treated as undef, this is a good central place to do it
+        let new = if prog.ty_void() == prog.type_of_value(value) {
+            Lattice::Undef
+        } else {
+            new
+        };
 
         let prev = self.eval(value);
         let next = Lattice::merge(prev, new);
@@ -149,7 +156,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                             let phi = prog.get_block(target.block).phis[phi_index];
                             let new_value = map.eval(target.phi_values[phi_index]);
 
-                            map.merge_value(&mut todo, Value::Phi(phi), new_value)
+                            map.merge_value(prog, &mut todo, Value::Phi(phi), new_value)
                         }
                         Usage::CallArgument { pos, index } => {
                             match prog.get_instr(pos.instr) {
@@ -157,7 +164,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                                     if let &Value::Func(target) = target {
                                         //merge in argument
                                         let param = prog.get_func(target).params[index];
-                                        map.merge_value(&mut todo, Value::Param(param), map.eval(args[index]));
+                                        map.merge_value(prog, &mut todo, Value::Param(param), map.eval(args[index]));
                                     } else {
                                         //nothing to do here
                                     }
@@ -190,7 +197,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                 for &usage in &use_info[func] {
                     if let Usage::CallTarget { pos } = usage {
-                        map.merge_value(&mut todo, Value::Instr(pos.instr), return_lattice);
+                        map.merge_value(prog, &mut todo, Value::Instr(pos.instr), return_lattice);
                         todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
                     }
                 }
@@ -253,7 +260,7 @@ fn update_target_reachable(prog: &Program, map: &mut LatticeMap, todo: &mut VecD
     //merge phi values
     let target_block_info = prog.get_block(target.block);
     for (&phi, &phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
-        map.merge_value(todo, Value::Phi(phi), map.eval(phi_value));
+        map.merge_value(prog, todo, Value::Phi(phi), map.eval(phi_value));
     }
 }
 
@@ -273,13 +280,13 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 Lattice::Undef => Lattice::Undef,
                 Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
             }
-        },
+        }
         &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => {
             match map.eval(base) {
                 Lattice::Undef => Lattice::Undef,
                 Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
             }
-        },
+        }
         // this instruction doesn't have a return value, so we can just use anything we want
         InstructionInfo::Store { .. } => Lattice::Undef,
         InstructionInfo::Call { target, args } => {
@@ -290,7 +297,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 //merge in arguments
                 let target_info = prog.get_func(target);
                 for (&param, &arg) in zip_eq(&target_info.params, args) {
-                    map.merge_value(todo, Value::Param(param), map.eval(arg))
+                    map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
                 }
 
                 //get return
@@ -338,7 +345,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         }
     };
 
-    map.merge_value(todo, Value::Instr(instr), result)
+    map.merge_value(prog, todo, Value::Instr(instr), result)
 }
 
 fn eval_binary(map: &mut LatticeMap, left: Value, right: Value, handle_const: impl Fn(Const, Const) -> Const) -> Lattice {
@@ -365,7 +372,7 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
         }
 
         let ty = prog.type_of_value(value);
-        if let Some(lattice_value) = lattice_value.as_value_of_type(ty) {
+        if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
             count += use_info.replace_value_usages(prog, value, lattice_value)
         }
     }

@@ -1,4 +1,4 @@
-use crate::mid::ir::{Type, Value};
+use crate::mid::ir::{Program, Type, Value};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Lattice {
@@ -19,7 +19,11 @@ impl Lattice {
         }
     }
 
-    pub fn as_value_of_type(self, ty: Type) -> Option<Value> {
+    pub fn as_value_of_type(self, prog: &Program, ty: Type) -> Option<Value> {
+        if ty == prog.ty_void() {
+            return Some(Value::Void);
+        }
+
         match self {
             Lattice::Undef => Some(Value::Undef(ty)),
             Lattice::Known(value) => Some(value),

@@ -29,7 +29,7 @@ pub fn phi_combine(prog: &mut Program) -> bool {
         // try to replace the phis with their values
         let phis = block_info.phis.clone();
         for (&phi, &phi_value) in zip(&phis, &phi_values) {
-            if let Some(value) = phi_value.as_value_of_type(prog.get_phi(phi).ty) {
+            if let Some(value) = phi_value.as_value_of_type(prog, prog.get_phi(phi).ty) {
                 let replacement_count = use_info.replace_value_usages(prog, phi.into(), value);
 
                 if replacement_count > 0 {
@@ -45,7 +45,7 @@ pub fn phi_combine(prog: &mut Program) -> bool {
 
 fn value_to_lattice(value: Value) -> Lattice {
     match value {
-        Value::Undef(_) => Lattice::Undef,
+        Value::Void | Value::Undef(_) => Lattice::Undef,
         Value::Const(_) | Value::Func(_) | Value::Param(_) | Value::Slot(_) |
         Value::Phi(_) | Value::Instr(_) | Value::Extern(_) | Value::Data(_) => Lattice::Known(value),
     }

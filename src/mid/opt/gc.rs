@@ -30,7 +30,7 @@ impl Visitor for GcVisitor {
                     state.add_value(slot);
                 }
             }
-            Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
+            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
             Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
                 // no additional tracking here
             }

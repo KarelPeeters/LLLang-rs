@@ -15,7 +15,7 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
                 let location = Location { ptr: addr, ty: load_ty };
                 let lattice = find_value_for_location_at_instr(prog, &use_info, location, block, Some(index));
 
-                if let Some(value) = lattice.as_value_of_type(load_ty) {
+                if let Some(value) = lattice.as_value_of_type(prog, load_ty) {
                     replaced += 1;
                     use_info.replace_value_usages(prog, instr.into(), value);
                 }
@@ -227,19 +227,18 @@ fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
     match ptr {
+        Value::Void | Value::Func(_) => unreachable!("Value cannot be pointer type: {:?}", ptr),
         Value::Undef(_) => Origin::Undef,
         Value::Const(_) => Origin::FuncExternal,
-        Value::Func(_) => unreachable!(),
         Value::Param(_) => Origin::FuncExternal,
         Value::Slot(slot) => Origin::FuncStackSlot(slot),
         Value::Phi(_) => Origin::Unknown,
         Value::Instr(instr) => {
             match prog.get_instr(instr) {
                 InstructionInfo::Load { .. } => Origin::Unknown,
-                InstructionInfo::Store { .. } => unreachable!(),
+                InstructionInfo::Store { .. } | InstructionInfo::Arithmetic { .. } | InstructionInfo::Comparison { .. } =>
+                    unreachable!("Instruction cannot return pointer type: {:?}", instr),
                 InstructionInfo::Call { .. } => Origin::Unknown,
-                InstructionInfo::Arithmetic { .. } => unreachable!(),
-                InstructionInfo::Comparison { .. } => unreachable!(),
                 &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, base),
                 &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, base),
             }

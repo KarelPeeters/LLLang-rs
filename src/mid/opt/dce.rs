@@ -47,8 +47,8 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         match value {
-            Value::Undef(_) | Value::Const(_) | Value::Extern(_) | Value::Data(_) | Value::Slot(_) => {
-                // no special case handling, implicitly marked as used by state
+            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Extern(_) | Value::Data(_) | Value::Slot(_) => {
+                // no additional handling (beyond maybe marking them as used, which already happens in add_value)
                 //   this also works for slots!
                 // TODO maybe only consider slots alive if they are actually loaded from?
             }

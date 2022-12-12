@@ -85,7 +85,7 @@ impl Program {
 
         let map_value = |value: Value| {
             match value {
-                Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => value,
+                Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => value,
                 Value::Param(param) => map_param.get(&param).copied().unwrap().into(),
                 Value::Slot(slot) => map_slot.get(&slot).copied().unwrap().into(),
                 Value::Phi(phi) => map_phi.get(&phi).copied().unwrap().into(),

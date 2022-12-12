@@ -281,7 +281,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         let layout = Layout::for_type(&self.prog, ty);
 
         match value {
-            Value::Undef(_) => {
+            Value::Void | Value::Undef(_) => {
                 //do nothing, just a comment for clarity
                 let str = format!("; {} = {}", target, self.prog.format_value(*value));
                 self.append_instr(&str)
@@ -353,7 +353,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         let target = target.with_size(register_size);
 
         match value {
-            Value::Undef(_) => {
+            Value::Void | Value::Undef(_) => {
                 //do nothing, just a comment for clarity
                 let str = format!("; {} = {}", target, self.prog.format_value(*value));
                 self.append_instr(&str)
