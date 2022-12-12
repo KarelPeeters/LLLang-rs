@@ -3,6 +3,7 @@ use std::mem::swap;
 use TokenType as TT;
 
 use crate::front::ast;
+use crate::front::cst::IntTypeInfo;
 use crate::front::pos::{FileId, Pos, Span};
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -45,8 +46,13 @@ declare_tokens![
 
     Void("void"),
     Bool("bool"),
-    Byte("byte"),
-    Int("int"),
+
+    U8("u8"),
+    U16("u16"),
+    U32("u32"),
+    I8("i8"),
+    I16("i16"),
+    I32("i32"),
 
     True("true"),
     False("false"),
@@ -319,8 +325,12 @@ const TYPE_START_TOKENS: &[TT] = &[
     TT::Underscore,
     TT::Void,
     TT::Bool,
-    TT::Byte,
-    TT::Int,
+    TT::U8,
+    TT::U16,
+    TT::U32,
+    TT::I8,
+    TT::I16,
+    TT::I32,
     TT::Ampersand,
     TT::Id,
     TT::OpenB,
@@ -1043,10 +1053,17 @@ impl<'s> Parser<'s> {
 
         match self.peek().ty {
             TT::Underscore => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Wildcard }),
+
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
-            TT::Byte => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Byte }),
-            TT::Int => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int }),
+
+            TT::I8 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I8) }),
+            TT::I16 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I16) }),
+            TT::I32 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I32) }),
+            TT::U8 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U8) }),
+            TT::U16 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U16) }),
+            TT::U32 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U32) }),
+
             TT::Ampersand => {
                 self.pop()?;
                 let inner = self.type_decl()?;

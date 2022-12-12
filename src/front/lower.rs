@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 use itertools::Itertools;
 
 use crate::front::{ast, cst};
-use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, IntTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
@@ -86,8 +86,10 @@ impl<'a> MappingTypeStore<'a> {
             TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
             TypeInfo::Void => prog.ty_ptr(),
             TypeInfo::Bool => prog.ty_bool(),
-            TypeInfo::Byte => prog.define_type_int(8),
-            TypeInfo::Int => prog.define_type_int(32),
+            &TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
+                // In the IR signed-ness is not a property of the type, only of the operations.
+                prog.define_type_int(bits)
+            },
             TypeInfo::Pointer(_) => prog.ty_ptr(),
             TypeInfo::Tuple(TupleTypeInfo { fields }) => {
                 let fields = fields.clone().iter()
@@ -284,7 +286,7 @@ pub fn lower_literal<'a>(
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         ast::ExpressionKind::StringLit { value } => {
-            let ty_byte = types.type_byte();
+            let ty_byte = types.type_bool();
             let ty_byte_ptr = types.define_type_ptr(ty_byte);
             check_type_match(&types, expr, ty_byte_ptr, ty)?;
 
@@ -316,7 +318,7 @@ fn check_type_match<'ast>(store: &TypeStore, expr: &'ast ast::Expression, expect
 
 fn check_integer_type<'ast>(store: &TypeStore, expr: &'ast ast::Expression, actual: cst::Type) -> Result<'ast, ()> {
     match &store[actual] {
-        TypeInfo::Byte | TypeInfo::Int => Ok(()),
+        TypeInfo::Int { .. } => Ok(()),
         _ => Err(Error::ExpectIntegerType {
             expression: expr,
             actual: store.format_type(actual).to_string(),

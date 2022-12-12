@@ -2,6 +2,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
 
+use derive_more::Constructor;
 use itertools::Itertools;
 
 use crate::front::{ast, error};
@@ -9,6 +10,7 @@ use crate::front::error::{Error, Result};
 use crate::front::lower::LRValue;
 use crate::front::scope::Scope;
 use crate::front::type_solver::TypeVar;
+use crate::mid::ir::{PTR_SIZE_BITS, Signed};
 use crate::util::arena::{Arena, ArenaSet};
 
 new_index_type!(pub Module);
@@ -31,8 +33,10 @@ pub struct TypeStore<'a> {
     ty_wildcard: Type,
     ty_void: Type,
     ty_bool: Type,
-    ty_byte: Type,
-    ty_int: Type,
+
+    ty_u8: Type,
+    ty_isize: Type,
+    ty_usize: Type,
 }
 
 impl<'a> Debug for TypeStore<'a> {
@@ -52,9 +56,12 @@ impl<'a> Default for TypeStore<'a> {
         let ty_wildcard = types.push(TypeInfo::Wildcard);
         let ty_void = types.push(TypeInfo::Void);
         let ty_bool = types.push(TypeInfo::Bool);
-        let ty_byte = types.push(TypeInfo::Byte);
-        let ty_int = types.push(TypeInfo::Int);
-        Self { types, ty_wildcard, ty_void, ty_bool, ty_byte, ty_int }
+
+        let ty_u8 = types.push(TypeInfo::Int(IntTypeInfo::U8));
+        let ty_isize = types.push(TypeInfo::Int(IntTypeInfo::ISIZE));
+        let ty_usize = types.push(TypeInfo::Int(IntTypeInfo::USIZE));
+
+        Self { types, ty_wildcard, ty_void, ty_bool, ty_u8, ty_isize, ty_usize }
     }
 }
 
@@ -67,12 +74,16 @@ impl<'a> TypeStore<'a> {
         self.ty_bool
     }
 
-    pub fn type_byte(&self) -> Type {
-        self.ty_byte
+    pub fn type_u8(&self) -> Type {
+        self.ty_u8
     }
 
-    pub fn type_int(&self) -> Type {
-        self.ty_int
+    pub fn type_isize(&self) -> Type {
+        self.ty_isize
+    }
+
+    pub fn type_usize(&self) -> Type {
+        self.ty_usize
     }
 
     pub fn new_placeholder(&mut self) -> Type {
@@ -114,8 +125,13 @@ impl<'a> TypeStore<'a> {
                     TypeInfo::Wildcard => write!(f, "_"),
                     TypeInfo::Void => write!(f, "void"),
                     TypeInfo::Bool => write!(f, "bool"),
-                    TypeInfo::Byte => write!(f, "byte"),
-                    TypeInfo::Int => write!(f, "int"),
+                    &TypeInfo::Int(IntTypeInfo { signed, bits }) => {
+                        let letter = match signed {
+                            Signed::Signed => "i",
+                            Signed::Unsigned => "u",
+                        };
+                        write!(f, "{}{}", letter, bits)
+                    }
                     TypeInfo::Pointer(inner) => write!(f, "&{}", self.store.format_type(*inner)),
                     TypeInfo::Tuple(info) => write_tuple(&self.store, f, &info.fields),
                     TypeInfo::Function(info) => {
@@ -215,21 +231,22 @@ impl<'a> ItemStore<'a> {
     ) -> Result<'a, Type> {
         match &ty.kind {
             ast::TypeKind::Wildcard => Ok(types.ty_wildcard),
+
             ast::TypeKind::Void => Ok(types.ty_void),
             ast::TypeKind::Bool => Ok(types.ty_bool),
-            ast::TypeKind::Byte => Ok(types.ty_byte),
-            ast::TypeKind::Int => Ok(types.ty_int),
+            &ast::TypeKind::Int(info) => Ok(types.define_type(TypeInfo::Int(info))),
+
             ast::TypeKind::Path(path) => self.resolve_path_type(scope_kind, scope, path),
             ast::TypeKind::Ref(inner) => {
                 let inner = self.resolve_type(scope_kind, scope, types, &*inner)?;
-                Ok(types.types.push(TypeInfo::Pointer(inner)))
+                Ok(types.define_type(TypeInfo::Pointer(inner)))
             }
             ast::TypeKind::Tuple { fields } => {
                 let fields = fields.iter()
                     .map(|field| self.resolve_type(scope_kind, scope, types, field))
                     .try_collect()?;
 
-                Ok(types.types.push(TypeInfo::Tuple(TupleTypeInfo { fields })))
+                Ok(types.define_type(TypeInfo::Tuple(TupleTypeInfo { fields })))
             }
             ast::TypeKind::Func { params, ret } => {
                 let params = params.iter()
@@ -237,11 +254,11 @@ impl<'a> ItemStore<'a> {
                     .try_collect()?;
                 let ret = self.resolve_type(scope_kind, scope, types, ret)?;
 
-                Ok(types.types.push(TypeInfo::Function(FunctionTypeInfo { params, ret })))
+                Ok(types.define_type(TypeInfo::Function(FunctionTypeInfo { params, ret })))
             }
             ast::TypeKind::Array { inner, length } => {
                 let inner = self.resolve_type(scope_kind, scope, types, inner)?;
-                Ok(types.types.push(TypeInfo::Array(ArrayTypeInfo { inner, length: *length })))
+                Ok(types.define_type(TypeInfo::Array(ArrayTypeInfo { inner, length: *length })))
             }
         }
     }
@@ -292,8 +309,7 @@ pub enum TypeInfo<'ast, T> {
 
     Void,
     Bool,
-    Byte,
-    Int,
+    Int(IntTypeInfo),
 
     Pointer(T),
 
@@ -304,7 +320,32 @@ pub enum TypeInfo<'ast, T> {
     Struct(StructTypeInfo<'ast>),
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Constructor)]
+pub struct IntTypeInfo {
+    pub signed: Signed,
+    pub bits: u32,
+}
+
+impl IntTypeInfo {
+    pub const I8: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 8 };
+    pub const I16: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 16 };
+    pub const I32: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 32 };
+    pub const U8: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 8 };
+    pub const U16: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 16 };
+    pub const U32: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 32 };
+
+    pub const ISIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: PTR_SIZE_BITS };
+    pub const USIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: PTR_SIZE_BITS };
+}
+
 impl<'ast, T: Copy> TypeInfo<'ast, T> {
+    pub fn unwrap_int(&self) -> Option<IntTypeInfo> {
+        match self {
+            &TypeInfo::Int(info) => Some(info),
+            _ => None,
+        }
+    }
+
     pub fn unwrap_ptr(&self) -> Option<T> {
         match self {
             TypeInfo::Pointer(inner) => Some(*inner),
@@ -330,8 +371,7 @@ impl<'ast, T> TypeInfo<'ast, T> {
             TypeInfo::Wildcard => TypeInfo::Wildcard,
             TypeInfo::Void => TypeInfo::Void,
             TypeInfo::Bool => TypeInfo::Bool,
-            TypeInfo::Byte => TypeInfo::Byte,
-            TypeInfo::Int => TypeInfo::Int,
+            &TypeInfo::Int(info) => TypeInfo::Int(info),
             TypeInfo::Pointer(inner) => TypeInfo::Pointer(f(inner)),
             TypeInfo::Tuple(info) => TypeInfo::Tuple(TupleTypeInfo {
                 fields: info.fields.iter().map(f).collect()

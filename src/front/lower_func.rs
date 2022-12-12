@@ -9,6 +9,7 @@ use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
+use crate::mid::ir::Signed;
 
 /// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
@@ -39,19 +40,19 @@ pub struct LoopInfo {
     has_reachable_break: bool,
 }
 
-fn binary_op_to_instr(ast_kind: ast::BinaryOp, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
+fn binary_op_to_instr(ast_kind: ast::BinaryOp, signed: Signed, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
     match ast_kind {
         ast::BinaryOp::Add => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right },
         ast::BinaryOp::Sub => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right },
-        ast::BinaryOp::Mul => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul(ir::Signed::Signed), left, right },
-        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(ir::Signed::Signed), left, right },
-        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(ir::Signed::Signed), left, right },
+        ast::BinaryOp::Mul => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul(signed), left, right },
+        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(signed), left, right },
+        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(signed), left, right },
         ast::BinaryOp::Eq => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Eq, left, right },
         ast::BinaryOp::Neq => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Neq, left, right },
-        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gte(ir::Signed::Signed), left, right },
-        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gt(ir::Signed::Signed), left, right },
-        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lte(ir::Signed::Signed), left, right },
-        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lt(ir::Signed::Signed), left, right },
+        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gte(signed), left, right },
+        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gt(signed), left, right },
+        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lte(signed), left, right },
+        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lt(signed), left, right },
     }
 }
 
@@ -287,7 +288,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     ir::Value::Instr(self.append_instr(after_right.block, instr))
                 } else {
                     //basic binary operation
-                    let instr = binary_op_to_instr(*kind, value_left.ir, value_right.ir);
+                    assert_eq!(value_left.ty, value_right.ty);
+                    let signed = self.types[value_left.ty].unwrap_int().unwrap().signed;
+                    let instr = binary_op_to_instr(*kind, signed, value_left.ir, value_right.ir);
                     ir::Value::Instr(self.append_instr(after_right.block, instr))
                 };
 
@@ -676,7 +679,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let index_ty = self.expr_type(&for_stmt.start);
                 let index_ty_ptr = self.types.define_type_ptr(index_ty);
                 let index_ty_ir = self.types.map_type(self.prog, index_ty);
-                let cst_one = self.prog.const_int_ty(index_ty_ir, 1).unwrap();
+
+                let index_signed = self.types[index_ty].unwrap_int().unwrap().signed;
+                let index_one = self.prog.const_int_ty(index_ty_ir, 1).unwrap();
 
                 //evaluate the range
                 let (flow, start_value) =
@@ -705,7 +710,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let load = s.append_instr(cond_start.block, load);
 
                     let cond = ir::InstructionInfo::Comparison {
-                        kind: ir::LogicalOp::Lt(ir::Signed::Signed),
+                        kind: ir::LogicalOp::Lt(index_signed),
                         left: ir::Value::Instr(load),
                         right: end_value.ir,
                     };
@@ -724,7 +729,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let inc = ir::InstructionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
                         left: ir::Value::Instr(load),
-                        right: cst_one.into(),
+                        right: index_one.into(),
                     };
                     let inc = s.append_instr(body_end.block, inc);
 

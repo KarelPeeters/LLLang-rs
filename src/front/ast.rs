@@ -1,3 +1,4 @@
+use crate::front::cst::IntTypeInfo;
 use crate::front::pos::Span;
 
 #[derive(Debug)]
@@ -12,8 +13,7 @@ pub enum TypeKind {
 
     Void,
     Bool,
-    Byte,
-    Int,
+    Int(IntTypeInfo),
 
     Path(Path),
 
@@ -235,7 +235,7 @@ pub enum ExpressionKind {
     StructLiteral {
         struct_path: Path,
         fields: Vec<(Identifier, Expression)>,
-    }
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

@@ -55,7 +55,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.unknown_int(expr_origin)
             }
             ast::ExpressionKind::StringLit { .. } => {
-                self.problem.known(expr_origin, TypeInfo::Pointer(self.problem.ty_byte()))
+                self.problem.known(expr_origin, TypeInfo::Pointer(self.problem.ty_u8()))
             }
             ast::ExpressionKind::Path(path) => {
                 let item = self.items.resolve_path(ScopeKind::Real, scope, path)?;
@@ -163,7 +163,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let target_ty = self.visit_expr(scope, target)?;
                 let index_ty = self.visit_expr(scope, index)?;
 
-                self.problem.equal(self.problem.ty_int(), index_ty);
+                self.problem.equal(self.problem.ty_usize(), index_ty);
                 // TODO allow array indexing on pointers
                 self.problem.array_index(expr_origin, target_ty)
             }

@@ -368,7 +368,7 @@ pub enum InstructionInfo {
     PointerOffSet { ty: Type, base: Value, index: Value },
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Signed {
     Signed,
     Unsigned,

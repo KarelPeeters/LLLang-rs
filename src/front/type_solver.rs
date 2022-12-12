@@ -1,13 +1,12 @@
 use std::collections::VecDeque;
-use std::fmt::Formatter;
 
 use itertools::Itertools;
 
-use crate::front::{ast, cst};
-use crate::front::cst::{Type, TypeInfo, TypeStore};
+use crate::front::ast;
+use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
 use crate::util::zip_eq;
 
-type VarTypeInfo<'ast> = cst::TypeInfo<'ast, TypeVar>;
+type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
 /// Represents the type of an expression in the program.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -59,8 +58,10 @@ pub struct TypeProblem<'ast> {
     //basic types
     ty_void: TypeVar,
     ty_bool: TypeVar,
-    ty_byte: TypeVar,
-    ty_int: TypeVar,
+
+    ty_u8: TypeVar,
+    ty_isize: TypeVar,
+    ty_usize: TypeVar,
 }
 
 pub struct TypeSolution {
@@ -106,14 +107,17 @@ impl<'ast> Default for TypeProblem<'ast> {
 
             ty_void: TypeVar(usize::MAX),
             ty_bool: TypeVar(usize::MAX),
-            ty_byte: TypeVar(usize::MAX),
-            ty_int: TypeVar(usize::MAX),
+            ty_u8: TypeVar(usize::MAX),
+            ty_isize: TypeVar(usize::MAX),
+            ty_usize: TypeVar(usize::MAX),
         };
 
         problem.ty_void = problem.known(Origin::FullyKnown, TypeInfo::Void);
         problem.ty_bool = problem.known(Origin::FullyKnown, TypeInfo::Bool);
-        problem.ty_byte = problem.known(Origin::FullyKnown, TypeInfo::Byte);
-        problem.ty_int = problem.known(Origin::FullyKnown, TypeInfo::Int);
+
+        problem.ty_u8 = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::U8));
+        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::ISIZE));
+        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::USIZE));
 
         problem
     }
@@ -142,12 +146,16 @@ impl<'ast> TypeProblem<'ast> {
         self.ty_bool
     }
 
-    pub fn ty_byte(&self) -> TypeVar {
-        self.ty_byte
+    pub fn ty_u8(&self) -> TypeVar {
+        self.ty_u8
     }
 
-    pub fn ty_int(&self) -> TypeVar {
-        self.ty_int
+    pub fn ty_isize(&self) -> TypeVar {
+        self.ty_isize
+    }
+
+    pub fn ty_usize(&self) -> TypeVar {
+        self.ty_usize
     }
 
     /// Create a new TypeVar without any known type information.
@@ -172,7 +180,7 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Create a new TypeVar with a fully known type.
-    pub fn fully_known(&mut self, types: &cst::TypeStore<'ast>, ty: Type) -> TypeVar {
+    pub fn fully_known(&mut self, types: &TypeStore<'ast>, ty: Type) -> TypeVar {
         let info = types[ty].map_ty(&mut |&child_ty| {
             self.fully_known(types, child_ty)
         });
@@ -232,7 +240,7 @@ impl<'ast> TypeProblem<'ast> {
                 let info = &types[ty];
 
                 match info {
-                    TypeInfo::Byte | TypeInfo::Int => {}
+                    TypeInfo::Int { .. } => {}
                     _ => panic!(
                         "Type for {:?} with origin \n{:?}\nshould be an integer, but was\n{:?}\n",
                         var, self.state[var.0].origin, info,
@@ -313,18 +321,15 @@ impl<'ast> TypeProblem<'ast> {
             };
 
             let required_right_ty = match left_info {
-                &TypeInfo::Int => TypeInfo::Int,
-                &TypeInfo::Byte => TypeInfo::Byte,
-                &TypeInfo::Pointer(_) => TypeInfo::Int,
+                &TypeInfo::Int(info) => self.known(Origin::FullyKnown, TypeInfo::Int(info)),
+                TypeInfo::Pointer(_) => self.ty_isize,
                 _ => panic!(
                     "Expected either pointer type or integer type for {:?} at {:?}, got {:?}",
                     left, self.state[0].origin, left_info
                 )
             };
 
-            let right_match = self.known(Origin::FullyKnown, required_right_ty);
-            self.matches.push_back((right, right_match));
-
+            self.matches.push_back((right, required_right_ty));
             false
         });
 
@@ -374,6 +379,7 @@ impl<'ast> TypeProblem<'ast> {
     /// Util function for `unify_var` that assumes both vars have known infos.
     fn unify_both_known(&mut self, left: TypeVar, right: TypeVar) {
         //TODO how to avoid cloning in this function?
+        //TODO we really need to get some proper error handling in here that always reports the origin of things
 
         let left_info = self.state[left.0].info.as_ref().unwrap();
         let right_info = self.state[right.0].info.as_ref().unwrap();
@@ -383,8 +389,14 @@ impl<'ast> TypeProblem<'ast> {
 
             (TypeInfo::Void, TypeInfo::Void) => {}
             (TypeInfo::Bool, TypeInfo::Bool) => {}
-            (TypeInfo::Byte, TypeInfo::Byte) => {}
-            (TypeInfo::Int, TypeInfo::Int) => {}
+
+            (&TypeInfo::Int(left_info), &TypeInfo::Int(right_info)) => {
+                assert!(
+                    left_info == right_info,
+                    "Integer type mismatch between {:?}: {:?} and {:?}: {:?}",
+                    left, left_info, right, right_info,
+                );
+            }
 
             (&TypeInfo::Pointer(left), &TypeInfo::Pointer(right)) => {
                 self.unify_var(left, right);
@@ -438,7 +450,7 @@ impl std::ops::Index<TypeVar> for TypeSolution {
 }
 
 impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "TypeProblem {{\n    vars: [")?;
 
         for i in 0..self.state.len() {
@@ -472,7 +484,7 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
 }
 
 impl std::fmt::Debug for TypeSolution {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "TypeSolution {{")?;
 
         for (i, &ty) in self.state.iter().enumerate() {
@@ -507,7 +519,7 @@ mod test {
         let mut types = TypeStore::default();
         let mut problem = TypeProblem::default();
         let (a, c, d) = (problem.unknown(origin), problem.unknown(origin), problem.unknown(origin));
-        let b = problem.known(Origin::FullyKnown, TypeInfo::Int);
+        let b = problem.ty_bool();
 
         problem.equal(a, b);
         problem.equal(b, c);
@@ -515,7 +527,7 @@ mod test {
 
         let sol = problem.solve(&mut types);
         for &var in &[a, b, c, d] {
-            assert_eq!(types.type_int(), sol[var]);
+            assert_eq!(types.type_bool(), sol[var]);
         }
     }
 
@@ -526,8 +538,8 @@ mod test {
 
         let mut types = TypeStore::default();
         let mut problem = TypeProblem::default();
-        let (a, b) = (problem.known(origin, TypeInfo::Int), problem.unknown(origin));
-        let (c, d) = (problem.unknown(origin), problem.known(origin, TypeInfo::Bool));
+        let (a, b) = (problem.ty_u8(), problem.unknown(origin));
+        let (c, d) = (problem.unknown(origin), problem.ty_bool());
 
         let t1 = problem.known(origin, TypeInfo::Tuple(TupleTypeInfo { fields: vec![a, b] }));
         let t2 = problem.known(origin, TypeInfo::Tuple(TupleTypeInfo { fields: vec![c, d] }));
@@ -535,10 +547,10 @@ mod test {
 
         let sol = problem.solve(&mut types);
 
-        let tuple_info = TupleTypeInfo { fields: vec![types.type_int(), types.type_bool()] };
+        let tuple_info = TupleTypeInfo { fields: vec![types.type_u8(), types.type_bool()] };
         let type_tuple = types.define_type(TypeInfo::Tuple(tuple_info));
-        assert_eq!(types.type_int(), sol[a]);
-        assert_eq!(types.type_int(), sol[c]);
+        assert_eq!(types.type_u8(), sol[a]);
+        assert_eq!(types.type_u8(), sol[c]);
         assert_eq!(types.type_bool(), sol[b]);
         assert_eq!(types.type_bool(), sol[d]);
         assert_eq!(type_tuple, sol[t1]);
@@ -559,13 +571,13 @@ mod test {
         let b_ptr = problem.known(origin, TypeInfo::Pointer(b));
 
         problem.equal(a_ptr, b_ptr);
-        problem.equal(problem.ty_byte(), b);
+        problem.equal(problem.ty_u8(), b);
 
         let sol = problem.solve(&mut types);
 
-        assert_eq!(types.type_byte(), sol[a]);
-        assert_eq!(types.type_byte(), sol[b]);
-        assert_eq!(types.define_type_ptr(types.type_byte()), sol[a_ptr]);
-        assert_eq!(types.define_type_ptr(types.type_byte()), sol[b_ptr]);
+        assert_eq!(types.type_u8(), sol[a]);
+        assert_eq!(types.type_u8(), sol[b]);
+        assert_eq!(types.define_type_ptr(types.type_u8()), sol[a_ptr]);
+        assert_eq!(types.define_type_ptr(types.type_u8()), sol[b_ptr]);
     }
 }

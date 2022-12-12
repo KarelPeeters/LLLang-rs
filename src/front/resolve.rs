@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front;
 use crate::front::{ast, cst};
 use crate::front::ast::{Item, ModuleContent};
-use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, IntTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 
 type AstProgram = front::Program<Option<ModuleContent>>;
@@ -229,10 +229,11 @@ fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>)
 
     if let &ScopedItem::Value(ScopedValue::Function(main_func)) = main_item {
         let actual_ty = state.items.funcs[main_func].ty;
-        let expected_ty = state.types.define_type(TypeInfo::Function(FunctionTypeInfo {
+        let expected_ty_info = FunctionTypeInfo {
             params: vec![],
-            ret: state.types.type_int(),
-        }));
+            ret: state.types.define_type(TypeInfo::Int(IntTypeInfo::I32)),
+        };
+        let expected_ty = state.types.define_type(TypeInfo::Function(expected_ty_info));
 
         if actual_ty != expected_ty {
             return Err(Error::MainFunctionWrongType {
