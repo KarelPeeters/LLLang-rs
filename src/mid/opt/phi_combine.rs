@@ -30,8 +30,11 @@ pub fn phi_combine(prog: &mut Program) -> bool {
         let phis = block_info.phis.clone();
         for (&phi, &phi_value) in zip(&phis, &phi_values) {
             if let Some(value) = phi_value.as_value_of_type(prog.get_phi(phi).ty) {
-                replaced_phis += 1;
-                use_info.replace_value_usages(prog, phi.into(), value);
+                let replacement_count = use_info.replace_value_usages(prog, phi.into(), value);
+
+                if replacement_count > 0 {
+                    replaced_phis += 1;
+                }
             }
         }
     }
