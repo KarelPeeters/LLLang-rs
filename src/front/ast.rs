@@ -187,10 +187,10 @@ pub struct Expression {
 
 #[derive(Debug)]
 pub enum ExpressionKind {
-    IntLit { value: String },
-    BoolLit { value: bool },
-    StringLit { value: String },
     Null,
+    BoolLit { value: bool },
+    IntLit { value: String },
+    StringLit { value: String },
 
     Path(Path),
 

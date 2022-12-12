@@ -5,7 +5,7 @@ use crate::front::{ast, cst};
 use crate::front::ast::MaybeIdentifier;
 use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
-use crate::front::lower::{LRValue, MappingTypeStore, TypedValue};
+use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
@@ -196,59 +196,21 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         expr: &'ast ast::Expression,
     ) -> Result<'ast, (Flow, LRValue)> {
         let result: (Flow, LRValue) = match &expr.kind {
-            ast::ExpressionKind::Null => {
+            ast::ExpressionKind::Null | ast::ExpressionKind::BoolLit { .. } | ast::ExpressionKind::IntLit { .. } | ast::ExpressionKind::StringLit { .. } => {
                 let ty = self.expr_type(expr);
-                let ir_ty = self.types.map_type(self.prog, ty);
+                let result = lower_literal(self.types, self.prog, expr, ty);
 
-                let cst = ir::Value::Const(ir::Const { ty: ir_ty, value: 0 });
-                (flow, LRValue::Right(TypedValue { ty, ir: cst }))
-            }
-            ast::ExpressionKind::BoolLit { value } => {
-                let ty_bool = self.types.type_bool();
-                let ty_bool_ir = self.prog.ty_bool();
+                // TODO this is pretty ugly but will go away when we get real type checking for constants
+                if let Err(Error::TypeMismatch { .. } | Error::ExpectIntegerType { .. } | Error::ExpectPointerType { .. }) = result {
+                    panic!("We should not be getting any type errors from literal lowering, type checking has already been done, but got {:?}", result);
+                }
 
-                let cst = ir::Value::Const(ir::Const { ty: ty_bool_ir, value: *value as i32 });
-                (flow, LRValue::Right(TypedValue { ty: ty_bool, ir: cst }))
-            }
-            ast::ExpressionKind::IntLit { value } => {
-                let ty = self.expr_type(expr);
+                if let Err(Error::ExpectedLiteral(_)) = result {
+                    unreachable!();
+                }
 
-                let size_in_bits = match self.types[ty] {
-                    TypeInfo::Byte => Ok(8),
-                    TypeInfo::Int => Ok(32),
-                    _ => Err(Error::ExpectIntegerType {
-                        expression: expr,
-                        actual: self.types.format_type(ty).to_string(),
-                    }),
-                }?;
-
-                let ty_ir = self.prog.define_type_int(size_in_bits);
-
-                //TODO this is not correct, what about negative values? also disallow byte overflow
-                let value = value.parse::<i32>()
-                    .map_err(|_| Error::InvalidLiteral {
-                        span: expr.span,
-                        lit: value.clone(),
-                        ty: self.types.format_type(ty).to_string(),
-                    })?;
-
-                let cst = ir::Value::Const(ir::Const { ty: ty_ir, value });
-
-                (flow, LRValue::Right(TypedValue { ty, ir: cst }))
-            }
-            ast::ExpressionKind::StringLit { value } => {
-                let ty_byte = self.types.type_byte();
-                let ty_byte_ptr = self.types.define_type_ptr(ty_byte);
-
-                let data = ir::DataInfo {
-                    ty: self.types.map_type(self.prog, ty_byte_ptr),
-                    inner_ty: self.types.map_type(self.prog, ty_byte),
-                    bytes: value.bytes().collect(),
-                };
-                let data = self.prog.define_data(data);
-                let data = ir::Value::Data(data);
-
-                (flow, LRValue::Right(TypedValue { ty: ty_byte_ptr, ir: data }))
+                let value = result?;
+                (flow, value)
             }
             ast::ExpressionKind::Path(path) => {
                 let item = self.items.resolve_path(ScopeKind::Real, scope, path)?;

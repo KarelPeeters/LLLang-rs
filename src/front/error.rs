@@ -38,6 +38,7 @@ pub enum Error<'a> {
     },
 
     //literals
+    ExpectedLiteral(&'a ast::Expression),
     InvalidLiteral {
         span: Span,
         lit: String,

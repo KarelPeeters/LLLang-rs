@@ -4,7 +4,6 @@ use std::ops::{Deref, DerefMut};
 use itertools::Itertools;
 
 use crate::front::{ast, cst};
-use crate::front::ast::ExpressionKind;
 use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::lower_func::LowerFuncState;
@@ -134,8 +133,8 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     //create ir data for each cst const
     let all_consts: HashMap<cst::Const, LRValue> = prog.items.consts.iter()
         .map(|(cst_const, decl)| {
-            let lr = map_constant(&mut types, &mut ir_prog, decl)?;
-            Ok((cst_const, lr))
+            let value = lower_literal(&mut types, &mut ir_prog, &decl.ast.init, decl.ty)?;
+            Ok((cst_const, value))
         }).try_collect()?;
 
     //set main function
@@ -243,56 +242,66 @@ fn map_function<'a>(
     Ok((func_ir, LRValue::Right(TypedValue { ty: decl.ty, ir: value_ir })))
 }
 
-fn map_constant<'a>(
-    store: &mut MappingTypeStore<'a>,
+// This is used both for const lowering and during lowering of literals in functions.
+// This means we do some superfluous type checking for the latter but that's not a big deal.
+// TODO use the full type solver for type checking constants as well at some point
+//   (but still don't propagate between functions, just do something per-const so we at least emit the same errors)
+pub fn lower_literal<'a>(
+    types: &mut MappingTypeStore<'a>,
     ir_prog: &mut ir::Program,
-    decl: &cst::ConstDecl<'a>,
+    expr: &'a ast::Expression,
+    ty: cst::Type,
 ) -> Result<'a, LRValue> {
-    let ty = decl.ty;
-    let init = &decl.ast.init;
+    let result = match &expr.kind {
+        ast::ExpressionKind::Null => {
+            check_ptr_type(&types, expr, ty)?;
 
-    let lr = match &init.kind {
-        ExpressionKind::IntLit { value } => {
-            check_integer_type(&store, init, ty)?;
+            let ty_ir = types.map_type(ir_prog, ty);
+            let value_ir = ir::Const { ty: ty_ir, value: 0 };
+            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
+        }
+        &ast::ExpressionKind::BoolLit { value } => {
+            check_type_match(&types, expr, types.type_bool(), ty)?;
+
+            let ty_bool_ir = ir_prog.ty_bool();
+            let value_ir = ir::Const { ty: ty_bool_ir, value: value as i32 };
+            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
+        }
+        ast::ExpressionKind::IntLit { value } => {
+            check_integer_type(&types, expr, ty)?;
+
+            // TODO proper sign and bit size handling
+            //   * don't allow overflow)
+            //   * include sign in int literal parsing
             let value = value.parse::<i32>()
                 .map_err(|_| Error::InvalidLiteral {
-                    span: init.span,
+                    span: expr.span,
                     lit: value.clone(),
-                    ty: store.format_type(ty).to_string(),
+                    ty: types.format_type(ty).to_string(),
                 })?;
-            let ty_ir = store.map_type(ir_prog, ty);
-            LRValue::Right(TypedValue { ty, ir: ir::Value::Const(ir::Const { ty: ty_ir, value }) })
-        }
-        ExpressionKind::BoolLit { value } => {
-            check_type_match(&store, init, store.type_bool(), ty)?;
-            let ty_bool_ir = ir_prog.ty_bool();
-            let value = *value as i32;
-            LRValue::Right(TypedValue { ty, ir: ir::Value::Const(ir::Const { ty: ty_bool_ir, value }) })
-        }
-        ExpressionKind::StringLit { value } => {
-            let ty_byte = store.type_byte();
-            let ty_byte_ptr = store.define_type_ptr(ty_byte);
-            check_type_match(&store, init, ty_byte_ptr, ty)?;
 
-            let ty_byte_ir = store.map_type(ir_prog, ty_byte);
-            let ty_byte_ptr_ir = store.map_type(ir_prog, ty_byte_ptr);
-
-            let bytes = value.bytes().collect_vec();
-            let data = ir::DataInfo { ty: ty_byte_ptr_ir, inner_ty: ty_byte_ir, bytes };
-            let data = ir_prog.define_data(data);
-            LRValue::Right(TypedValue { ty, ir: ir::Value::Data(data) })
+            let ty_ir = types.map_type(ir_prog, ty);
+            let value_ir = ir::Const { ty: ty_ir, value };
+            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
-        ExpressionKind::Null => {
-            check_ptr_type(&store, init, ty)?;
-            let ty_ir = store.map_type(ir_prog, ty);
+        ast::ExpressionKind::StringLit { value } => {
+            let ty_byte = types.type_byte();
+            let ty_byte_ptr = types.define_type_ptr(ty_byte);
+            check_type_match(&types, expr, ty_byte_ptr, ty)?;
 
-            let cst = ir::Const { ty: ty_ir, value: 0 };
-            LRValue::Right(TypedValue { ty, ir: ir::Value::Const(cst) })
+            let ty_byte_ir = types.map_type(ir_prog, ty_byte);
+            let ty_byte_ptr_ir = types.map_type(ir_prog, ty_byte_ptr);
+
+            let data = value.bytes().collect_vec();
+            let data_ir = ir::DataInfo { ty: ty_byte_ptr_ir, inner_ty: ty_byte_ir, bytes: data };
+            let data_ir = ir_prog.define_data(data_ir);
+
+            LRValue::Right(TypedValue { ty, ir: data_ir.into() })
         }
-        _ => panic!("for now only simple literal constants are supported"),
+        _ => return Err(Error::ExpectedLiteral(expr)),
     };
 
-    Ok(lr)
+    Ok(result)
 }
 
 fn check_type_match<'ast>(store: &TypeStore, expr: &'ast ast::Expression, expected: cst::Type, actual: cst::Type) -> Result<'ast, ()> {
