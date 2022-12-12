@@ -48,6 +48,9 @@ pub enum Usage<P = InstructionPos> {
     BinaryOperandLeft { pos: P },
     BinaryOperandRight { pos: P },
 
+    //operand in Cast
+    CastValue { pos: P },
+
     //target of TupleFieldPtr
     TupleFieldPtrBase { pos: P },
     //target of ArrayIndexPtr
@@ -126,6 +129,9 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
         &InstructionInfo::Comparison { kind: _, left, right } => {
             f(left, Usage::BinaryOperandLeft { pos });
             f(right, Usage::BinaryOperandRight { pos });
+        }
+        &InstructionInfo::IntCast { ty: _, value} => {
+            f(value, Usage::CastValue { pos })
         }
         &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
             f(base, Usage::TupleFieldPtrBase { pos });
@@ -299,6 +305,12 @@ impl UseInfo {
                         InstructionInfo::Comparison { right, .. } => {
                             repl(count, right, old, new)
                         }
+                        _ => unreachable!()
+                    }
+                }
+                Usage::CastValue { pos }=> {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::IntCast { value, .. } => repl(count, value, old, new),
                         _ => unreachable!()
                     }
                 }

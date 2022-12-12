@@ -566,6 +566,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));
                 }
+                InstructionInfo::IntCast { .. } => todo!("backend cast"),
                 InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
                     let tuple_ty = self.prog.get_type(*tuple_ty).unwrap_tuple()
                         .expect("TupleFieldPtr target should have tuple pointer type");

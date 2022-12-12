@@ -150,6 +150,9 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
+                        Usage::CastValue { pos } => {
+                            visit_instr(prog, &mut map, &mut todo, pos.instr);
+                        }
                         Usage::TargetPhiValue { target_kind, phi_index } => {
                             let target = target_kind.get_target(prog);
 
@@ -342,6 +345,10 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
 
                 Const::new(prog.ty_bool(), result as i32)
             })
+        }
+        &InstructionInfo::IntCast { ty: _, value } => {
+            // since the inner value (for a const) is always fully sign-extended, we don't actually need to do anything!
+            map.eval(value)
         }
     };
 

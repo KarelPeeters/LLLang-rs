@@ -327,6 +327,14 @@ pub enum InstructionInfo {
     /// `Comparison { kind, left: iN, right: iN } -> i1`
     Comparison { kind: LogicalOp, left: Value, right: Value },
 
+    // TODO consider casting between int and ptr as well?
+    //   think about how provenance should work :/
+    /// Cast the given value to a different type.
+    IntCast {
+        value: Value,
+        ty: Type,
+    },
+
     // TODO should this really be an instruction?
     //   kind of, otherwise we may as well switch to sea of nodes and make arithmetic no longer an instruction
     // TODO how does this fit into the untyped ptr story?
@@ -371,15 +379,16 @@ impl InstructionInfo {
         // eg a = add (a, a) or similar constructs
         // maybe change InstructionInfo to always include the result type?
         match self {
-            InstructionInfo::Load { ty, .. } => *ty,
+            &InstructionInfo::Load { ty, .. } => ty,
             InstructionInfo::Store { .. } => prog.ty_ptr(),
-            InstructionInfo::Call { target, .. } => {
-                prog.get_type(prog.type_of_value(*target)).unwrap_func()
+            &InstructionInfo::Call { target, .. } => {
+                prog.get_type(prog.type_of_value(target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
+            &InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
+            &InstructionInfo::IntCast { ty, .. } => ty,
             InstructionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
         }
@@ -406,6 +415,9 @@ impl InstructionInfo {
             InstructionInfo::Comparison { kind: _, left, right } => {
                 *left = f(*left);
                 *right = f(*right);
+            }
+            InstructionInfo::IntCast { value, ty: _ } => {
+                *value = f(*value);
             }
             InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
                 *base = f(*base);
@@ -537,6 +549,7 @@ pub struct DataInfo {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Const {
     pub ty: Type,
+    // a sign-extended version of the true value
     pub value: i32,
 }
 

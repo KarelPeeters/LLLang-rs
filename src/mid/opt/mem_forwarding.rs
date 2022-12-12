@@ -92,6 +92,7 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
             InstructionInfo::Load { .. } => {}
             InstructionInfo::Arithmetic { .. } => {}
             InstructionInfo::Comparison { .. } => {}
+            InstructionInfo::IntCast { .. } => {}
             InstructionInfo::TupleFieldPtr { .. } => {}
             InstructionInfo::PointerOffSet { .. } => {}
         }
@@ -236,7 +237,8 @@ fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
         Value::Instr(instr) => {
             match prog.get_instr(instr) {
                 InstructionInfo::Load { .. } => Origin::Unknown,
-                InstructionInfo::Store { .. } | InstructionInfo::Arithmetic { .. } | InstructionInfo::Comparison { .. } =>
+                InstructionInfo::Store { .. } | InstructionInfo::Arithmetic { .. }
+                | InstructionInfo::Comparison { .. } | InstructionInfo::IntCast { .. } =>
                     unreachable!("Instruction cannot return pointer type: {:?}", instr),
                 InstructionInfo::Call { .. } => Origin::Unknown,
                 &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, base),

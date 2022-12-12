@@ -155,6 +155,7 @@ fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
         }
         InstructionInfo::Arithmetic { kind: _, left: _, right: _ } => false,
         InstructionInfo::Comparison { kind: _, left: _, right: _ } => false,
+        InstructionInfo::IntCast { ty: _, value: _ } => false,
         InstructionInfo::TupleFieldPtr { base: _, index: _, tuple_ty: _ } => false,
         InstructionInfo::PointerOffSet { ty: _, base: _, index: _ } => false,
     }
