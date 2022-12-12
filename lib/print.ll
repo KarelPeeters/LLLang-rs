@@ -30,19 +30,19 @@ fn print_int(x: int) {
     }
 
     let buffer: [byte; 16];
-    let i = 0;
+    let buffer_size = 16;
+
+    let i = buffer_size;
 
     while x != 0 {
+        i = i - 1;
+
         let tmp: int = (x % 10);
-        buffer[i] = *((&tmp) as &byte);
+        buffer[i] = CHAR_ZERO + *((&tmp) as &byte);
         x = x / 10;
-        i = i + 1;
     }
 
-    while i != 0 {
-        i = i - 1;
-        print_char(CHAR_ZERO + buffer[i]);
-    }
+    print_str(&buffer[i], buffer_size - i);
 }
 
 fn println_str(s: &byte, len: int) {
