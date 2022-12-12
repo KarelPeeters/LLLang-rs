@@ -18,7 +18,7 @@ pub fn block_threading(prog: &mut Program) -> bool {
             // if we jump to a new block
             if let Terminator::Jump { target } = &curr_info.terminator {
                 // and are the only block that does
-                // and there are no phi args
+                // and there are no phi args (they are already removed by phi_combine anyway)
                 // and it's a different block
                 if use_info[target.block].len() == 1 && target.phi_values.len() == 0 && target.block != curr {
                     // continue on

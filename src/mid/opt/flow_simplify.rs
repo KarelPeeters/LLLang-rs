@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::mid::ir::{Block, BlockInfo, Program, Target, Terminator, Value};
 
-//TODO also consider combining instructions from multiple blocks together
+//TODO combine this with block_threading in a single pass?
 pub fn flow_simplify(prog: &mut Program) -> bool {
     let mut count_skipped = 0;
     let mut count_branch_removed = 0;

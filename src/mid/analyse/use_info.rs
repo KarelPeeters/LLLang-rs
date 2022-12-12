@@ -12,7 +12,7 @@ pub struct InstructionPos {
     pub instr: Instruction,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct BlockPos {
     pub func: Function,
     pub block: Block,
@@ -75,12 +75,12 @@ pub enum Usage<P = InstructionPos> {
     // TODO add "global" usage for functions with global_name set
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct BlockUsage {
     pub target_kind: TargetKind,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TargetKind {
     EntryFrom(Function),
     JumpFrom(BlockPos),
