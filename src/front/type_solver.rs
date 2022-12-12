@@ -4,6 +4,7 @@ use itertools::Itertools;
 
 use crate::front::ast;
 use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
+use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
 type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
@@ -22,7 +23,7 @@ struct VarState<'ast> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Constraint {
     None,
-    AnyInt,
+    AnyInt(Option<Signed>),
     DefaultVoid,
 }
 
@@ -170,8 +171,8 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Create a new TypeVar that can be assigned any integer type.
-    pub fn unknown_int(&mut self, origin: Origin<'ast>) -> TypeVar {
-        self.new_var(origin, Constraint::AnyInt, None)
+    pub fn unknown_int(&mut self, origin: Origin<'ast>, signed: Option<Signed>) -> TypeVar {
+        self.new_var(origin, Constraint::AnyInt(signed), None)
     }
 
     /// Create a new TypeVar with a known type pattern
@@ -221,6 +222,25 @@ impl<'ast> TypeProblem<'ast> {
     }
 }
 
+impl Constraint {
+    fn is_satisfied_by(self, types: &TypeStore, ty: Type) -> bool {
+        match self {
+            Constraint::None | Constraint::DefaultVoid => true,
+            Constraint::AnyInt(signed) => {
+                match types[ty] {
+                    TypeInfo::Int(info) => {
+                        match signed {
+                            Some(signed) => info.signed == signed,
+                            None => true,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
 /// Solver implementation
 impl<'ast> TypeProblem<'ast> {
     pub fn solve(mut self, types: &mut TypeStore<'ast>) -> TypeSolution {
@@ -235,19 +255,13 @@ impl<'ast> TypeProblem<'ast> {
             let var = TypeVar(i);
             let ty = self.get_solution(types, var);
 
-            //check that integer requirements are satisfied
-            if self.state[i].constraint == Constraint::AnyInt {
-                let info = &types[ty];
-
-                match info {
-                    TypeInfo::Int { .. } => {}
-                    _ => panic!(
-                        "Type for {:?} with origin \n{:?}\nshould be an integer, but was\n{:?}\n",
-                        var, self.state[var.0].origin, info,
-                    ),
-                }
+            let constraint = self.state[i].constraint;
+            if !constraint.is_satisfied_by(types, ty) {
+                panic!(
+                    "Type for {:?} with origin \n{:?}\nshould satisfy constraint {:?}, but was\n{:?}\n",
+                    var, self.state[var.0].origin, constraint, types[ty],
+                )
             }
-
             ty
         }).collect_vec();
 
@@ -459,7 +473,9 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
 
             let constraint = match state.constraint {
                 Constraint::None => "",
-                Constraint::AnyInt => "int",
+                Constraint::AnyInt(None) => "(u/i)??",
+                Constraint::AnyInt(Some(Signed::Signed)) => "i??",
+                Constraint::AnyInt(Some(Signed::Unsigned)) => "u??",
                 Constraint::DefaultVoid => "->void",
             };
 

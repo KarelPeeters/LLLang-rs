@@ -278,6 +278,7 @@ pub fn lower_literal<'a>(
 
             // TODO proper sign and bit size handling
             //   * include sign in int literal parsing
+            //     don't forget to update type checking when we change this!
             let value = value.parse::<u64>().map_err(|_| build_error(types))?;
 
             let ty_ir = types.map_type(ir_prog, ty);

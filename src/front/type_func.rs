@@ -9,6 +9,7 @@ use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{Origin, TypeProblem, TypeVar};
+use crate::mid::ir::Signed;
 
 /// The state necessary to lower a single function.
 pub struct TypeFuncState<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> {
@@ -52,7 +53,8 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.ty_bool()
             }
             ast::ExpressionKind::IntLit { .. } => {
-                self.problem.unknown_int(expr_origin)
+                // TODO in the future, if literal has a negative sign, require signed
+                self.problem.unknown_int(expr_origin, None)
             }
             ast::ExpressionKind::StringLit { .. } => {
                 self.problem.known(expr_origin, TypeInfo::Pointer(self.problem.ty_u8()))
@@ -94,13 +96,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         left_ty
                     }
                     BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                        let value_ty = self.problem.unknown_int(expr_origin);
+                        let value_ty = self.problem.unknown_int(expr_origin, None);
                         self.problem.equal(value_ty, left_ty);
                         self.problem.equal(value_ty, right_ty);
                         value_ty
                     }
                     BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
-                        let value_ty = self.problem.unknown_int(expr_origin);
+                        let value_ty = self.problem.unknown_int(expr_origin, None);
                         self.problem.equal(value_ty, left_ty);
                         self.problem.equal(value_ty, right_ty);
                         self.problem.ty_bool()
@@ -123,7 +125,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         deref_ty
                     }
                     ast::UnaryOp::Neg => {
-                        let value_ty = self.problem.unknown_int(expr_origin);
+                        let value_ty = self.problem.unknown_int(expr_origin, Some(Signed::Signed));
                         let inner_ty = self.visit_expr(scope, inner)?;
                         self.problem.equal(value_ty, inner_ty);
                         value_ty
@@ -304,7 +306,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let start_ty = self.visit_expr(scope, &for_stmt.start)?;
                 let end_ty = self.visit_expr(scope, &for_stmt.end)?;
 
-                let unknown_int = self.problem.unknown_int(Origin::ForIndex(for_stmt));
+                let unknown_int = self.problem.unknown_int(Origin::ForIndex(for_stmt), None);
                 self.problem.equal(index_ty, unknown_int);
                 self.problem.equal(index_ty, start_ty);
                 self.problem.equal(index_ty, end_ty);
