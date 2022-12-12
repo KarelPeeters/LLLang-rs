@@ -149,14 +149,17 @@ fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
         InstructionInfo::Store { addr: _, ty, value: _ } => {
             *ty != prog.ty_void()
         }
+
         InstructionInfo::Call { target: _, args: _ } => {
             // TODO somehow track side effects for a function?
             true
         }
+
         InstructionInfo::Arithmetic { kind: _, left: _, right: _ } => false,
         InstructionInfo::Comparison { kind: _, left: _, right: _ } => false,
         InstructionInfo::TupleFieldPtr { base: _, index: _, tuple_ty: _ } => false,
         InstructionInfo::PointerOffSet { ty: _, base: _, index: _ } => false,
+        InstructionInfo::Cast { ty: _, kind: _, value: _ } => false,
     }
 }
 

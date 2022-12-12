@@ -4,7 +4,7 @@ use std::num::Wrapping;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -146,7 +146,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         | Usage::StoreAddr { pos } | Usage::StoreValue { pos }
                         | Usage::TupleFieldPtrBase { pos }
                         | Usage::ArrayIndexPtrBase { pos } | Usage::ArrayIndexPtrIndex { pos }
-                        | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos } => {
+                        | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos }
+                        | Usage::CastValue { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
 
@@ -310,10 +311,10 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         &InstructionInfo::Arithmetic { kind, left, right } => {
             // TODO test whether this correct handles all of the edge cases in mul and div
             eval_binary(map, left, right, |ty, left, right| {
-                let left_signed = Wrapping(left.value_signed());
-                let right_signed = Wrapping(right.value_signed());
-                let left_unsigned = Wrapping(left.value_unsigned());
-                let right_unsigned = Wrapping(right.value_unsigned());
+                let left_signed = Wrapping(left.signed());
+                let right_signed = Wrapping(right.signed());
+                let left_unsigned = Wrapping(left.unsigned());
+                let right_unsigned = Wrapping(right.unsigned());
 
                 let result_full = match kind {
                     // we can choose either, the result would be the same
@@ -340,20 +341,42 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Eq => left == right,
                     LogicalOp::Neq => left != right,
 
-                    LogicalOp::Gt(Signed::Signed) => left.value_signed() > right.value_signed(),
-                    LogicalOp::Gte(Signed::Signed) => left.value_signed() >= right.value_signed(),
-                    LogicalOp::Lt(Signed::Signed) => left.value_signed() < right.value_signed(),
-                    LogicalOp::Lte(Signed::Signed) => left.value_signed() <= right.value_signed(),
+                    LogicalOp::Gt(Signed::Signed) => left.signed() > right.signed(),
+                    LogicalOp::Gte(Signed::Signed) => left.signed() >= right.signed(),
+                    LogicalOp::Lt(Signed::Signed) => left.signed() < right.signed(),
+                    LogicalOp::Lte(Signed::Signed) => left.signed() <= right.signed(),
 
-                    LogicalOp::Gt(Signed::Unsigned) => left.value_unsigned() > right.value_unsigned(),
-                    LogicalOp::Gte(Signed::Unsigned) => left.value_unsigned() >= right.value_unsigned(),
-                    LogicalOp::Lt(Signed::Unsigned) => left.value_unsigned() < right.value_unsigned(),
-                    LogicalOp::Lte(Signed::Unsigned) => left.value_unsigned() <= right.value_unsigned(),
+                    LogicalOp::Gt(Signed::Unsigned) => left.unsigned() > right.unsigned(),
+                    LogicalOp::Gte(Signed::Unsigned) => left.unsigned() >= right.unsigned(),
+                    LogicalOp::Lt(Signed::Unsigned) => left.unsigned() < right.unsigned(),
+                    LogicalOp::Lte(Signed::Unsigned) => left.unsigned() <= right.unsigned(),
                 };
 
                 let result = BitInt::new(1, result_bool as u64).unwrap();
                 Const::new(prog.ty_bool(), result)
             })
+        }
+        &InstructionInfo::Cast { ty, kind, value } => {
+            // check that both are integer types, since that's the only thing cast supports for now
+            let old_bits = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();
+            let new_bits = prog.get_type(ty).unwrap_int().unwrap();
+
+            match map.eval(value) {
+                Lattice::Undef => Lattice::Undef,
+                Lattice::Known(Value::Const(cst)) => {
+                    assert_eq!(cst.value.bits(), old_bits);
+
+                    let result_full = match kind {
+                        CastKind::IntTruncate => cst.value.unsigned(),
+                        CastKind::IntExtend(Signed::Signed) => cst.value.signed() as UStorage,
+                        CastKind::IntExtend(Signed::Unsigned) => cst.value.unsigned(),
+                    };
+                    let result = BitInt::new_masked(new_bits, result_full);
+
+                    Lattice::Known(Const::new(ty, result).into())
+                }
+                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
+            }
         }
     };
 

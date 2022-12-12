@@ -53,10 +53,11 @@ pub enum Usage<P = InstructionPos> {
     //target of ArrayIndexPtr
     ArrayIndexPtrBase { pos: P },
     //index of ArrayIndexPtr
-
     ArrayIndexPtrIndex { pos: P },
-    //values passed to target as phi value
 
+    CastValue { pos: P },
+
+    //values passed to target as phi value
     TargetPhiValue {
         target_kind: TargetKind,
         phi_index: usize,
@@ -133,6 +134,9 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
         &InstructionInfo::PointerOffSet { base, index, ty: _ } => {
             f(base, Usage::ArrayIndexPtrBase { pos });
             f(index, Usage::ArrayIndexPtrIndex { pos });
+        }
+        &InstructionInfo::Cast { ty: _, kind: _, value } => {
+            f(value, Usage::CastValue { pos });
         }
     }
 }
@@ -320,6 +324,13 @@ impl UseInfo {
                     match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::PointerOffSet { index, .. } =>
                             repl(count, index, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::CastValue { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::Cast { value, .. } =>
+                            repl(count, value, old, new),
                         _ => unreachable!()
                     }
                 }

@@ -366,6 +366,11 @@ pub enum InstructionInfo {
     ///
     /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
     PointerOffSet { ty: Type, base: Value, index: Value },
+
+    /// Convert `value` to `ty`. `kind` specifies additional semantics this cast will have.
+    ///
+    /// `Cast { after_ty: B, before_value: A } -> B`
+    Cast { ty: Type, kind: CastKind, value: Value },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -393,23 +398,35 @@ pub enum LogicalOp {
     Lte(Signed),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum CastKind {
+    /// Cast from an int to a possibly shorter int.
+    IntTruncate,
+    /// Cast from an int to a possibly longer int, sign- or zero-extending depending on the signedness.
+    IntExtend(Signed),
+
+    // TODO add casts between int and ptr
+    //   maybe call it bitwise? or is that something else?
+}
+
 impl InstructionInfo {
     pub fn ty(&self, prog: &Program) -> Type {
         //TODO this implementation is prone to infinite recursion!
         // eg a = add (a, a) or similar constructs
         // maybe change InstructionInfo to always include the result type?
-        match self {
-            InstructionInfo::Load { ty, .. } => *ty,
+        match *self {
+            InstructionInfo::Load { ty, .. } => ty,
             InstructionInfo::Store { .. } => prog.ty_ptr(),
             InstructionInfo::Call { target, .. } => {
-                prog.get_type(prog.type_of_value(*target)).unwrap_func()
+                prog.get_type(prog.type_of_value(target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(*left),
+            InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
             InstructionInfo::Comparison { .. } => prog.ty_bool,
             InstructionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
+            InstructionInfo::Cast { ty: after_ty, .. } => after_ty,
         }
     }
 
@@ -441,6 +458,9 @@ impl InstructionInfo {
             InstructionInfo::PointerOffSet { ty: _, base, index } => {
                 *base = f(*base);
                 *index = f(*index);
+            }
+            InstructionInfo::Cast { ty: _, kind: _, value } => {
+                *value = f(*value);
             }
         }
     }

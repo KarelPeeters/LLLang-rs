@@ -41,12 +41,12 @@ impl BitInt {
     }
 
     /// Get the zero-extended value.
-    pub fn value_unsigned(&self) -> UStorage {
+    pub fn unsigned(&self) -> UStorage {
         self.value
     }
 
     /// Get the sign-extended value.
-    pub fn value_signed(&self) -> IStorage {
+    pub fn signed(&self) -> IStorage {
         // if we don't have any bits we can't have a sign either
         if self.bits == 0 {
             return 0;
@@ -114,25 +114,25 @@ mod tests {
     #[test]
     fn test_getters_zero() {
         let x = BitInt::new(19, 0).unwrap();
-        assert_eq_bin(x.value_unsigned(), 0);
-        assert_eq_bin(x.value_signed(), 0);
+        assert_eq_bin(x.unsigned(), 0);
+        assert_eq_bin(x.signed(), 0);
     }
 
     #[test]
     fn test_getters() {
         let x = BitInt::new(3, 0b111).unwrap();
-        assert_eq_bin(x.value_unsigned(), 7);
-        assert_eq_bin(x.value_signed(), -1);
+        assert_eq_bin(x.unsigned(), 7);
+        assert_eq_bin(x.signed(), -1);
     }
 
     #[test]
     fn test_getters_max() {
         let x = BitInt::new(MAX_BITS, 17).unwrap();
-        assert_eq_bin(x.value_unsigned(), 17);
-        assert_eq_bin(x.value_signed(), 17);
+        assert_eq_bin(x.unsigned(), 17);
+        assert_eq_bin(x.signed(), 17);
 
         let y = BitInt::new(MAX_BITS, (-1i64) as UStorage).unwrap();
-        assert_eq_bin(y.value_unsigned(), (-1i64) as UStorage);
-        assert_eq_bin(y.value_signed(), -1);
+        assert_eq_bin(y.unsigned(), (-1i64) as UStorage);
+        assert_eq_bin(y.signed(), -1);
     }
 }

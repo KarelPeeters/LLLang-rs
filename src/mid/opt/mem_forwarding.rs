@@ -94,6 +94,7 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
             InstructionInfo::Comparison { .. } => {}
             InstructionInfo::TupleFieldPtr { .. } => {}
             InstructionInfo::PointerOffSet { .. } => {}
+            InstructionInfo::Cast { .. } => {}
         }
     }
 
@@ -243,6 +244,8 @@ fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
                 InstructionInfo::Call { .. } => Origin::Unknown,
                 &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, base),
                 &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, base),
+                // TODO when we add ptr/int casts maybe we can look through them?
+                InstructionInfo::Cast { .. } => Origin::Unknown,
             }
         }
         Value::Extern(_) => Origin::FuncExternal,

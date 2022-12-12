@@ -5,9 +5,11 @@ use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
+
+// TODO clean up references and dereferences in this file, they're all over the place!
 
 pub fn lower(prog: &Program) -> String {
     AsmBuilder {
@@ -290,9 +292,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Const(cst) => {
                 match layout.size {
                     0 => {} //easy
-                    1 => self.append_instr(&format!("mov {}, byte {}", target, cst.value.value_unsigned())),
-                    2 => self.append_instr(&format!("mov {}, word {}", target, cst.value.value_unsigned())),
-                    4 => self.append_instr(&format!("mov {}, dword {}", target, cst.value.value_unsigned())),
+                    1 => self.append_instr(&format!("mov {}, byte {}", target, cst.value.unsigned())),
+                    2 => self.append_instr(&format!("mov {}, word {}", target, cst.value.unsigned())),
+                    4 => self.append_instr(&format!("mov {}, dword {}", target, cst.value.unsigned())),
                     _ => panic!("only constants with power of two size <= 4 supported for now"),
                 }
             }
@@ -360,7 +362,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
-                self.append_instr(&format!("mov {}, {}", target, cst.value.value_unsigned()))
+                self.append_instr(&format!("mov {}, {}", target, cst.value.unsigned()))
             }
             Value::Func(func) => {
                 assert_eq!(layout.size, 4);
@@ -607,6 +609,22 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_value_to_reg(Register::B, base, 0);
                     self.append_instr("add eax, ebx");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
+                }
+                InstructionInfo::Cast { ty: new_ty, kind, value } => {
+                    let instr = match kind {
+                        CastKind::IntTruncate => "movzx",
+                        CastKind::IntExtend(Signed::Signed) => "movsx",
+                        CastKind::IntExtend(Signed::Unsigned) => "movzx",
+                    };
+
+                    let old_layout = Layout::for_type(&self.prog, self.prog.type_of_value(*value));
+                    let new_layout = Layout::for_type(&self.prog, *new_ty);
+                    let a = Register::A.with_size(RegisterSize::for_size(new_layout.size).unwrap().unwrap());
+                    let b = Register::B.with_size(RegisterSize::for_size(old_layout.size).unwrap().unwrap());
+
+                    self.append_instr(&format!(";Cast {:?}", kind));
+                    self.append_value_to_reg(Register::B, value, 0);
+                    self.append_instr(&format!("{} {} {}", instr, a, b));
                 }
             }
         }
