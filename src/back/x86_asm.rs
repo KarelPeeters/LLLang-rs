@@ -289,9 +289,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Value::Const(cst) => {
                 match layout.size {
                     0 => {} //easy
-                    1 => self.append_instr(&format!("mov {}, byte {}", target, cst.value)),
-                    2 => self.append_instr(&format!("mov {}, word {}", target, cst.value)),
-                    4 => self.append_instr(&format!("mov {}, dword {}", target, cst.value)),
+                    1 => self.append_instr(&format!("mov {}, byte {}", target, cst.value.value_unsigned())),
+                    2 => self.append_instr(&format!("mov {}, word {}", target, cst.value.value_unsigned())),
+                    4 => self.append_instr(&format!("mov {}, dword {}", target, cst.value.value_unsigned())),
                     _ => panic!("only constants with power of two size <= 4 supported for now"),
                 }
             }
@@ -359,7 +359,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
-                self.append_instr(&format!("mov {}, {}", target, cst.value))
+                self.append_instr(&format!("mov {}, {}", target, cst.value.value_unsigned()))
             }
             Value::Func(func) => {
                 assert_eq!(layout.size, 4);
@@ -558,10 +558,10 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     match kind {
                         LogicalOp::Eq => self.append_instr("sete cl"),
                         LogicalOp::Neq => self.append_instr("setne cl"),
-                        LogicalOp::Gte => self.append_instr("setae cl"),
-                        LogicalOp::Gt => self.append_instr("seta cl"),
-                        LogicalOp::Lte => self.append_instr("setbe cl"),
-                        LogicalOp::Lt => self.append_instr("setb cl"),
+                        LogicalOp::Gte => self.append_instr("setge cl"),
+                        LogicalOp::Gt => self.append_instr("setg cl"),
+                        LogicalOp::Lte => self.append_instr("setle cl"),
+                        LogicalOp::Lt => self.append_instr("setl cl"),
                     }
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));

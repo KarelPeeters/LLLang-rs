@@ -256,32 +256,31 @@ pub fn lower_literal<'a>(
         ast::ExpressionKind::Null => {
             check_ptr_type(&types, expr, ty)?;
 
-            let ty_ir = types.map_type(ir_prog, ty);
-            let value_ir = ir::Const { ty: ty_ir, value: 0 };
+            let value_ir = ir_prog.const_null_ptr();
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         &ast::ExpressionKind::BoolLit { value } => {
             check_type_match(&types, expr, types.type_bool(), ty)?;
 
-            let ty_bool_ir = ir_prog.ty_bool();
-            let value_ir = ir::Const { ty: ty_bool_ir, value: value as i32 };
+            let value_ir = ir_prog.const_bool(value);
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         ast::ExpressionKind::IntLit { value } => {
+            let build_error = |types: &mut MappingTypeStore| Error::InvalidLiteral {
+                span: expr.span,
+                lit: value.clone(),
+                ty: types.format_type(ty).to_string(),
+            };
+
             check_integer_type(&types, expr, ty)?;
 
             // TODO proper sign and bit size handling
-            //   * don't allow overflow)
             //   * include sign in int literal parsing
-            let value = value.parse::<i32>()
-                .map_err(|_| Error::InvalidLiteral {
-                    span: expr.span,
-                    lit: value.clone(),
-                    ty: types.format_type(ty).to_string(),
-                })?;
+            let value = value.parse::<u64>().map_err(|_| build_error(types))?;
 
             let ty_ir = types.map_type(ir_prog, ty);
-            let value_ir = ir::Const { ty: ty_ir, value };
+            let value_ir = ir_prog.const_int_ty(ty_ir, value).map_err(|_| build_error(types))?;
+
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         ast::ExpressionKind::StringLit { value } => {

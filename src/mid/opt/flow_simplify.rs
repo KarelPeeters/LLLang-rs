@@ -44,7 +44,7 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
                     }
                     Value::Const(cst) => {
                         // const condition, remove the branch and replace with final terminator
-                        let target = if cst.value != 0 { true_target } else { false_target };
+                        let target = if cst.unwrap_bool() { true_target } else { false_target };
                         count_branch_removed += 1;
 
                         let (delta, new_term) = EndPoint::find_terminator(prog, target, Some(block));

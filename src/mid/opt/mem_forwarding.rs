@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::{BlockUsage, TargetSource, UseInfo};
-use crate::mid::ir::{Block, Const, InstructionInfo, Program, StackSlot, Type, Value};
+use crate::mid::ir::{Block, InstructionInfo, Program, StackSlot, Type, Value};
 use crate::mid::util::lattice::Lattice;
 
 pub fn mem_forwarding(prog: &mut Program) -> bool {
@@ -200,8 +200,10 @@ fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
                 if prog.is_zero_sized_type(ty) {
                     return simplify_ptr(prog, base);
                 }
-                if let Value::Const(Const { ty: _, value: 0 }) = index {
-                    return simplify_ptr(prog, base);
+                if let Value::Const(cst) = index {
+                    if cst.is_zero() {
+                        return simplify_ptr(prog, base);
+                    }
                 }
             }
             &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {

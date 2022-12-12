@@ -3,7 +3,8 @@ use std::collections::{HashSet, VecDeque};
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Target, Terminator, Type, Value};
+use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
@@ -239,7 +240,7 @@ fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
             if let Value::Const(cst) = cst {
                 //if this is an actual boolean const we can fully evaluate it
                 assert_eq!(prog.ty_bool(), cst.ty);
-                let cst = cst.value != 0;
+                let cst = cst.value.unwrap_bool();
                 (cst, !cst)
             } else {
                 //otherwise consider this overdefined
@@ -271,7 +272,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         &InstructionInfo::Load { addr, ty: _ } => {
             match addr {
                 // loading from undef or null ptr returns undef
-                Value::Undef(_) | Value::Const(Const { ty: _, value: 0 }) => Lattice::Undef,
+                Value::Undef(_) => Lattice::Undef,
+                Value::Const(cst) if cst.is_zero() => Lattice::Undef,
                 _ => Lattice::Overdef,
             }
         }
@@ -307,13 +309,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
             }
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
-            eval_binary(map, left, right, |left, right| {
-                //TODO this probably doesn't handle wrapping correctly
-                assert_eq!(left.ty, right.ty);
-                let ty = left.ty;
-                let (left, right) = (left.value, right.value);
-
-                let result = match kind {
+            eval_binary(map, left, right, |ty, bits, left, right| {
+                let result_full = match kind {
                     ArithmeticOp::Add => left + right,
                     ArithmeticOp::Sub => left - right,
                     ArithmeticOp::Mul => left * right,
@@ -322,16 +319,13 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     ArithmeticOp::Mod => left % right,
                 };
 
+                let result = BitInt::new_masked(bits, result_full as UStorage);
                 Const::new(ty, result)
             })
         }
         &InstructionInfo::Comparison { kind, left, right } => {
-            eval_binary(map, left, right, |left, right| {
-                //TODO this probably doesn't handle signs correctly
-                assert_eq!(left.ty, right.ty);
-                let (left, right) = (left.value, right.value);
-
-                let result = match kind {
+            eval_binary(map, left, right, |_, _, left, right| {
+                let result_bool = match kind {
                     LogicalOp::Eq => left == right,
                     LogicalOp::Neq => left != right,
                     LogicalOp::Gte => left >= right,
@@ -340,7 +334,8 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lt => left < right,
                 };
 
-                Const::new(prog.ty_bool(), result as i32)
+                let result = BitInt::new(1, result_bool as u64).unwrap();
+                Const::new(prog.ty_bool(), result)
             })
         }
     };
@@ -348,12 +343,24 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
     map.merge_value(prog, todo, Value::Instr(instr), result)
 }
 
-fn eval_binary(map: &mut LatticeMap, left: Value, right: Value, handle_const: impl Fn(Const, Const) -> Const) -> Lattice {
+fn eval_binary(
+    map: &mut LatticeMap,
+    left: Value,
+    right: Value,
+    handle_const: impl Fn(Type, u32, i64, i64) -> Const,
+) -> Lattice {
     match (map.eval(left), map.eval(right)) {
         (Lattice::Undef, _) | (_, Lattice::Undef) => Lattice::Undef,
 
         (Lattice::Known(Value::Const(left)), Lattice::Known(Value::Const(right))) => {
-            let result = handle_const(left, right);
+            assert_eq!(left.ty, right.ty);
+            assert_eq!(left.value.bits(), right.value.bits());
+            let ty = left.ty;
+            let bits = left.value.bits();
+
+            let (left_full, right_full) = (left.value.value_signed(), right.value.value_signed());
+            let result = handle_const(ty, bits, left_full, right_full);
+
             Lattice::Known(Value::Const(result))
         }
 

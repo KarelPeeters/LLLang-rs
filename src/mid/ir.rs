@@ -2,8 +2,9 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use derive_more::From;
+use derive_more::{Constructor, From};
 
+use crate::mid::util::bit_int::{BitInt, BitOverflow, UStorage};
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
@@ -106,6 +107,7 @@ impl Default for Program {
 }
 
 impl Program {
+    // TODO maybe make self.types use internal mutability?
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)
     }
@@ -140,6 +142,26 @@ impl Program {
 
     pub fn get_type(&self, ty: Type) -> &TypeInfo {
         &self.types[ty]
+    }
+
+    pub fn const_null_ptr(&self) -> Const {
+        Const::new(self.ty_void, BitInt::new_zero(PTR_SIZE_BITS))
+    }
+
+    pub fn const_bool(&self, value: bool) -> Const {
+        // bool cannot overflow 1 bit, so unwrap error
+        Const::new(self.ty_bool, BitInt::new(1, value.into()).unwrap())
+    }
+
+    pub fn const_int_ty(&self, ty: Type, value: UStorage) -> Result<Const, BitOverflow> {
+        let bits = self.get_type(ty).unwrap_int()
+            .unwrap_or_else(|| panic!("Expected integer type, got {}", self.format_type(ty)));
+        Ok(Const::new(ty, BitInt::new(bits, value)?))
+    }
+
+    pub fn const_int_bits(&mut self, bits: u32, value: UStorage) -> Result<Const, BitOverflow> {
+        let ty = self.define_type_int(bits);
+        Ok(Const::new(ty, BitInt::new(bits, value)?))
     }
 
     pub fn type_of_value(&self, value: Value) -> Type {
@@ -198,6 +220,8 @@ pub struct ArrayType {
     pub length: u32,
 }
 
+// TODO return results instead of options here
+//  (and also do this for other option-returning things)
 impl TypeInfo {
     pub fn unwrap_int(&self) -> Option<u32> {
         match self {
@@ -534,22 +558,30 @@ pub struct DataInfo {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct Const {
-    pub ty: Type,
-    pub value: i32,
-}
-
-impl Const {
-    pub const fn new(ty: Type, value: i32) -> Self {
-        Const { ty, value }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ExternInfo {
     pub name: String,
     pub ty: Type,
+}
+
+pub type PtrStorageType = u32;
+
+pub const PTR_SIZE_BITS: u32 = PtrStorageType::BITS;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Constructor)]
+pub struct Const {
+    pub ty: Type,
+    pub value: BitInt,
+}
+
+impl Const {
+    pub fn is_zero(self) -> bool {
+        self.value.is_zero()
+    }
+
+    pub fn unwrap_bool(self) -> bool {
+        self.value.unwrap_bool()
+    }
 }
 
 //Visitors
@@ -683,7 +715,7 @@ impl Program {
                     Value::Undef(_ty) =>
                         write!(f, "Undef(: {})", ty),
                     Value::Const(cst) =>
-                        write!(f, "Const({}: {})", cst.value, ty),
+                        write!(f, "Const({:?}: {})", cst.value, ty),
                     Value::Func(func) =>
                         write!(f, "Func({:?}: {})", func.0, ty),
                     Value::Param(param) =>

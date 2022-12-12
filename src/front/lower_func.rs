@@ -127,9 +127,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     #[must_use]
     fn append_negate(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
         let ty_ir = self.prog.type_of_value(value);
+
         let instr = ir::InstructionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Sub,
-            left: ir::Value::Const(ir::Const::new(ty_ir, 0)),
+            left: self.prog.const_int_ty(ty_ir, 0).unwrap().into(),
             right: value,
         };
         ir::Value::Instr(self.append_instr(block, instr))
@@ -675,6 +676,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let index_ty = self.expr_type(&for_stmt.start);
                 let index_ty_ptr = self.types.define_type_ptr(index_ty);
                 let index_ty_ir = self.types.map_type(self.prog, index_ty);
+                let cst_one = self.prog.const_int_ty(index_ty_ir, 1).unwrap();
 
                 //evaluate the range
                 let (flow, start_value) =
@@ -722,7 +724,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let inc = ir::InstructionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
                         left: ir::Value::Instr(load),
-                        right: ir::Value::Const(ir::Const { ty: index_ty_ir, value: 1 }),
+                        right: cst_one.into(),
                     };
                     let inc = s.append_instr(body_end.block, inc);
 
