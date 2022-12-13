@@ -398,6 +398,24 @@ pub enum LogicalOp {
     Lte(Signed),
 }
 
+impl ArithmeticOp {
+    pub fn signed(self) -> Option<Signed> {
+        match self {
+            ArithmeticOp::Add | ArithmeticOp::Sub => None,
+            ArithmeticOp::Mul(s) | ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
+        }
+    }
+}
+
+impl LogicalOp {
+    pub fn signed(self) -> Option<Signed> {
+        match self {
+            LogicalOp::Eq | LogicalOp::Neq => None,
+            LogicalOp::Gt(s) | LogicalOp::Gte(s) | LogicalOp::Lt(s) | LogicalOp::Lte(s) => Some(s),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum CastKind {
     /// Cast from an int to a possibly shorter int.

@@ -339,7 +339,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
     /// Copy `value` into `reg` with the appropriate size. Panics if `value` doesn't fit into a register.
     /// Does not clobber any additional registers.
-    fn append_value_to_reg(&mut self, target: Register, value: Value, stack_delta: i32) -> RegisterSize {
+    fn append_value_to_reg(&mut self, target: Register, value: Value, signed: Option<Signed>, stack_delta: i32) -> RegisterSize {
         //TODO this is a lot of code duplication, figure out a better system for this
         //  maybe a general append_copy(source: enum Source, target: enum Target) thing?
         //  where source can then have a function to_MemRegOffset and to_register? (or either of them)
@@ -401,9 +401,13 @@ impl AsmFuncBuilder<'_, '_, '_> {
             }
         }
 
-        //clear upper bits
+        // properly extend the value
         if full_target != target {
-            self.append_instr(&format!("movzx {}, {}", full_target, target));
+            match signed {
+                None => {}
+                Some(Signed::Signed) => self.append_instr(&format!("movsx {}, {}", full_target, target)),
+                Some(Signed::Unsigned) => self.append_instr(&format!("movzx {}, {}", full_target, target)),
+            }
         }
 
         register_size
@@ -474,14 +478,14 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 &InstructionInfo::Store { addr, ty, value } => {
                     assert_eq!(ty, self.prog.type_of_value(value));
                     self.append_instr(";Store");
-                    self.append_value_to_reg(Register::B, addr, 0);
+                    self.append_value_to_reg(Register::B, addr, None, 0);
                     self.append_value_to_mem(Register::B.mem(), value, 0);
                 }
                 &InstructionInfo::Load { addr, ty } => {
                     let result_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";Load");
-                    self.append_value_to_reg(Register::B, addr, 0);
+                    self.append_value_to_reg(Register::B, addr, None, 0);
                     self.append_mem_copy(MemRegOffset::stack(instr_pos), Register::B.mem(), result_layout.size);
                 }
                 &InstructionInfo::Call { target, ref args } => {
@@ -508,7 +512,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     }
 
                     //the actual call
-                    self.append_value_to_reg(Register::A, target, stack_delta);
+                    self.append_value_to_reg(Register::A, target, None, stack_delta);
                     self.append_instr("call eax");
 
                     //copy the return register to the stack
@@ -525,8 +529,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 &InstructionInfo::Arithmetic { kind, left, right } => {
                     self.append_instr(";Arithmetic");
 
-                    let size = self.append_value_to_reg(Register::A, left, 0);
-                    self.append_value_to_reg(Register::B, right, 0);
+                    let signed = kind.signed();
+                    let size = self.append_value_to_reg(Register::A, left, signed, 0);
+                    self.append_value_to_reg(Register::B, right, signed, 0);
 
                     let a = Register::A.with_size(size);
                     let b = Register::B.with_size(size);
@@ -560,8 +565,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 &InstructionInfo::Comparison { kind, left, right } => {
                     self.append_instr(";Comparison");
 
-                    let size = self.append_value_to_reg(Register::A, left, 0);
-                    self.append_value_to_reg(Register::B, right, 0);
+                    let signed = kind.signed();
+                    let size = self.append_value_to_reg(Register::A, left, signed, 0);
+                    self.append_value_to_reg(Register::B, right, signed, 0);
 
                     self.append_instr("xor ecx, ecx");
                     self.append_instr(&format!("cmp {}, {}", Register::A.with_size(size), Register::B.with_size(size)));
@@ -593,7 +599,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     let field_offset = layout.offsets[index as usize];
 
                     self.append_instr(";TupleFieldPtr");
-                    self.append_value_to_reg(Register::A, base, 0);
+                    self.append_value_to_reg(Register::A, base, None, 0);
                     self.append_instr(&format!("add eax, {}", field_offset));
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
@@ -601,28 +607,25 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     let ty_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";ArrayIndexPtr");
-                    self.append_value_to_reg(Register::A, index, 0);
+                    self.append_value_to_reg(Register::A, index, None, 0);
                     self.append_instr(&format!("imul eax, {}", ty_layout.size));
 
-                    self.append_value_to_reg(Register::B, base, 0);
+                    self.append_value_to_reg(Register::B, base, None, 0);
                     self.append_instr("add eax, ebx");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
                 &InstructionInfo::Cast { ty: new_ty, kind, value } => {
-                    let instr = match kind {
-                        CastKind::IntTruncate => "movzx",
-                        CastKind::IntExtend(Signed::Signed) => "movsx",
-                        CastKind::IntExtend(Signed::Unsigned) => "movzx",
-                    };
-
-                    let old_layout = Layout::for_type(&self.prog, self.prog.type_of_value(value));
                     let new_layout = Layout::for_type(&self.prog, new_ty);
                     let a = Register::A.with_size(RegisterSize::for_size(new_layout.size).unwrap().unwrap());
-                    let b = Register::B.with_size(RegisterSize::for_size(old_layout.size).unwrap().unwrap());
+
+                    let signed = match kind {
+                        CastKind::IntTruncate => None,
+                        CastKind::IntExtend(signed) => Some(signed),
+                    };
 
                     self.append_instr(&format!(";Cast {:?}", kind));
-                    self.append_value_to_reg(Register::B, value, 0);
-                    self.append_instr(&format!("{} {}, {}", instr, a, b));
+                    self.append_value_to_reg(Register::A, value, signed, 0);
+                    self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }
             }
         }
@@ -636,7 +639,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let label_number = self.parent.label_number();
 
                 self.append_instr(";  cond");
-                self.append_value_to_reg(Register::A, cond, 0);
+                self.append_value_to_reg(Register::A, cond, None, 0);
                 self.append_instr("test al, al");
                 self.append_instr(&format!("jz label_{}", label_number));
 
@@ -652,7 +655,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let param_size = self.param_size;
 
                 if Layout::for_type(&self.prog, self.prog.type_of_value(value)).size != 0 {
-                    self.append_value_to_reg(Register::A, value, 0);
+                    self.append_value_to_reg(Register::A, value, None, 0);
                 }
 
                 if local_stack_size != 0 {
