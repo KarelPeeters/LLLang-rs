@@ -52,9 +52,18 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             ast::ExpressionKind::BoolLit { .. } => {
                 self.problem.ty_bool()
             }
-            ast::ExpressionKind::IntLit { .. } => {
-                // TODO in the future, if literal has a negative sign, require signed
-                self.problem.unknown_int(expr_origin, None)
+            ast::ExpressionKind::IntLit { value: _, ty: ty_lit } => {
+                // TODO should we prefer this style which always defines an unknown var,
+                //   or just immediately return the type decl like we sometimes do elsewhere (eg. declaration)?
+                let ty_expr = self.problem.unknown_int(expr_origin, None);
+
+                if let Some(ty_lit) = ty_lit {
+                    let ty_lit = self.resolve_type(scope, ty_lit)?;
+                    let ty_lit = self.problem.fully_known(&self.types, ty_lit);
+                    self.problem.equal(ty_expr, ty_lit);
+                }
+
+                ty_expr
             }
             ast::ExpressionKind::StringLit { .. } => {
                 self.problem.known(expr_origin, TypeInfo::Pointer(self.problem.ty_u8()))

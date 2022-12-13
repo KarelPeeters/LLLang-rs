@@ -917,9 +917,11 @@ impl<'s> Parser<'s> {
         match self.peek().ty {
             TT::IntLit => {
                 let token = self.pop()?;
+                let ty = self.maybe_int_ty()?;
+
                 Ok(ast::Expression {
-                    span: token.span,
-                    kind: ast::ExpressionKind::IntLit { value: token.string },
+                    span: Span::new(token.span.start, self.last_popped_end),
+                    kind: ast::ExpressionKind::IntLit { value: token.string, ty },
                 })
             }
             TT::True | TT::False => {
@@ -1048,6 +1050,27 @@ impl<'s> Parser<'s> {
             .transpose()
     }
 
+    fn maybe_int_ty(&mut self) -> Result<Option<ast::Type>> {
+        let kind = match self.peek().ty {
+            TT::I8 => Some(IntTypeInfo::I8),
+            TT::I16 => Some(IntTypeInfo::I16),
+            TT::I32 => Some(IntTypeInfo::I32),
+            TT::U8 => Some(IntTypeInfo::U8),
+            TT::U16 => Some(IntTypeInfo::U16),
+            TT::U32 => Some(IntTypeInfo::U32),
+            _ => None,
+        };
+
+        if let Some(kind) = kind {
+            Ok(Some(ast::Type {
+                span: self.pop()?.span,
+                kind: ast::TypeKind::Int(kind),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn type_decl(&mut self) -> Result<ast::Type> {
         let start_pos = self.peek().span.start;
 
@@ -1057,12 +1080,7 @@ impl<'s> Parser<'s> {
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
 
-            TT::I8 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I8) }),
-            TT::I16 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I16) }),
-            TT::I32 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::I32) }),
-            TT::U8 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U8) }),
-            TT::U16 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U16) }),
-            TT::U32 => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Int(IntTypeInfo::U32) }),
+            TT::I8 | TT::I16 | TT::I32 | TT::U8 | TT::U16 | TT::U32 => Ok(self.maybe_int_ty()?.unwrap()),
 
             TT::Ampersand => {
                 self.pop()?;

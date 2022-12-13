@@ -189,7 +189,7 @@ pub struct Expression {
 pub enum ExpressionKind {
     Null,
     BoolLit { value: bool },
-    IntLit { value: String },
+    IntLit { value: String, ty: Option<Type> },
     StringLit { value: String },
 
     Path(Path),

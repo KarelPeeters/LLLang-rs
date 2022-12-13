@@ -267,7 +267,7 @@ pub fn lower_literal<'a>(
             let value_ir = ir_prog.const_bool(value);
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
-        ast::ExpressionKind::IntLit { value } => {
+        ast::ExpressionKind::IntLit { value, ty: _ } => {
             let build_error = |types: &mut MappingTypeStore| Error::InvalidLiteral {
                 span: expr.span,
                 lit: value.clone(),
