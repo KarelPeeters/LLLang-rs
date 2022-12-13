@@ -170,13 +170,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.array_index(expr_origin, target_ty)
             }
             ast::ExpressionKind::Cast { value, ty } => {
-                let before_ty = self.visit_expr(scope, value)?;
-
-                //require that the value expression has a pointer type
-                let before_inner_ty = self.problem.unknown(expr_origin);
-                let before_ty_match = self.problem.known(expr_origin, TypeInfo::Pointer(before_inner_ty));
-                self.problem.equal(before_ty, before_ty_match);
-
+                // don't put in any type constraints, they're pretty complex and casting will destroy most of it anyway
+                // TODO revisit this when we redesign the type solver (and implement separate signed and bits for int)
+                let _before_ty = self.visit_expr(scope, value)?;
                 let after_ty = self.resolve_type(scope, ty)?;
                 self.problem.fully_known(self.types, after_ty)
             }

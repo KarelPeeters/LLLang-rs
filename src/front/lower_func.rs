@@ -1,15 +1,15 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
 use crate::front::{ast, cst};
-use crate::front::ast::MaybeIdentifier;
 use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::Signed;
+use crate::mid::ir::{CastKind, Signed};
 
 /// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
@@ -91,10 +91,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         self.type_solution[*self.expr_type_map.get(&(expr as *const _)).unwrap()]
     }
 
-    fn maybe_id_debug_name(&self, id: &MaybeIdentifier) -> String {
+    fn maybe_id_debug_name(&self, id: &ast::MaybeIdentifier) -> String {
         match id {
-            MaybeIdentifier::Identifier(id) => format!("{}.{}", self.func_debug_name, id.string),
-            MaybeIdentifier::Placeholder(_span) => format!("{}._", self.func_debug_name),
+            ast::MaybeIdentifier::Identifier(id) => format!("{}.{}", self.func_debug_name, id.string),
+            ast::MaybeIdentifier::Placeholder(_span) => format!("{}._", self.func_debug_name),
         }
     }
 
@@ -163,6 +163,41 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         let ty_ptr_ir = self.types.map_type(self.prog, ty_ptr);
 
         LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Undef(ty_ptr_ir) })
+    }
+
+    fn append_cast(&mut self, expr: &'ast ast::Expression, block: ir::Block, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
+        let ty_after_ir = self.types.map_type(self.prog, ty_after);
+
+        match (&self.types[value_before.ty], &self.types[ty_after]) {
+            (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
+                // IR pointers are untyped, so this is a no-op
+                Ok(value_before.ir)
+            }
+            (TypeInfo::Int(info_before), TypeInfo::Int(info_after)) => {
+                // Conceptually all int casting follows the following steps:
+                // * Infinitely extend the value from its original size and signedness.
+                // * Truncate at the new size.
+                // * Finally assume the new signedness.
+
+                let cast_kind = match info_after.bits.cmp(&info_before.bits) {
+                    Ordering::Equal => return Ok(value_before.ir),
+                    Ordering::Less => CastKind::IntTruncate,
+                    Ordering::Greater => CastKind::IntExtend(info_before.signed),
+                };
+
+                let instr = self.append_instr(block, ir::InstructionInfo::Cast {
+                    ty: ty_after_ir,
+                    kind: cast_kind,
+                    value: value_before.ir,
+                });
+                Ok(instr.into())
+            }
+            _ => Err(Error::InvalidCastTypes {
+                expression: expr,
+                ty_before: self.types.format_type(value_before.ty).to_string(),
+                ty_after: self.types.format_type(ty_after).to_string(),
+            })
+        }
     }
 
     fn append_if<
@@ -412,11 +447,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(array_index_ptr) }))
             }
             ast::ExpressionKind::Cast { value, ty: _ } => {
-                let (after_value, value) = self.append_expr_loaded(flow, scope, value)?;
-                let result_ty = self.expr_type(expr);
+                let (after_value, value_before) = self.append_expr_loaded(flow, scope, value)?;
 
-                // only the type changes, the (untyped) pointer value stays the same
-                (after_value, LRValue::Right(TypedValue { ty: result_ty, ir: value.ir }))
+                let ty_after = self.expr_type(expr);
+                let value_after_ir = self.append_cast(expr, after_value.block, value_before, ty_after)?;
+
+                (after_value, LRValue::Right(TypedValue { ty: ty_after, ir: value_after_ir }))
             }
             ast::ExpressionKind::Return { value } => {
                 let (after_value, value) = if let Some(value) = value {

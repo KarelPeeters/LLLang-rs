@@ -24,6 +24,11 @@ pub enum Error<'a> {
         expression: &'a ast::Expression,
         actual: TypeString,
     },
+    InvalidCastTypes {
+        expression: &'a ast::Expression,
+        ty_before: TypeString,
+        ty_after: TypeString,
+    },
 
     //dot indexing
     WrongDotIndexType {
