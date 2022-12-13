@@ -9,8 +9,6 @@ use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, Func
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
-// TODO clean up references and dereferences in this file, they're all over the place!
-
 pub fn lower(prog: &Program) -> String {
     AsmBuilder {
         prog,
@@ -197,7 +195,7 @@ impl AsmBuilder<'_> {
         };
 
         //copy over initial phi values
-        for (phi, phi_value) in zip_eq(&prog.get_block(func_info.entry.block).phis, &func_info.entry.phi_values) {
+        for (phi, &phi_value) in zip_eq(&prog.get_block(func_info.entry.block).phis, &func_info.entry.phi_values) {
             let pre_pos = func_builder.local_layout.offsets[func_builder.phi_stack_indices[phi].pre];
             func_builder.append_value_to_mem(MemRegOffset::stack(pre_pos), phi_value, 0);
         }
@@ -276,17 +274,17 @@ impl AsmFuncBuilder<'_, '_, '_> {
     }
 
     /// Copy `value` into at `target`: `*target = value`. Clobbers `eax`.
-    fn append_value_to_mem(&mut self, target: MemRegOffset, value: &Value, stack_delta: i32) {
+    fn append_value_to_mem(&mut self, target: MemRegOffset, value: Value, stack_delta: i32) {
         //TODO deduplicate this code with append_value_to_reg
         //TODO redesign this stack_delta stuff, the current implementation is just one big minefield
 
-        let ty = self.prog.type_of_value(*value);
+        let ty = self.prog.type_of_value(value);
         let layout = Layout::for_type(&self.prog, ty);
 
         match value {
             Value::Void | Value::Undef(_) => {
                 //do nothing, just a comment for clarity
-                let str = format!("; {} = {}", target, self.prog.format_value(*value));
+                let str = format!("; {} = {}", target, self.prog.format_value(value));
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
@@ -300,12 +298,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
             }
             Value::Func(func) => {
                 assert_eq!(layout.size, 4);
-                let func_number = self.parent.func_number(*func);
+                let func_number = self.parent.func_number(func);
                 self.append_instr(&format!("mov {}, dword func_{}", target, func_number));
             }
             Value::Param(param) => {
                 let param_index = self.prog.get_func(self.func).params.iter()
-                    .position(|x| x == param)
+                    .position(|&x| x == param)
                     .expect("param does not belong to this function");
 
                 let stack_pos = self.param_layout.offsets[param_index];
@@ -313,19 +311,19 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_mem_copy(target, MemRegOffset::stack(real_stack_pos), layout.size);
             }
             Value::Slot(slot) => {
-                let stack_pos = self.local_layout.offsets[self.slot_stack_indices[slot]];
+                let stack_pos = self.local_layout.offsets[self.slot_stack_indices[&slot]];
                 self.append_instr(&format!("lea eax, [esp+{}]", stack_delta + stack_pos));
                 self.append_instr(&format!("mov {}, eax", target));
             }
             Value::Phi(phi) => {
-                let stack_pos = self.local_layout.offsets[self.phi_stack_indices[phi].post];
+                let stack_pos = self.local_layout.offsets[self.phi_stack_indices[&phi].post];
                 self.append_mem_copy(target, MemRegOffset::stack(stack_delta + stack_pos), layout.size);
             }
             Value::Instr(instr) => {
-                let stack_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
+                let stack_pos = self.local_layout.offsets[self.instr_stack_indices[&instr]];
                 self.append_mem_copy(target, MemRegOffset::stack(stack_delta + stack_pos), layout.size);
             }
-            &Value::Extern(ext) => {
+            Value::Extern(ext) => {
                 assert_eq!(layout.size, 4);
                 let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, dword {}", target, name));
@@ -333,7 +331,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             }
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
-                let data_number = self.parent.data_number(*data);
+                let data_number = self.parent.data_number(data);
                 self.append_instr(&format!("mov {}, dword data_{}", target, data_number));
             }
         }
@@ -341,12 +339,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
     /// Copy `value` into `reg` with the appropriate size. Panics if `value` doesn't fit into a register.
     /// Does not clobber any additional registers.
-    fn append_value_to_reg(&mut self, target: Register, value: &Value, stack_delta: i32) -> RegisterSize {
+    fn append_value_to_reg(&mut self, target: Register, value: Value, stack_delta: i32) -> RegisterSize {
         //TODO this is a lot of code duplication, figure out a better system for this
         //  maybe a general append_copy(source: enum Source, target: enum Target) thing?
         //  where source can then have a function to_MemRegOffset and to_register? (or either of them)
 
-        let ty = self.prog.type_of_value(*value);
+        let ty = self.prog.type_of_value(value);
         let layout = Layout::for_type(&self.prog, ty);
 
         let register_size = RegisterSize::for_size(layout.size)
@@ -358,7 +356,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         match value {
             Value::Void | Value::Undef(_) => {
                 //do nothing, just a comment for clarity
-                let str = format!("; {} = {}", target, self.prog.format_value(*value));
+                let str = format!("; {} = {}", target, self.prog.format_value(value));
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
@@ -366,12 +364,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
             }
             Value::Func(func) => {
                 assert_eq!(layout.size, 4);
-                let func_number = self.parent.func_number(*func);
+                let func_number = self.parent.func_number(func);
                 self.append_instr(&format!("mov {}, func_{}", target, func_number));
             }
             Value::Param(param) => {
                 let param_index = self.prog.get_func(self.func).params.iter()
-                    .position(|x| x == param)
+                    .position(|&x| x == param)
                     .expect("param does not belong to this function");
 
                 let stack_pos = self.param_layout.offsets[param_index];
@@ -379,18 +377,18 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_instr(&format!("mov {}, [esp+{}]", target, real_stack_pos));
             }
             Value::Slot(slot) => {
-                let stack_pos = self.local_layout.offsets[self.slot_stack_indices[slot]];
+                let stack_pos = self.local_layout.offsets[self.slot_stack_indices[&slot]];
                 self.append_instr(&format!("lea {}, [esp+{}]", target, stack_delta + stack_pos));
             }
             Value::Phi(phi) => {
-                let stack_pos = self.local_layout.offsets[self.phi_stack_indices[phi].post];
+                let stack_pos = self.local_layout.offsets[self.phi_stack_indices[&phi].post];
                 self.append_instr(&format!("mov {}, [esp+{}]", target, stack_delta + stack_pos));
             }
             Value::Instr(instr) => {
-                let stack_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
+                let stack_pos = self.local_layout.offsets[self.instr_stack_indices[&instr]];
                 self.append_instr(&format!("mov {}, [esp+{}]", target, stack_delta + stack_pos));
             }
-            &Value::Extern(ext) => {
+            Value::Extern(ext) => {
                 assert_eq!(layout.size, 4);
                 let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, {}", target, name));
@@ -398,7 +396,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             }
             Value::Data(data) => {
                 assert_eq!(layout.size, 4);
-                let data_number = self.parent.data_number(*data);
+                let data_number = self.parent.data_number(data);
                 self.append_instr(&format!("mov {}, dword data_{}", target, data_number));
             }
         }
@@ -439,7 +437,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
     fn append_jump_to_target(&mut self, target: &Target) {
         let target_block_info = self.prog.get_block(target.block);
 
-        for (phi, phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
+        for (phi, &phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
             let pre_pos = self.local_layout.offsets[self.phi_stack_indices[phi].pre];
             self.append_value_to_mem(MemRegOffset::stack(pre_pos), phi_value, 0);
         }
@@ -473,23 +471,23 @@ impl AsmFuncBuilder<'_, '_, '_> {
             let instr_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
 
             match self.prog.get_instr(*instr) {
-                InstructionInfo::Store { addr, ty, value } => {
-                    assert_eq!(*ty, self.prog.type_of_value(*value));
+                &InstructionInfo::Store { addr, ty, value } => {
+                    assert_eq!(ty, self.prog.type_of_value(value));
                     self.append_instr(";Store");
                     self.append_value_to_reg(Register::B, addr, 0);
                     self.append_value_to_mem(Register::B.mem(), value, 0);
                 }
-                InstructionInfo::Load { addr, ty } => {
-                    let result_layout = Layout::for_type(self.prog, *ty);
+                &InstructionInfo::Load { addr, ty } => {
+                    let result_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";Load");
                     self.append_value_to_reg(Register::B, addr, 0);
                     self.append_mem_copy(MemRegOffset::stack(instr_pos), Register::B.mem(), result_layout.size);
                 }
-                InstructionInfo::Call { target, args } => {
+                &InstructionInfo::Call { target, ref args } => {
                     self.append_instr(";Call");
 
-                    let func_ty = self.prog.type_of_value(*target);
+                    let func_ty = self.prog.type_of_value(target);
                     let func_ty = self.prog.get_type(func_ty).unwrap_func()
                         .expect("Call target must have function type");
 
@@ -505,7 +503,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                         self.append_instr(&format!("sub esp, {}", stack_delta));
                     }
 
-                    for (arg, offset) in zip_eq(args, param_layout.offsets).rev() {
+                    for (&arg, offset) in zip_eq(args, param_layout.offsets).rev() {
                         self.append_value_to_mem(MemRegOffset::stack(offset), arg, stack_delta);
                     }
 
@@ -524,7 +522,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                         );
                     }
                 }
-                InstructionInfo::Arithmetic { kind, left, right } => {
+                &InstructionInfo::Arithmetic { kind, left, right } => {
                     self.append_instr(";Arithmetic");
 
                     let size = self.append_value_to_reg(Register::A, left, 0);
@@ -535,7 +533,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     let d = Register::D.with_size(size);
 
                     //A = op(A, B)
-                    match *kind {
+                    match kind {
                         ArithmeticOp::Add => self.append_instr(&format!("add {}, {}", a, b)),
                         ArithmeticOp::Sub => self.append_instr(&format!("sub {}, {}", a, b)),
                         ArithmeticOp::Mul(signed) => {
@@ -559,7 +557,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }
-                InstructionInfo::Comparison { kind, left, right } => {
+                &InstructionInfo::Comparison { kind, left, right } => {
                     self.append_instr(";Comparison");
 
                     let size = self.append_value_to_reg(Register::A, left, 0);
@@ -588,19 +586,19 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));
                 }
-                InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
-                    let tuple_ty = self.prog.get_type(*tuple_ty).unwrap_tuple()
+                &InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
+                    let tuple_ty = self.prog.get_type(tuple_ty).unwrap_tuple()
                         .expect("TupleFieldPtr target should have tuple pointer type");
                     let layout = TupleLayout::for_types(self.prog, tuple_ty.fields.iter().copied());
-                    let field_offset = layout.offsets[*index as usize];
+                    let field_offset = layout.offsets[index as usize];
 
                     self.append_instr(";TupleFieldPtr");
                     self.append_value_to_reg(Register::A, base, 0);
                     self.append_instr(&format!("add eax, {}", field_offset));
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::PointerOffSet { base, index, ty } => {
-                    let ty_layout = Layout::for_type(self.prog, *ty);
+                &InstructionInfo::PointerOffSet { base, index, ty } => {
+                    let ty_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";ArrayIndexPtr");
                     self.append_value_to_reg(Register::A, index, 0);
@@ -610,21 +608,21 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("add eax, ebx");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                InstructionInfo::Cast { ty: new_ty, kind, value } => {
+                &InstructionInfo::Cast { ty: new_ty, kind, value } => {
                     let instr = match kind {
                         CastKind::IntTruncate => "movzx",
                         CastKind::IntExtend(Signed::Signed) => "movsx",
                         CastKind::IntExtend(Signed::Unsigned) => "movzx",
                     };
 
-                    let old_layout = Layout::for_type(&self.prog, self.prog.type_of_value(*value));
-                    let new_layout = Layout::for_type(&self.prog, *new_ty);
+                    let old_layout = Layout::for_type(&self.prog, self.prog.type_of_value(value));
+                    let new_layout = Layout::for_type(&self.prog, new_ty);
                     let a = Register::A.with_size(RegisterSize::for_size(new_layout.size).unwrap().unwrap());
                     let b = Register::B.with_size(RegisterSize::for_size(old_layout.size).unwrap().unwrap());
 
                     self.append_instr(&format!(";Cast {:?}", kind));
                     self.append_value_to_reg(Register::B, value, 0);
-                    self.append_instr(&format!("{} {} {}", instr, a, b));
+                    self.append_instr(&format!("{} {}, {}", instr, a, b));
                 }
             }
         }
@@ -634,7 +632,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
             Terminator::Jump { target } => {
                 self.append_jump_to_target(target);
             }
-            Terminator::Branch { cond, true_target, false_target } => {
+            &Terminator::Branch { cond, ref true_target, ref false_target } => {
                 let label_number = self.parent.label_number();
 
                 self.append_instr(";  cond");
@@ -649,11 +647,11 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_ln(&format!("  label_{}:", label_number));
                 self.append_jump_to_target(false_target);
             }
-            Terminator::Return { value } => {
+            &Terminator::Return { value } => {
                 let local_stack_size = self.local_stack_size;
                 let param_size = self.param_size;
 
-                if Layout::for_type(&self.prog, self.prog.type_of_value(*value)).size != 0 {
+                if Layout::for_type(&self.prog, self.prog.type_of_value(value)).size != 0 {
                     self.append_value_to_reg(Register::A, value, 0);
                 }
 
