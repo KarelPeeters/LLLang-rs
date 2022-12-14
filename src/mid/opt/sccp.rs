@@ -331,7 +331,9 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     ArithmeticOp::Mod(Signed::Unsigned) => (left_unsigned % right_unsigned).0,
                 };
 
-                let result = BitInt::new_masked(left.bits(), result_full);
+                // TODO is this masking right? Especially for signed mul and div it's not so clear
+                let bits = left.bits();
+                let result = BitInt::from_unsigned(bits, result_full & BitInt::mask(bits)).unwrap();
                 Const::new(ty, result)
             })
         }
@@ -352,7 +354,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     LogicalOp::Lte(Signed::Unsigned) => left.unsigned() <= right.unsigned(),
                 };
 
-                let result = BitInt::new(1, result_bool as u64).unwrap();
+                let result = BitInt::from_bool(result_bool);
                 Const::new(prog.ty_bool(), result)
             })
         }
@@ -366,12 +368,21 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 Lattice::Known(Value::Const(cst)) => {
                     assert_eq!(cst.value.bits(), old_bits);
 
-                    let result_full = match kind {
-                        CastKind::IntTruncate => cst.value.unsigned(),
-                        CastKind::IntExtend(Signed::Signed) => cst.value.signed() as UStorage,
-                        CastKind::IntExtend(Signed::Unsigned) => cst.value.unsigned(),
+                    let result = match kind {
+                        CastKind::IntTruncate => {
+                            // cannot overflow, we just masked
+                            let mask = if new_bits == 0 { 0 } else { 1 << (new_bits - 1) };
+                            BitInt::from_unsigned(new_bits, cst.value.unsigned() & mask).unwrap()
+                        },
+                        CastKind::IntExtend(Signed::Signed) => {
+                            // cannot overflow, we just sign-extended for a signed value
+                            BitInt::from_signed(new_bits, cst.value.signed()).unwrap()
+                        },
+                        CastKind::IntExtend(Signed::Unsigned) => {
+                            // cannot overflow, we just zero-extended for an unsigned value
+                            BitInt::from_unsigned(new_bits, cst.value.unsigned()).unwrap()
+                        },
                     };
-                    let result = BitInt::new_masked(new_bits, result_full);
 
                     Lattice::Known(Const::new(ty, result).into())
                 }

@@ -15,25 +15,46 @@ pub struct BitInt {
 pub struct BitOverflow;
 
 impl BitInt {
-    pub fn new(bits: u32, value: UStorage) -> Result<Self, BitOverflow> {
+    /// Construct from an unsigned value. All bits above `bits` must be zero.
+    pub fn from_unsigned(bits: u32, value: UStorage) -> Result<Self, BitOverflow> {
         assert!(bits <= MAX_BITS);
-        let bits_used = MAX_BITS - value.leading_zeros();
-        if bits_used > bits {
+
+        if value & !Self::mask(bits) != 0 {
             Err(BitOverflow)
         } else {
             Ok(BitInt { bits, value })
         }
     }
 
-    pub fn new_zero(bits: u32) -> Self {
-        // zero cannot overflow
-        Self::new(bits, 0).unwrap()
+    /// Construct from an unsigned value. All bits above `bits` must match the sign value at `bits-1`.µ
+    /// As a special case we also allow bits=0 and value=0
+    pub fn from_signed(bits: u32, value: IStorage) -> Result<Self, BitOverflow> {
+        assert!(bits <= MAX_BITS);
+        let value = value as UStorage;
+
+        let sign = if bits == 0 {
+            false
+        } else {
+            value & (1 << (bits - 1)) != 0
+        };
+
+        let sign_broadcast = if sign { UStorage::MAX } else { 0 };
+        let mask_bits = Self::mask(bits);
+
+        if value & !mask_bits != sign_broadcast & !mask_bits {
+            Err(BitOverflow)
+        } else {
+            Ok(BitInt { bits, value: value & mask_bits })
+        }
     }
 
-    pub fn new_masked(bits: u32, value: UStorage) -> Self {
-        // we cannot overflow here either
-        let mask = mask(bits);
-        Self::new(bits, value & mask).unwrap()
+    pub fn zero(bits: u32) -> Self {
+        assert!(bits <= MAX_BITS);
+        BitInt { bits, value: 0 }
+    }
+
+    pub fn from_bool(value: bool) -> Self {
+        BitInt { bits: 1, value: if value { 1 } else { 0 } }
     }
 
     pub fn bits(&self) -> u32 {
@@ -56,7 +77,7 @@ impl BitInt {
         let sign = self.value & (1 << (bits - 1)) != 0;
 
         if sign {
-            let top_mask = !mask(bits);
+            let top_mask = !Self::mask(bits);
             (self.value | top_mask) as IStorage
         } else {
             self.value as IStorage
@@ -71,13 +92,13 @@ impl BitInt {
         assert!(self.bits == 1);
         self.value != 0
     }
-}
 
-fn mask(bits: u32) -> UStorage {
-    if bits == UStorage::BITS {
-        (-(1 as IStorage)) as UStorage
-    } else {
-        (1 << bits) - 1
+    pub fn mask(bits: u32) -> UStorage {
+        if bits == UStorage::BITS {
+            (-(1 as IStorage)) as UStorage
+        } else {
+            (1 << bits) - 1
+        }
     }
 }
 
@@ -85,7 +106,7 @@ fn mask(bits: u32) -> UStorage {
 mod tests {
     use std::fmt::Binary;
 
-    use crate::mid::util::bit_int::{BitInt, BitOverflow, mask, MAX_BITS, UStorage};
+    use crate::mid::util::bit_int::{BitInt, BitOverflow, MAX_BITS, UStorage};
 
     #[track_caller]
     fn assert_eq_bin<T: Eq + Binary>(left: T, right: T) {
@@ -94,45 +115,58 @@ mod tests {
 
     #[test]
     fn test_mask() {
-        assert_eq_bin(mask(0), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000);
-        assert_eq_bin(mask(1), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000001);
-        assert_eq_bin(mask(7), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_01111111);
-        assert_eq_bin(mask(32), 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111);
-        assert_eq_bin(mask(33), 0b00000000_00000000_00000000_00000001_11111111_11111111_11111111_11111111);
-        assert_eq_bin(mask(63), 0b01111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111);
-        assert_eq_bin(mask(64), 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111);
+        assert_eq_bin(BitInt::mask(0), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000);
+        assert_eq_bin(BitInt::mask(1), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000001);
+        assert_eq_bin(BitInt::mask(7), 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_01111111);
+        assert_eq_bin(BitInt::mask(32), 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111);
+        assert_eq_bin(BitInt::mask(33), 0b00000000_00000000_00000000_00000001_11111111_11111111_11111111_11111111);
+        assert_eq_bin(BitInt::mask(63), 0b01111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111);
+        assert_eq_bin(BitInt::mask(64), 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111);
     }
 
     #[test]
     fn test_overflow() {
-        assert_match!(BitInt::new(0, 0b111), Err(BitOverflow));
-        assert_match!(BitInt::new(0, 0), Ok(_));
-        assert_match!(BitInt::new(16, 1 << 17), Err(BitOverflow));
-        assert_match!(BitInt::new(16, 1 << 15), Ok(_));
+        assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(0, 0), Ok(_));
+        assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow));
+
+        assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(16, 1 << 15), Ok(_));
     }
 
     #[test]
     fn test_getters_zero() {
-        let x = BitInt::new(19, 0).unwrap();
+        let x = BitInt::from_unsigned(19, 0).unwrap();
         assert_eq_bin(x.unsigned(), 0);
         assert_eq_bin(x.signed(), 0);
     }
 
     #[test]
     fn test_getters() {
-        let x = BitInt::new(3, 0b111).unwrap();
+        let x = BitInt::from_unsigned(3, 0b111).unwrap();
         assert_eq_bin(x.unsigned(), 7);
         assert_eq_bin(x.signed(), -1);
     }
 
     #[test]
     fn test_getters_max() {
-        let x = BitInt::new(MAX_BITS, 17).unwrap();
+        let x = BitInt::from_unsigned(MAX_BITS, 17).unwrap();
         assert_eq_bin(x.unsigned(), 17);
         assert_eq_bin(x.signed(), 17);
 
-        let y = BitInt::new(MAX_BITS, (-1i64) as UStorage).unwrap();
+        let y = BitInt::from_unsigned(MAX_BITS, (-1i64) as UStorage).unwrap();
         assert_eq_bin(y.unsigned(), (-1i64) as UStorage);
         assert_eq_bin(y.signed(), -1);
+    }
+
+    #[test]
+    fn test_from_signed() {
+        let zero = BitInt::from_signed(4, 0).unwrap();
+        assert_eq_bin(zero.signed(), 0);
+        assert_eq_bin(zero.unsigned(), 0);
+
+        let neg_one = BitInt::from_signed(4, -1).unwrap();
+        assert_eq_bin(neg_one.signed(), -1);
+        assert_eq_bin(neg_one.unsigned(), 0b1111);
     }
 }

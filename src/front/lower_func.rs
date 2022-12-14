@@ -10,6 +10,7 @@ use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
 use crate::mid::ir::{CastKind, Signed};
+use crate::mid::util::bit_int::BitInt;
 
 /// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
@@ -128,10 +129,11 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     #[must_use]
     fn append_negate(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
         let ty_ir = self.prog.type_of_value(value);
+        let bits = self.prog.get_type(ty_ir).unwrap_int().unwrap();
 
         let instr = ir::InstructionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Sub,
-            left: self.prog.const_int_ty(ty_ir, 0).unwrap().into(),
+            left: ir::Const { ty: ty_ir, value: BitInt::zero(bits) }.into(),
             right: value,
         };
         ir::Value::Instr(self.append_instr(block, instr))
@@ -234,19 +236,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     ) -> Result<'ast, (Flow, LRValue)> {
         let result: (Flow, LRValue) = match &expr.kind {
             ast::ExpressionKind::Null | ast::ExpressionKind::BoolLit { .. } | ast::ExpressionKind::IntLit { .. } | ast::ExpressionKind::StringLit { .. } => {
-                let ty = self.expr_type(expr);
-                let result = lower_literal(self.types, self.prog, expr, ty);
-
-                // TODO this is pretty ugly but will go away when we get real type checking for constants
-                if let Err(Error::TypeMismatch { .. } | Error::ExpectIntegerType { .. } | Error::ExpectPointerType { .. }) = result {
-                    panic!("We should not be getting any type errors from literal lowering, type checking has already been done, but got {:?}", result);
-                }
-
-                if let Err(Error::ExpectedLiteral(_)) = result {
-                    unreachable!();
-                }
-
-                let value = result?;
+                let value = self.lower_literal(expr)?;
                 (flow, value)
             }
             ast::ExpressionKind::Path(path) => {
@@ -352,12 +342,22 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         (after_value, LRValue::Left(value))
                     }
                     ast::UnaryOp::Neg => {
-                        let (after_inner, inner) =
-                            self.append_expr_loaded(flow, scope, inner)?;
-                        let ty = inner.ty;
+                        match &inner.kind {
+                            // this entire expression is actually an integer literal with sign
+                            ast::ExpressionKind::IntLit { .. } => {
+                                let value = self.lower_literal(expr)?;
+                                (flow, value)
+                            },
+                            // it's just an ordinary negate expression
+                            _ => {
+                                let (after_inner, inner) =
+                                    self.append_expr_loaded(flow, scope, inner)?;
+                                let ty = inner.ty;
 
-                        let result = self.append_negate(after_inner.block, inner.ir);
-                        (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
+                                let result = self.append_negate(after_inner.block, inner.ir);
+                                (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
+                            },
+                        }
                     }
                 }
             }
@@ -524,6 +524,22 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         }
 
         Ok(result)
+    }
+
+    fn lower_literal(&mut self, expr: &'ast ast::Expression) -> Result<'ast, LRValue> {
+        let ty = self.expr_type(expr);
+        let result = lower_literal(self.types, self.prog, expr, ty);
+
+        // TODO this is pretty ugly but will go away when we get real type checking for constants
+        if let Err(Error::TypeMismatch { .. } | Error::ExpectIntegerType { .. } | Error::ExpectPointerType { .. }) = result {
+            panic!("We should not be getting any type errors from literal lowering, type checking has already been done, but got {:?}", result);
+        }
+
+        if let Err(Error::ExpectedLiteral(_)) = result {
+            unreachable!();
+        }
+
+        result
     }
 
     fn append_break_or_continue(
@@ -716,8 +732,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let index_ty_ptr = self.types.define_type_ptr(index_ty);
                 let index_ty_ir = self.types.map_type(self.prog, index_ty);
 
-                let index_signed = self.types[index_ty].unwrap_int().unwrap().signed;
-                let index_one = self.prog.const_int_ty(index_ty_ir, 1).unwrap();
+                let index_info = self.types[index_ty].unwrap_int().unwrap();
+                let const_one = ir::Const { ty: index_ty_ir, value: BitInt::from_unsigned(index_info.bits, 1).unwrap() };
 
                 //evaluate the range
                 let (flow, start_value) =
@@ -746,7 +762,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let load = s.append_instr(cond_start.block, load);
 
                     let cond = ir::InstructionInfo::Comparison {
-                        kind: ir::LogicalOp::Lt(index_signed),
+                        kind: ir::LogicalOp::Lt(index_info.signed),
                         left: ir::Value::Instr(load),
                         right: end_value.ir,
                     };
@@ -765,7 +781,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let inc = ir::InstructionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
                         left: ir::Value::Instr(load),
-                        right: index_one.into(),
+                        right: const_one.into(),
                     };
                     let inc = s.append_instr(body_end.block, inc);
 

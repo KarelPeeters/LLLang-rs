@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use derive_more::{Constructor, From};
 
-use crate::mid::util::bit_int::{BitInt, BitOverflow, UStorage};
+use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
@@ -145,23 +145,11 @@ impl Program {
     }
 
     pub fn const_null_ptr(&self) -> Const {
-        Const::new(self.ty_void, BitInt::new_zero(PTR_SIZE_BITS))
+        Const::new(self.ty_void, BitInt::zero(PTR_SIZE_BITS))
     }
 
     pub fn const_bool(&self, value: bool) -> Const {
-        // bool cannot overflow 1 bit, so unwrap error
-        Const::new(self.ty_bool, BitInt::new(1, value.into()).unwrap())
-    }
-
-    pub fn const_int_ty(&self, ty: Type, value: UStorage) -> Result<Const, BitOverflow> {
-        let bits = self.get_type(ty).unwrap_int()
-            .unwrap_or_else(|| panic!("Expected integer type, got {}", self.format_type(ty)));
-        Ok(Const::new(ty, BitInt::new(bits, value)?))
-    }
-
-    pub fn const_int_bits(&mut self, bits: u32, value: UStorage) -> Result<Const, BitOverflow> {
-        let ty = self.define_type_int(bits);
-        Ok(Const::new(ty, BitInt::new(bits, value)?))
+        Const::new(self.ty_bool, BitInt::from_bool(value))
     }
 
     pub fn type_of_value(&self, value: Value) -> Type {
