@@ -236,7 +236,7 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
     })
 }
 
-/// Find the main function, the function called `main` in the root module `main` that must have type `() -> int`.
+/// Find the main function: the function called `main` in the root module `main` that must have type `() -> u32`.
 fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, cst::Function> {
     let main_module = mapped.root.submodules.get("main")
         .ok_or(Error::NoMainModule)?;
@@ -248,7 +248,7 @@ fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>)
         let actual_ty = state.items.funcs[main_func].ty;
         let expected_ty_info = FunctionTypeInfo {
             params: vec![],
-            ret: state.types.define_type(TypeInfo::Int(IntTypeInfo::I32)),
+            ret: state.types.define_type(TypeInfo::Int(IntTypeInfo::U32)),
         };
         let expected_ty = state.types.define_type(TypeInfo::Function(expected_ty_info));
 

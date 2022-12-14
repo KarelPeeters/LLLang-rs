@@ -6,8 +6,8 @@ use crate::root::util::{get_debug_func, parse_ir_standalone};
 #[test]
 fn simple_test() {
     let mut prog = parse_ir_standalone(r#"
-        fn foo(x: i32) -> i32 { return x + 1; }
-        fn main() -> i32 { return foo(4); }
+        fn foo(x: u32) -> u32 { return x + 1; }
+        fn main() -> u32 { return foo(4); }
     "#);
 
     let foo = get_debug_func(&prog, "foo");
