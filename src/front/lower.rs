@@ -300,7 +300,7 @@ pub fn lower_literal<'a>(
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         ast::ExpressionKind::StringLit { value } => {
-            let ty_byte = types.type_bool();
+            let ty_byte = types.define_type(TypeInfo::Int(IntTypeInfo::U8));
             let ty_byte_ptr = types.define_type_ptr(ty_byte);
             check_type_match(&types, expr, ty_byte_ptr, ty)?;
 
