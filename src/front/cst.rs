@@ -90,17 +90,45 @@ impl<'a> TypeStore<'a> {
         self.types.push(TypeInfo::Placeholder(self.types.len()))
     }
 
-    pub fn replace_placeholder(&mut self, ph: Type, info: BasicTypeInfo<'a>) {
-        let old_info = self.types.replace(ph, info);
-        assert!(matches!(old_info, TypeInfo::Placeholder(_)), "tried to replace non-placeholder type {:?}", old_info)
-    }
-
     pub fn define_type(&mut self, info: BasicTypeInfo<'a>) -> Type {
         self.types.push(info)
     }
 
     pub fn define_type_ptr(&mut self, inner: Type) -> Type {
         self.define_type(TypeInfo::Pointer(inner))
+    }
+
+    pub fn map_placeholder_types(&mut self, ty: Type, mut f: &mut impl FnMut(usize) -> Type) -> Type {
+        // TODO can we avoid cloning here?
+        // TODO more generally this entire thing sucks, is there a workaround?
+        let new_info = match self[ty] {
+            TypeInfo::Placeholder(index) => return f(index),
+            TypeInfo::Wildcard => TypeInfo::Wildcard,
+            TypeInfo::Void => TypeInfo::Void,
+            TypeInfo::Bool => TypeInfo::Bool,
+            TypeInfo::Int(info) => TypeInfo::Int(info),
+            TypeInfo::Pointer(inner) => TypeInfo::Pointer(self.map_placeholder_types(inner, f)),
+            TypeInfo::Tuple(TupleTypeInfo { ref fields }) => TypeInfo::Tuple(TupleTypeInfo {
+                fields: fields.clone().into_iter().map(|field| self.map_placeholder_types(field, f)).collect(),
+            }),
+            TypeInfo::Function(FunctionTypeInfo { ref params, ret }) => TypeInfo::Function(FunctionTypeInfo {
+                params: params.clone().into_iter().map(|param| self.map_placeholder_types(param, f)).collect(),
+                ret: self.map_placeholder_types(ret, f),
+            }),
+            TypeInfo::Array(ArrayTypeInfo { inner, length }) => TypeInfo::Array(ArrayTypeInfo {
+                inner: self.map_placeholder_types(inner, f),
+                length,
+            }),
+            TypeInfo::Struct(StructTypeInfo { decl, ref fields }) => TypeInfo::Struct(StructTypeInfo {
+                decl,
+                fields: fields.iter().map(
+                    |&StructFieldInfo { id, ty} | StructFieldInfo {
+                    id,
+                    ty: self.map_placeholder_types(ty, f),
+                }).collect(),
+            }),
+        };
+        self.define_type(new_info)
     }
 
     pub fn format_type(&self, ty: Type) -> impl Display + '_ {
