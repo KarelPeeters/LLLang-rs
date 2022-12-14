@@ -288,11 +288,20 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
+                assert_eq!(cst.value.bits(), 8 * layout.size as u32);
+
+                // if signed and unsigned differ add the latter as a clarifying comment
+                let value = if cst.value.signed() < 0 {
+                    format!("{}; ={}", cst.value.unsigned(), cst.value.signed())
+                } else {
+                    format!("{}", cst.value.unsigned())
+                };
+
                 match layout.size {
                     0 => {} //easy
-                    1 => self.append_instr(&format!("mov {}, byte {}", target, cst.value.unsigned())),
-                    2 => self.append_instr(&format!("mov {}, word {}", target, cst.value.unsigned())),
-                    4 => self.append_instr(&format!("mov {}, dword {}", target, cst.value.unsigned())),
+                    1 => self.append_instr(&format!("mov {}, byte {}", target, value)),
+                    2 => self.append_instr(&format!("mov {}, word {}", target, value)),
+                    4 => self.append_instr(&format!("mov {}, dword {}", target, value)),
                     _ => panic!("only constants with power of two size <= 4 supported for now"),
                 }
             }
@@ -546,12 +555,8 @@ impl AsmFuncBuilder<'_, '_, '_> {
                                 Signed::Signed => "imul",
                                 Signed::Unsigned => "mul",
                             };
-
-                            if size == RegisterSize::S8 {
-                                self.append_instr(&format!("{} bx", instr));
-                            } else {
-                                self.append_instr(&format!("{} {}, {}", instr, a, b));
-                            }
+                            // Register A is implicitly used as the output and rhs.
+                            self.append_instr(&format!("{} {}", instr, b));
                         }
                         ArithmeticOp::Div(signed) => self.append_div(size, signed),
                         ArithmeticOp::Mod(signed) => {
@@ -654,6 +659,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let local_stack_size = self.local_stack_size;
                 let param_size = self.param_size;
 
+                // TODO implement return for larger types
                 if Layout::for_type(&self.prog, self.prog.type_of_value(value)).size != 0 {
                     self.append_value_to_reg(Register::A, value, None, 0);
                 }
