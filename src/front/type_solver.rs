@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front::ast;
 use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
 use crate::mid::ir::Signed;
-use crate::util::zip_eq;
+use crate::util::{IndexMutTwice, zip_eq};
 
 type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
@@ -15,16 +15,20 @@ pub struct TypeVar(usize);
 
 #[derive(Debug)]
 struct VarState<'ast> {
+    // these never change after initial creation
     origin: Origin<'ast>,
-    constraint: Constraint,
+    must_be_int: MustBeInt,
+
+    // these change during solving
+    default_void: bool,
     info: Option<VarTypeInfo<'ast>>,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum Constraint {
-    None,
-    AnyInt(Option<Signed>),
-    DefaultVoid,
+#[derive(Debug, Copy, Clone)]
+enum MustBeInt {
+    // Must be an integer, and if Some(signed) it must have the given signedness.
+    Yes(Option<Signed>),
+    No,
 }
 
 #[derive(Copy, Clone)]
@@ -130,12 +134,12 @@ impl<'ast> TypeProblem<'ast> {
         self.state.len()
     }
 
-    fn new_var(&mut self, origin: Origin<'ast>, constraint: Constraint, info: Option<VarTypeInfo<'ast>>) -> TypeVar {
+    fn new_var(&mut self, origin: Origin<'ast>, info: Option<VarTypeInfo<'ast>>, must_be_int: MustBeInt, default_void: bool) -> TypeVar {
         // Some(Wildcard) means that we don't know anything about a type, so convert it to None
         let info = info.filter(|info| info != &VarTypeInfo::Wildcard);
 
         let i = self.state.len();
-        self.state.push(VarState { origin, constraint, info });
+        self.state.push(VarState { origin, must_be_int, default_void, info });
         TypeVar(i)
     }
 
@@ -161,23 +165,23 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Create a new TypeVar without any known type information.
     pub fn unknown(&mut self, origin: Origin<'ast>) -> TypeVar {
-        self.new_var(origin, Constraint::None, None)
+        self.new_var(origin, None, MustBeInt::No, false)
     }
 
     /// Create a new TypeVar without a known type, but that gets assigned the void type if at the end of inference this
     /// type still has no inferred type.
     pub fn unknown_default_void(&mut self, origin: Origin<'ast>) -> TypeVar {
-        self.new_var(origin, Constraint::DefaultVoid, None)
+        self.new_var(origin, None, MustBeInt::No, true)
     }
 
     /// Create a new TypeVar that can be assigned any integer type.
     pub fn unknown_int(&mut self, origin: Origin<'ast>, signed: Option<Signed>) -> TypeVar {
-        self.new_var(origin, Constraint::AnyInt(signed), None)
+        self.new_var(origin, None, MustBeInt::Yes(signed), false)
     }
 
     /// Create a new TypeVar with a known type pattern
     pub fn known(&mut self, origin: Origin<'ast>, info: VarTypeInfo<'ast>) -> TypeVar {
-        self.new_var(origin, Constraint::None, Some(info))
+        self.new_var(origin, Some(info), MustBeInt::No, false)
     }
 
     /// Create a new TypeVar with a fully known type.
@@ -222,25 +226,6 @@ impl<'ast> TypeProblem<'ast> {
     }
 }
 
-impl Constraint {
-    fn is_satisfied_by(self, types: &TypeStore, ty: Type) -> bool {
-        match self {
-            Constraint::None | Constraint::DefaultVoid => true,
-            Constraint::AnyInt(signed) => {
-                match types[ty] {
-                    TypeInfo::Int(info) => {
-                        match signed {
-                            Some(signed) => info.signed == signed,
-                            None => true,
-                        }
-                    }
-                    _ => false,
-                }
-            }
-        }
-    }
-}
-
 /// Solver implementation
 impl<'ast> TypeProblem<'ast> {
     pub fn solve(mut self, types: &mut TypeStore<'ast>) -> TypeSolution {
@@ -255,13 +240,15 @@ impl<'ast> TypeProblem<'ast> {
             let var = TypeVar(i);
             let ty = self.get_solution(types, var);
 
-            let constraint = self.state[i].constraint;
-            if !constraint.is_satisfied_by(types, ty) {
+            let state = &self.state[i];
+            let ty_info = &types[ty];
+            if !self.state[i].must_be_int.is_satisfied_by(ty_info) {
                 panic!(
-                    "Type for {:?} with origin \n{:?}\nshould satisfy constraint {:?}, but was\n{:?}\n",
-                    var, self.state[var.0].origin, constraint, types[ty],
+                    "Type for {:?} with origin \n{:?}\nshould satisfy {:?}, but was\n{:?} {:?}\n",
+                    var, state.origin, state.must_be_int, types[ty], ty_info,
                 )
             }
+
             ty
         }).collect_vec();
 
@@ -357,7 +344,7 @@ impl<'ast> TypeProblem<'ast> {
         if let Some(info) = &state.info {
             let info = info.map_ty(&mut |&var| self.get_solution(types, var));
             types.define_type(info)
-        } else if state.constraint == Constraint::DefaultVoid {
+        } else if state.default_void {
             types.type_void()
         } else {
             panic!("Failed to infer type for {:?} with origin {:?}", var, self.state[var.0].origin)
@@ -366,28 +353,46 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Apply the requirement that both TypeVars match. Returns whether any progress was made.
     fn unify_var(&mut self, left: TypeVar, right: TypeVar) -> bool {
-        //nothing to do, skip. also doesn't count as progress.
-        if left == right { return false; }
+        let (left_state, right_state) = match self.state.index_mut_twice(left.0, right.0) {
+            // both vars are the same, so nothing to do. also doesn't count as progress.
+            None => return false,
+            // they are different, continue
+            Some(pair) => pair,
+        };
 
-        match (&self.state[left.0].info, &self.state[right.0].info) {
+        let mut progress = false;
+
+        // propagate default_void if exactly one of them is true
+        if left_state.default_void ^ right_state.default_void {
+            progress |= true;
+            left_state.default_void = true;
+            right_state.default_void = true;
+        }
+
+        match (&left_state.info, &right_state.info) {
             (None, None) => {
                 // we don't know enough to apply this match, so just keep it
+                // no progress made
                 self.matches.push_back((left, right));
-                false
             }
             (Some(left), None) => {
-                self.state[right.0].info = Some(left.clone());
-                true
+                // copy the entire info over
+                right_state.info = Some(left.clone());
+                progress |= true;
             }
             (None, Some(right)) => {
-                self.state[left.0].info = Some(right.clone());
-                true
+                // copy the entire info over
+                left_state.info = Some(right.clone());
+                progress |= true;
             }
             (Some(_), Some(_)) => {
+                // unify the inner types if any
                 self.unify_both_known(left, right);
-                true
+                progress |= true;
             }
         }
+
+        progress
     }
 
     /// Util function for `unify_var` that assumes both vars have known infos.
@@ -455,6 +460,25 @@ impl<'ast> TypeProblem<'ast> {
     }
 }
 
+impl MustBeInt {
+    fn is_satisfied_by<T>(self, info: &TypeInfo<T>) -> bool {
+        match self {
+            MustBeInt::No => true,
+            MustBeInt::Yes(signed) => {
+                match info {
+                    TypeInfo::Int(info) => {
+                        match signed {
+                            Some(signed) => info.signed == signed,
+                            None => true,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
 impl std::ops::Index<TypeVar> for TypeSolution {
     type Output = Type;
 
@@ -471,15 +495,18 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
             let var = TypeVar(i);
             let state = &self.state[i];
 
-            let constraint = match state.constraint {
-                Constraint::None => "",
-                Constraint::AnyInt(None) => "(u/i)??",
-                Constraint::AnyInt(Some(Signed::Signed)) => "i??",
-                Constraint::AnyInt(Some(Signed::Unsigned)) => "u??",
-                Constraint::DefaultVoid => "->void",
+            let must_be_int = match state.must_be_int {
+                MustBeInt::No => "",
+                MustBeInt::Yes(None) => "ui??",
+                MustBeInt::Yes(Some(Signed::Signed)) => "i??",
+                MustBeInt::Yes(Some(Signed::Unsigned)) => "u??",
+            };
+            let default_void = match state.default_void {
+                true => "->void",
+                false => "",
             };
 
-            writeln!(f, "        {:?}[{}]: {:?}, {:?}", var, constraint, state.info, state.origin)?;
+            writeln!(f, "        {:?}[{}{}]: {:?}, {:?}", var, must_be_int, default_void, state.info, state.origin)?;
         }
 
         writeln!(f, "    ],\n    constraints: [")?;
@@ -522,18 +549,20 @@ mod test {
 
     use super::*;
 
-    fn dummy_expr() -> ast::Expression {
-        let pos = Pos { file: FileId(0), line: 0, col: 0 };
-        ast::Expression { span: Span { start: pos, end: pos }, kind: ExpressionKind::Null }
+    macro_rules! setup {
+        ($origin:ident, $types:ident, $problem:ident) => {
+            let pos = Pos { file: FileId(0), line: 0, col: 0 };
+            let expr = ast::Expression { span: Span { start: pos, end: pos }, kind: ExpressionKind::Null };
+            let $origin = Origin::Expression(&expr);
+            let mut $types = TypeStore::default();
+            let mut $problem = TypeProblem::default();
+        }
     }
 
     #[test]
     fn chain() {
-        let expr = dummy_expr();
-        let origin = Origin::Expression(&expr);
+        setup!(origin, types, problem);
 
-        let mut types = TypeStore::default();
-        let mut problem = TypeProblem::default();
         let (a, c, d) = (problem.unknown(origin), problem.unknown(origin), problem.unknown(origin));
         let b = problem.ty_bool();
 
@@ -549,11 +578,8 @@ mod test {
 
     #[test]
     fn tuple() {
-        let expr = dummy_expr();
-        let origin = Origin::Expression(&expr);
+        setup!(origin, types, problem);
 
-        let mut types = TypeStore::default();
-        let mut problem = TypeProblem::default();
         let (a, b) = (problem.ty_u8(), problem.unknown(origin));
         let (c, d) = (problem.unknown(origin), problem.ty_bool());
 
@@ -575,11 +601,7 @@ mod test {
 
     #[test]
     fn ptr_ptr() {
-        let expr = dummy_expr();
-        let origin = Origin::Expression(&expr);
-
-        let mut types = TypeStore::default();
-        let mut problem = TypeProblem::default();
+        setup!(origin, types, problem);
 
         let a = problem.unknown(origin);
         let a_ptr = problem.known(origin, TypeInfo::Pointer(a));
@@ -595,5 +617,24 @@ mod test {
         assert_eq!(types.type_u8(), sol[b]);
         assert_eq!(types.define_type_ptr(types.type_u8()), sol[a_ptr]);
         assert_eq!(types.define_type_ptr(types.type_u8()), sol[b_ptr]);
+    }
+
+    #[test]
+    fn default_void_propagate() {
+        setup!(origin, types, problem);
+
+        let a = problem.unknown(origin);
+        let b = problem.unknown_default_void(origin);
+        let c = problem.unknown(origin);
+        let d = problem.unknown(origin);
+        problem.equal(a, b);
+        problem.equal(b, c);
+        problem.equal(c, d);
+
+        let sol = problem.solve(&mut types);
+        assert_eq!(types.type_void(), sol[a]);
+        assert_eq!(types.type_void(), sol[b]);
+        assert_eq!(types.type_void(), sol[c]);
+        assert_eq!(types.type_void(), sol[d]);
     }
 }
