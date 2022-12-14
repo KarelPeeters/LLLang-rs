@@ -7,6 +7,7 @@ use crate::front::{ast, cst};
 use crate::front::ast::{Item, ModuleContent};
 use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, IntTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
+use crate::front::scope::Scope;
 
 type AstProgram = front::Program<Option<ModuleContent>>;
 type CstProgram<'a> = front::Program<(&'a Option<ModuleContent>, cst::Module)>;
@@ -31,6 +32,7 @@ struct ResolveState<'a> {
     types: TypeStore<'a>,
     items: ItemStore<'a>,
 
+    alias_map: HashMap<*const ast::TypeAlias, cst::Type>,
     func_map: HashMap<*const ast::Function, cst::Function>,
     const_map: HashMap<*const ast::Const, cst::Const>,
     struct_map: HashMap<*const ast::Struct, cst::Type>,
@@ -43,6 +45,7 @@ fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'
 
     let mut cst = ItemStore::default();
 
+    let mut alias_map: HashMap<*const ast::TypeAlias, cst::Type> = Default::default();
     let mut func_map: HashMap<*const ast::Function, cst::Function> = Default::default();
     let mut cst_map: HashMap<*const ast::Const, cst::Const> = Default::default();
     let mut struct_map: HashMap<*const ast::Struct, cst::Type> = Default::default();
@@ -53,6 +56,15 @@ fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'
         if let Some(content) = &module.content {
             for item in &content.items {
                 match item {
+                    Item::TypeAlias(alias_ast) => {
+                        // immediately parse type alias types so they can be used in the next pass
+                        //   this means we can only parse built-in types, which we achieve by using a newly created empty scope
+                        // TODO this severely limits their functionality, eg they can't point to each other or to structs
+                        let empty_scope = Scope::default();
+                        let ty = cst.resolve_type(ScopeKind::Local, &empty_scope, &mut store, &alias_ast.ty)?;
+                        collected_module.local_scope.declare(&alias_ast.id, ScopedItem::Type(ty))?;
+                        alias_map.insert(alias_ast, ty);
+                    }
                     Item::Struct(struct_ast) => {
                         let ph = store.new_placeholder();
                         collected_module.local_scope.declare(&struct_ast.id, ScopedItem::Type(ph))?;
@@ -94,6 +106,7 @@ fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'
     let state = ResolveState {
         types: store,
         items: cst,
+        alias_map,
         func_map,
         const_map: cst_map,
         struct_map,
@@ -140,6 +153,10 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
             //add items to scope, in order of appearance for nicer error messages
             for item in &content.items {
                 let (id, item) = match item {
+                    Item::TypeAlias(alias_ast) => {
+                        let item = ScopedItem::Type(*state.alias_map.get(&(alias_ast as *const _)).unwrap());
+                        (&alias_ast.id, item)
+                    }
                     Item::UseDecl(use_ast) => {
                         let item = items.resolve_path(ScopeKind::Local, &items.root_scope, &use_ast.path)?;
                         (&use_ast.path.id, item)
@@ -169,7 +186,7 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
             for item in &content.items {
                 match item {
                     //already handled
-                    Item::UseDecl(_) => {}
+                    Item::UseDecl(_) | Item::TypeAlias(_) => {}
                     Item::Struct(struct_ast) => {
                         let fields: Vec<StructFieldInfo> = struct_ast.fields.iter().map(|field| {
                             let ty = items.resolve_type(ScopeKind::Real, module_scope, types, &field.ty)?;

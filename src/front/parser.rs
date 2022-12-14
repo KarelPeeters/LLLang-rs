@@ -60,6 +60,7 @@ declare_tokens![
 
     Extern("extern"),
     Use("use"),
+    Type("type"),
     Struct("struct"),
     Fn("fn"),
     Return("return"),
@@ -542,6 +543,7 @@ impl<'s> Parser<'s> {
             TT::Fn | TT::Extern => self.function().map(ast::Item::Function),
             TT::Const => self.const_().map(ast::Item::Const),
             TT::Use => self.use_decl().map(ast::Item::UseDecl),
+            TT::Type => self.type_alias().map(ast::Item::TypeAlias),
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
     }
@@ -566,6 +568,17 @@ impl<'s> Parser<'s> {
 
         let span = Span::new(start_pos, path.span.end);
         Ok(ast::UseDecl { span, path })
+    }
+
+    fn type_alias(&mut self) -> Result<ast::TypeAlias> {
+        let start_pos = self.expect(TT::Type, "start of type alias")?.span.start;
+        let id = self.identifier("type alias name")?;
+        self.expect(TT::Eq, "type alias equal sign")?;
+        let ty = self.type_decl()?;
+        self.expect(TT::Semi, "type alias end")?;
+
+        let span = Span::new(start_pos, self.last_popped_end);
+        Ok(ast::TypeAlias { span, id, ty })
     }
 
     fn struct_(&mut self) -> Result<ast::Struct> {

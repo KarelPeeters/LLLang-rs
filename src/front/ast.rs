@@ -58,6 +58,7 @@ pub struct ModuleContent {
 #[derive(Debug)]
 pub enum Item {
     UseDecl(UseDecl),
+    TypeAlias(TypeAlias),
     Struct(Struct),
     Function(Function),
     Const(Const),
@@ -75,6 +76,13 @@ pub struct Const {
 pub struct UseDecl {
     pub span: Span,
     pub path: Path,
+}
+
+#[derive(Debug)]
+pub struct TypeAlias {
+    pub span: Span,
+    pub id: Identifier,
+    pub ty: Type,
 }
 
 #[derive(Debug)]
