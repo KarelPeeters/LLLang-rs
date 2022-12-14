@@ -203,6 +203,51 @@ impl<'s> Tokenizer<'s> {
         }
     }
 
+    fn parse_int_lit(&mut self) -> Result<Option<Token>> {
+        let mut offset = 0;
+        let start_pos = self.pos;
+
+        let minus = self.left[offset..].starts_with('-');
+        if minus {
+            offset += 1;
+        }
+
+        let hex = self.left[offset..].starts_with("0x");
+        if minus && hex {
+            // negative hex literals are not useful, there is no "most negative" edge case anyway
+            // we cancel parsing an int here, we want "(-) (0x..)", not "(-0) (x..)" which we are currently trying
+            return Ok(None);
+        }
+
+        let is_digit = if hex {
+            offset += 2;
+            char::is_ascii_hexdigit
+        } else {
+            char::is_ascii_digit
+        };
+
+        let peek = match self.left[offset..].chars().next() {
+            None => {
+                self.skip_count(offset);
+                return Err(ParseError::Eof { after: self.pos, expected: "integer literal digits" });
+            }
+            Some(peek) => peek,
+        };
+        if !is_digit(&peek) {
+            self.skip_count(offset);
+            return Err(ParseError::Char { pos: self.pos, char: peek });
+        }
+
+        let digits = self.left[offset..].find(|c: char| !is_digit(&c)).unwrap_or(self.left[offset..].len());
+        let string = self.skip_count(offset + digits).to_owned();
+
+        Ok(Some(Token {
+            ty: TT::IntLit,
+            string,
+            span: Span::new(start_pos, self.pos),
+        }))
+    }
+
     fn parse_next(&mut self) -> Result<Token> {
         self.skip_whitespace_and_comments()?;
         let start_pos = self.pos;
@@ -212,19 +257,13 @@ impl<'s> Tokenizer<'s> {
         } else {
             return Ok(Token::eof_token(start_pos));
         };
+        let lookahead = self.left.chars().nth(1);
 
-        //number
-        if peek.is_ascii_digit() {
-            let end = self.left
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(self.left.len());
-            let string = self.skip_count(end).to_owned();
-
-            return Ok(Token {
-                ty: TT::IntLit,
-                string,
-                span: Span::new(start_pos, self.pos),
-            });
+        //integer literal
+        if peek.is_ascii_digit() || (peek == '-' && lookahead.as_ref().map_or(false, char::is_ascii_digit)) {
+            if let Some(token) = self.parse_int_lit()? {
+                return Ok(token);
+            }
         }
 
         //identifier

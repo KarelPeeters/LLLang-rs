@@ -342,22 +342,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         (after_value, LRValue::Left(value))
                     }
                     ast::UnaryOp::Neg => {
-                        match &inner.kind {
-                            // this entire expression is actually an integer literal with sign
-                            ast::ExpressionKind::IntLit { .. } => {
-                                let value = self.lower_literal(expr)?;
-                                (flow, value)
-                            },
-                            // it's just an ordinary negate expression
-                            _ => {
-                                let (after_inner, inner) =
-                                    self.append_expr_loaded(flow, scope, inner)?;
-                                let ty = inner.ty;
+                        let (after_inner, inner) =
+                            self.append_expr_loaded(flow, scope, inner)?;
+                        let ty = inner.ty;
 
-                                let result = self.append_negate(after_inner.block, inner.ir);
-                                (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
-                            },
-                        }
+                        let result = self.append_negate(after_inner.block, inner.ir);
+                        (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }
             }

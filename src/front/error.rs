@@ -1,5 +1,10 @@
+use std::num::ParseIntError;
+
+use derive_more::From;
+
 use crate::front::ast;
 use crate::front::pos::Span;
+use crate::mid::util::bit_int::BitOverflow;
 
 pub type Result<'a, T> = std::result::Result<T, Error<'a>>;
 type TypeString = String;
@@ -48,6 +53,7 @@ pub enum Error<'a> {
         span: Span,
         lit: String,
         ty: TypeString,
+        reason: InvalidLiteralReason,
     },
     StructLiteralForNonStructType {
         span: Span,
@@ -94,10 +100,15 @@ pub enum Error<'a> {
     DuplicateStructFields(&'a ast::Identifier),
 }
 
-
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ItemType {
     Module,
     Type,
     Value,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, From)]
+pub enum InvalidLiteralReason {
+    Parse(ParseIntError),
+    BitOverFlow(BitOverflow),
 }

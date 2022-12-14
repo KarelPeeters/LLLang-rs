@@ -11,7 +11,7 @@ pub struct BitInt {
     value: UStorage,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct BitOverflow;
 
 impl BitInt {
@@ -106,7 +106,7 @@ impl BitInt {
 mod tests {
     use std::fmt::Binary;
 
-    use crate::mid::util::bit_int::{BitInt, BitOverflow, MAX_BITS, UStorage};
+    use crate::mid::util::bit_int::{BitInt, BitOverflow, IStorage, MAX_BITS, UStorage};
 
     #[track_caller]
     fn assert_eq_bin<T: Eq + Binary>(left: T, right: T) {
@@ -125,13 +125,18 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow() {
+    fn test_overflow_unsigned() {
         assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow));
         assert_match!(BitInt::from_unsigned(0, 0), Ok(_));
         assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow));
 
         assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow));
         assert_match!(BitInt::from_unsigned(16, 1 << 15), Ok(_));
+    }
+
+    #[test]
+    fn test_overflow_signed() {
+        assert_match!(BitInt::from_signed(32, u32::MAX as IStorage), Err(_))
     }
 
     #[test]

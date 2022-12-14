@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use std::str::FromStr;
 
 use itertools::Itertools;
 
 use crate::front::{ast, cst};
 use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, IntTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
-use crate::front::error::{Error, Result};
+use crate::front::error::{Error, InvalidLiteralReason, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
 use crate::mid::ir;
-use crate::mid::util::bit_int::BitInt;
+use crate::mid::ir::Signed;
+use crate::mid::util::bit_int::{BitInt, IStorage, UStorage};
 
 /// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
 /// is an LValue of RValue. LValues are values that can appear on the left side of assignments, RValues are those that cannot.
@@ -267,14 +269,35 @@ pub fn lower_literal<'a>(
             let value_ir = ir_prog.const_bool(value);
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
-        ast::ExpressionKind::IntLit { value, ty: _ } =>
-            lower_int_literal(ir_prog, types, expr, ty, value, false)?,
-        ast::ExpressionKind::Unary { kind: ast::UnaryOp::Neg, inner } => {
-            match &inner.kind {
-                ast::ExpressionKind::IntLit { value, ty: _ } =>
-                    lower_int_literal(ir_prog, types, expr, ty, value, true)?,
-                _ => return Err(Error::ExpectedLiteral(expr)),
-            }
+        ast::ExpressionKind::IntLit { value, ty: _ } => {
+            let build_error = |types: &mut MappingTypeStore, reason: InvalidLiteralReason| {
+                Error::InvalidLiteral {
+                    span: expr.span,
+                    lit: value.clone(),
+                    ty: types.format_type(ty).to_string(),
+                    reason,
+                }
+            };
+
+            let info = check_integer_type(&types, expr, ty)?;
+
+            let value_raw = if value.starts_with("0x") {
+                IStorage::from_str_radix(&value[2..], 16)
+            } else {
+                // this handles the "max negative value" edge case for us
+                IStorage::from_str(value)
+            };
+            let value_raw = value_raw.map_err(|e| build_error(types, e.into()))?;
+
+            let value = match info.signed {
+                Signed::Signed => BitInt::from_signed(info.bits, value_raw),
+                Signed::Unsigned => BitInt::from_unsigned(info.bits, value_raw as UStorage),
+            };
+            let value = value.map_err(|e| build_error(types, e.into()))?;
+
+            let ty_ir = types.map_type(ir_prog, ty);
+            let value_ir = ir::Const { ty: ty_ir, value };
+            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         ast::ExpressionKind::StringLit { value } => {
             let ty_byte = types.type_bool();
@@ -294,30 +317,6 @@ pub fn lower_literal<'a>(
     };
 
     Ok(result)
-}
-
-fn lower_int_literal<'a>(ir_prog: &mut ir::Program, types: &mut MappingTypeStore, expr: &'a ast::Expression, expected_ty: cst::Type, value: &str, minus: bool) -> Result<'a, LRValue> {
-    let value_with_sign = format!("{}{}", if minus { "-" } else { "" }, value);
-    let info = check_integer_type(&types, expr, expected_ty)?;
-
-    let build_error = |types: &mut MappingTypeStore| {
-        Error::InvalidLiteral {
-            span: expr.span,
-            lit: value_with_sign.clone(),
-            ty: types.format_type(expected_ty).to_string(),
-        }
-    };
-
-    // TODO we're kind of abusing the rust string parsing code to deal with the tricky edge cases
-    //  which will stop working once we add 64-bit integers to the language
-    let value_raw = value_with_sign.parse::<i64>().map_err(|_| build_error(types))?;
-
-    let value = BitInt::from_signed(info.bits, value_raw).map_err(|_| build_error(types))?;
-
-    let ty_ir = types.map_type(ir_prog, expected_ty);
-    let value_ir = ir::Const { ty: ty_ir, value };
-
-    Ok(LRValue::Right(TypedValue { ty: expected_ty, ir: value_ir.into() }))
 }
 
 fn check_type_match<'ast>(store: &TypeStore, expr: &'ast ast::Expression, expected: cst::Type, actual: cst::Type) -> Result<'ast, ()> {
