@@ -145,7 +145,7 @@ impl Program {
     }
 
     pub fn const_null_ptr(&self) -> Const {
-        Const::new(self.ty_void, BitInt::zero(PTR_SIZE_BITS))
+        Const::new(self.ty_ptr, BitInt::zero(PTR_SIZE_BITS))
     }
 
     pub fn const_bool(&self, value: bool) -> Const {
