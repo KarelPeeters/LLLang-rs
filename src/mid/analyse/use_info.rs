@@ -390,6 +390,15 @@ impl UseInfo {
         self.value_usages.keys().copied()
     }
 
+    pub fn instructions(&self) -> impl Iterator<Item=Instruction> + '_ {
+        self.values().filter_map(|value| {
+            match value {
+                Value::Instr(instr) => Some(instr),
+                _ => None,
+            }
+        })
+    }
+
     pub fn blocks(&self) -> impl Iterator<Item=Block> + '_ {
         self.block_usages.keys().copied()
     }

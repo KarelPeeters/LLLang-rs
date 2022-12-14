@@ -58,6 +58,7 @@ gen_node_and_program_accessors![
 ];
 
 new_index_type!(pub Type);
+pub type ProgramTypes = ArenaSet<Type, TypeInfo>;
 
 #[derive(Debug, Clone)]
 pub struct Program {
@@ -66,7 +67,7 @@ pub struct Program {
     pub nodes: Arenas,
     //TODO maybe look into adding a cell here so we can modify this when we have a &Program for usability
     //the types are stored separately in a set for interning
-    pub types: ArenaSet<Type, TypeInfo>,
+    pub types: ProgramTypes,
 
     //predefined types
     #[allow(dead_code)]
@@ -404,7 +405,7 @@ impl LogicalOp {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CastKind {
     /// Cast from an int to a possibly shorter int.
     IntTruncate,
