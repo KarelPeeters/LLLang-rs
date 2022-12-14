@@ -1,25 +1,24 @@
-use win32::io;
+use win32;
 
-const CHAR_NEWLINE: byte = 10;
-const CHAR_ZERO: byte = 48;
-const CHAR_MINUS: byte = 45;
+const CHAR_NEWLINE: u8 = 10;
+const CHAR_ZERO: u8 = 48;
+const CHAR_MINUS: u8 = 45;
 
 fn println() {
-    let newline = CHAR_NEWLINE;
-    print_str(&newline, 1);
+    print_char(CHAR_NEWLINE);
 }
 
-fn print_str(str: &byte, len: int) {
-    let stdout = io::_GetStdHandle@4(-io::STD_OUTPUT_HANDLE_NEG);
-    let tmp;
-    io::_WriteFile@20(stdout, str, len, &tmp, null);
+fn print_str(str: &u8, len: u32) -> bool {
+    let stdout = win32::_GetStdHandle@4(win32::STD_OUTPUT_HANDLE);
+    let written;
+    return win32::_WriteFile@20(stdout, str as &void, len, &written, null) != 0;
 }
 
-fn print_char(char: byte) {
+fn print_char(char: u8) {
     print_str(&char, 1);
 }
 
-fn print_int(x: int) {
+fn print_int(x: i32) {
     if x == 0 {
         print_char(CHAR_ZERO);
         return;
@@ -29,28 +28,26 @@ fn print_int(x: int) {
         x = -x;
     }
 
-    let buffer: [byte; 16];
+    let buffer: [u8; 16];
     let buffer_size = 16;
 
     let i = buffer_size;
 
     while x != 0 {
         i = i - 1;
-
-        let tmp: int = (x % 10);
-        buffer[i] = CHAR_ZERO + *((&tmp) as &byte);
+        buffer[i] = CHAR_ZERO + (x % 10) as u8;
         x = x / 10;
     }
 
     print_str(&buffer[i], buffer_size - i);
 }
 
-fn println_str(s: &byte, len: int) {
+fn println_str(s: &u8, len: u32) {
     print_str(s, len);
     println();
 }
 
-fn println_int(x: int) {
+fn println_int(x: i32) {
     print_int(x);
     println();
 }
