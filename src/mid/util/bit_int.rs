@@ -89,7 +89,7 @@ impl BitInt {
     }
 
     pub fn unwrap_bool(self) -> bool {
-        assert!(self.bits == 1);
+        assert_eq!(self.bits, 1);
         self.value != 0
     }
 

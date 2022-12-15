@@ -371,17 +371,17 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     let result = match kind {
                         CastKind::IntTruncate => {
                             // cannot overflow, we just masked
-                            let mask = if new_bits == 0 { 0 } else { 1 << (new_bits - 1) };
+                            let mask = BitInt::mask(new_bits);
                             BitInt::from_unsigned(new_bits, cst.value.unsigned() & mask).unwrap()
-                        },
+                        }
                         CastKind::IntExtend(Signed::Signed) => {
                             // cannot overflow, we just sign-extended for a signed value
                             BitInt::from_signed(new_bits, cst.value.signed()).unwrap()
-                        },
+                        }
                         CastKind::IntExtend(Signed::Unsigned) => {
                             // cannot overflow, we just zero-extended for an unsigned value
                             BitInt::from_unsigned(new_bits, cst.value.unsigned()).unwrap()
-                        },
+                        }
                     };
 
                     Lattice::Known(Const::new(ty, result).into())
