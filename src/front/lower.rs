@@ -272,7 +272,7 @@ pub fn lower_literal<'a>(
         ast::ExpressionKind::IntLit { value, ty: _ } => {
             let build_error = |types: &mut MappingTypeStore, reason: InvalidLiteralReason| {
                 Error::InvalidLiteral {
-                    span: expr.span,
+                    expr,
                     lit: value.clone(),
                     ty: types.format_type(ty).to_string(),
                     reason,

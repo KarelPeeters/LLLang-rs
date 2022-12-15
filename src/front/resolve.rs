@@ -245,7 +245,8 @@ fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>)
         .ok_or(Error::NoMainFunction)?;
 
     if let &ScopedItem::Value(ScopedValue::Function(main_func)) = main_item {
-        let actual_ty = state.items.funcs[main_func].ty;
+        let main_func_decl = &state.items.funcs[main_func];
+        let actual_ty = main_func_decl.ty;
         let expected_ty_info = FunctionTypeInfo {
             params: vec![],
             ret: state.types.define_type(TypeInfo::Int(IntTypeInfo::U32)),
@@ -256,6 +257,7 @@ fn find_main_function<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>)
             return Err(Error::MainFunctionWrongType {
                 expected: state.types.format_type(expected_ty).to_string(),
                 actual: state.types.format_type(actual_ty).to_string(),
+                func: main_func_decl.ast,
             });
         }
 

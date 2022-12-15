@@ -213,7 +213,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     struct_ty_info.clone()
                 } else {
                     return Err(Error::StructLiteralForNonStructType {
-                        span: expr.span,
+                        expr,
                         ty: self.types.format_type(struct_ty).to_string(),
                         fields: fields.iter().map(|(id, _)| id).collect(),
                     });
@@ -225,9 +225,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 if fields.len() != struct_ty_info.fields.len() || fields_set != expected_set {
                     return Err(Error::StructLiteralInvalidFields {
-                        span: expr.span,
                         expected: struct_ty_info.fields.iter().map(|info| info.id.to_owned()).collect(),
                         actual: fields.iter().map(|(id, _)| id.string.clone()).collect(),
+                        expr,
                     })
                 }
 

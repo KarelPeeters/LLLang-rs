@@ -3,7 +3,6 @@ use std::num::ParseIntError;
 use derive_more::From;
 
 use crate::front::ast;
-use crate::front::pos::Span;
 use crate::mid::util::bit_int::BitOverflow;
 
 pub type Result<'a, T> = std::result::Result<T, Error<'a>>;
@@ -13,57 +12,57 @@ type TypeString = String;
 pub enum Error<'a> {
     //types
     TypeMismatch {
-        expression: &'a ast::Expression,
         expected: TypeString,
         actual: TypeString,
+        expression: &'a ast::Expression,
     },
     ExpectIntegerType {
-        expression: &'a ast::Expression,
         actual: TypeString,
+        expression: &'a ast::Expression,
     },
     ExpectPointerType {
-        expression: &'a ast::Expression,
         actual: TypeString,
+        expression: &'a ast::Expression,
     },
     ExpectStructOrTupleType {
-        expression: &'a ast::Expression,
         actual: TypeString,
+        expression: &'a ast::Expression,
     },
     InvalidCastTypes {
-        expression: &'a ast::Expression,
         ty_before: TypeString,
         ty_after: TypeString,
+        expression: &'a ast::Expression,
     },
 
     //dot indexing
     WrongDotIndexType {
-        target: &'a ast::Expression,
         target_type: TypeString,
         index: &'a ast::DotIndexIndex,
+        target: &'a ast::Expression,
     },
     StructFieldNotFound {
-        target: &'a ast::Expression,
         target_type: TypeString,
         index: &'a ast::Identifier,
+        target: &'a ast::Expression,
     },
 
     //literals
     ExpectedLiteral(&'a ast::Expression),
     InvalidLiteral {
-        span: Span,
         lit: String,
         ty: TypeString,
         reason: InvalidLiteralReason,
+        expr: &'a ast::Expression,
     },
     StructLiteralForNonStructType {
-        span: Span,
         ty: TypeString,
         fields: Vec<&'a ast::Identifier>,
+        expr: &'a ast::Expression,
     },
     StructLiteralInvalidFields {
-        span: Span,
         expected: Vec<String>,
         actual: Vec<String>,
+        expr: &'a ast::Expression,
     },
 
     //lrvalue
@@ -81,6 +80,7 @@ pub enum Error<'a> {
     MainFunctionWrongType {
         expected: TypeString,
         actual: TypeString,
+        func: &'a ast::Function,
     },
     MainFunctionMustHaveBody,
 
