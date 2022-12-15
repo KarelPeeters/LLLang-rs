@@ -22,10 +22,7 @@ pub struct CastChain {
 //   * truncate, extend(signed), extend(unsigned)
 //   can we rewrite this entire thing to make use of this fact, and end up with something a lot simpler and faster?
 pub fn extract_minimal_cast_chain(prog: &Program, value: Value) -> CastChain {
-    let mut stack = Stack::default();
-    let all_bits = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();
-
-    let (inner, depth) = extract_minimal_cast_chain_impl(prog, &mut stack, value, all_bits);
+    let (stack, inner, depth) = extract_minimal_cast_chain_impl(prog, value);
 
     CastChain {
         ops: stack.finish(),
@@ -46,33 +43,34 @@ impl CastOp {
     }
 }
 
-#[derive(Default)]
+/// A representation of the final stack operation.
+///
+/// `inner_real` is the size of the innermost input value.
+/// The other fields should be interpreted as sequential operations:
+/// * truncate to `real` bits
+/// * sign extend to `signed`  bits
+/// * zero extend to `unsigned` bits
+///
+/// For these operations to be valid, the following conditions must hold:
+/// * `real <= inner_real`
+/// * `real <= signed <= unsigned`.
+#[derive(Debug)]
 pub struct Stack {
-    vec: Vec<CastOp>,
+    inner_real: u32,
+    real: u32,
+    signed: u32,
+    unsigned: u32,
 }
 
-fn extract_minimal_cast_chain_impl(prog: &Program, stack: &mut Stack, value: Value, bits_used: u32) -> (Value, usize) {
+fn extract_minimal_cast_chain_impl(prog: &Program, value: Value) -> (Stack, Value, usize) {
     match value {
         Value::Instr(instr) => {
             match prog.get_instr(instr) {
-                &InstructionInfo::Cast { ty, kind, value } => {
-                    let full_before = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();
-                    let full_after = prog.get_type(ty).unwrap_int().unwrap();
-
-                    match kind {
-                        CastKind::IntTruncate => assert!(full_after <= full_before),
-                        CastKind::IntExtend(_) => assert!(full_after >= full_before),
-                    }
-
-                    let before = min(bits_used, full_before);
-                    let after = min(bits_used, full_after);
-
-                    if before != after {
-                        stack.push(CastOp::new(kind, after));
-                    };
-
-                    let (inner, depth) = extract_minimal_cast_chain_impl(prog, stack, value, before);
-                    return (inner, depth + 1);
+                &InstructionInfo::Cast { ty, kind, value: next } => {
+                    let (mut stack, inner, depth) = extract_minimal_cast_chain_impl(prog, next);
+                    let bits = prog.get_type(ty).unwrap_int().unwrap();
+                    stack.cast(CastOp::new(kind, bits));
+                    return (stack, inner, depth+1);
                 }
                 _ => {}
             }
@@ -80,70 +78,64 @@ fn extract_minimal_cast_chain_impl(prog: &Program, stack: &mut Stack, value: Val
         _ => {}
     }
 
-    // we're returning, push the initial truncate we're still missing
     let bits = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();
-    if bits != bits_used {
-        stack.push(CastOp::new(CastKind::IntTruncate, bits_used));
-    }
-
-    (value, 0)
-}
-
-/// Try combining the two cast operations into a single one.
-///
-/// The order of operations is `y = outer(inner(x))`.
-///
-/// This function makes the following assumptions:
-///   * `inner` actually changed the number of bits
-///   * `inner` has no more bits than `outer`
-fn try_combine_cast_kinds(inner: CastOp, outer: CastOp) -> Option<CastOp> {
-    assert!(inner.bits <= outer.bits);
-
-    match (inner.kind, outer.kind) {
-        // can't be fused
-        (CastKind::IntTruncate, CastKind::IntExtend(_)) | (CastKind::IntExtend(_), CastKind::IntTruncate) => None,
-
-        // trivially fusable, this will keep the smallest bit count
-        (CastKind::IntTruncate, CastKind::IntTruncate) => Some(CastOp::new(CastKind::IntTruncate, inner.bits)),
-
-        // sometimes fusable, if possible this will keep the largest bit count
-        (CastKind::IntExtend(inner_signed), CastKind::IntExtend(outer_signed)) => {
-            (match (inner_signed, outer_signed) {
-                // trivially fusable, we're just continuing to extend in the same way
-                (Signed::Signed, Signed::Signed) => Some(Signed::Signed),
-                (Signed::Unsigned, Signed::Unsigned) => Some(Signed::Unsigned),
-
-                // unsigned added at least one 0, which will be replicated by signed
-                (Signed::Unsigned, Signed::Signed) => Some(Signed::Unsigned),
-
-                // can't be fused, the result will be some sign bits followed by some zeros
-                (Signed::Signed, Signed::Unsigned) => None,
-            }).map(|signed| CastOp::new(CastKind::IntExtend(signed), outer.bits))
-        }
-    }
+    (Stack::new(bits), value, 0)
 }
 
 impl Stack {
-    fn push(&mut self, mut inner: CastOp) {
-        while let Some(outer) = self.vec.last() {
-            assert!(inner.bits <= outer.bits);
+    fn new(real: u32) -> Self {
+        Stack {
+            inner_real: real,
+            real,
+            signed: real,
+            unsigned: real,
+        }
+    }
 
-            if let Some(combined) = try_combine_cast_kinds(inner, *outer) {
-                inner = combined;
-                self.vec.pop();
-                continue;
-            } else {
-                break;
+    fn cast(&mut self, next: CastOp) {
+        let CastOp { kind, bits } = next;
+
+        match kind {
+            CastKind::IntTruncate => {
+                assert!(bits <= self.unsigned);
+                self.real = min(self.real, bits);
+                self.signed = min(self.signed, bits);
+                self.unsigned = min(self.unsigned, bits);
+            }
+            CastKind::IntExtend(signed) => {
+                assert!(bits >= self.unsigned);
+                match signed {
+                    Signed::Signed => {
+                        if self.signed == self.unsigned {
+                            self.signed = bits;
+                        }
+                        self.unsigned = bits;
+                    }
+                    Signed::Unsigned => {
+                        self.unsigned = bits;
+                    }
+                }
             }
         }
 
-        self.vec.push(inner);
+        assert!(self.real <= self.inner_real && self.real <= self.signed && self.signed <= self.unsigned);
     }
 
     fn finish(self) -> Vec<CastOp> {
-        let mut inner = self.vec;
-        inner.reverse();
-        inner
+        let Stack { inner_real, real, signed, unsigned } = self;
+        let mut result = vec![];
+
+        if real != inner_real {
+            result.push(CastOp::new(CastKind::IntTruncate, real));
+        }
+        if signed != real {
+            result.push(CastOp::new(CastKind::IntExtend(Signed::Signed), signed));
+        }
+        if unsigned != signed {
+            result.push(CastOp::new(CastKind::IntExtend(Signed::Unsigned), unsigned));
+        }
+
+        result
     }
 }
 
