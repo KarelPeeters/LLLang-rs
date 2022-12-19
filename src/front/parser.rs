@@ -76,6 +76,7 @@ declare_tokens![
     As("as"),
     Break("break"),
     Continue("continue"),
+    BlackBox("__blackbox"),
 
     Underscore("_"),
     Arrow("->"),
@@ -1044,6 +1045,17 @@ impl<'s> Parser<'s> {
                     kind: ast::ExpressionKind::Break,
                 })
             }
+            TT::BlackBox => {
+                self.pop()?;
+                self.expect(TT::OpenB, "blackbox start")?;
+                let value = self.boxed_expression()?;
+                self.expect(TT::CloseB, "blackbox end")?;
+                Ok(ast::Expression{
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::BlackBox { value },
+                })
+            }
+
             _ => Err(Self::unexpected_token(self.peek(), EXPR_START_TOKENS, "expression"))
         }
     }

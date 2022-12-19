@@ -244,6 +244,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 self.problem.fully_known(&self.types, struct_ty)
             }
+            ast::ExpressionKind::BlackBox { value } => {
+                self.visit_expr(scope, value)?
+            }
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);

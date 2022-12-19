@@ -9,7 +9,7 @@ use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::{CastKind, Signed};
+use crate::mid::ir::Signed;
 use crate::mid::util::bit_int::BitInt;
 
 /// The state necessary to lower a single function.
@@ -179,8 +179,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         let cast_kind = match info_after.bits.cmp(&info_before.bits) {
             Ordering::Equal => return value_before,
-            Ordering::Less => CastKind::IntTruncate,
-            Ordering::Greater => CastKind::IntExtend(info_before.signed),
+            Ordering::Less => ir::CastKind::IntTruncate,
+            Ordering::Greater => ir::CastKind::IntExtend(info_before.signed),
         };
 
         let instr = self.append_instr(block, ir::InstructionInfo::Cast {
@@ -510,6 +510,11 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let load = self.append_instr(after_stores.block, load);
 
                 (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: load.into() }))
+            }
+            ast::ExpressionKind::BlackBox { value } => {
+                let (flow_after, value) = self.append_expr_loaded(flow, scope, value)?;
+                let black_box = self.append_instr(flow_after.block, ir::InstructionInfo::BlackBox { value: value.ir });
+                (flow_after, LRValue::Right(TypedValue { ty: value.ty, ir: black_box.into() }))
             }
         };
 
