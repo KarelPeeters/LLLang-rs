@@ -288,7 +288,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 self.append_instr(&str)
             }
             Value::Const(cst) => {
-                assert_eq!(cst.value.bits(), 8 * layout.size as u32);
+                if cst.value.bits() != 1 {
+                    assert_eq!(cst.value.bits(), 8 * layout.size as u32);
+                }
 
                 // if signed and unsigned differ add the latter as a clarifying comment
                 let value = if cst.value.signed() < 0 {
