@@ -3,7 +3,7 @@ use std::num::Wrapping;
 
 use indexmap::map::IndexMap;
 
-use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
+use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, TargetKind, Usage, UseInfo};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
@@ -71,6 +71,10 @@ impl LatticeMap {
             todo.push_back(Todo::FuncReturnUsers(func));
         }
     }
+
+    fn reachable(&self, value: impl Into<Value>) -> bool {
+        self.values.contains_key(&value.into())
+    }
 }
 
 enum Todo {
@@ -136,6 +140,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                 }
             }
             Todo::ValueUsers(value) => {
+                // make sure to only visit usages that are alive (ie. have been visited already)
+
                 for &usage in &use_info[value] {
                     match usage {
                         Usage::Main | Usage::CallTarget { .. } =>
@@ -149,46 +155,63 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                         | Usage::ArrayIndexPtrBase { pos } | Usage::ArrayIndexPtrIndex { pos }
                         | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos }
                         | Usage::CastValue { pos } | Usage::BlackBoxValue { pos } => {
-                            visit_instr(prog, &mut map, &mut todo, pos.instr);
+                            if map.reachable(pos.instr) {
+                                visit_instr(prog, &mut map, &mut todo, pos.instr);
+                            }
                         }
 
                         Usage::TargetPhiValue { target_kind, phi_index } => {
-                            let target = target_kind.get_target(prog);
+                            let reachable = match target_kind {
+                                TargetKind::EntryFrom(func) => funcs_reachable.contains(&func),
+                                TargetKind::JumpFrom(pos) | TargetKind::BranchTrueFrom(pos) | TargetKind::BranchFalseFrom(pos) => {
+                                    blocks_reachable.contains(&pos.block)
+                                }
+                            };
 
-                            let phi = prog.get_block(target.block).phis[phi_index];
-                            let new_value = map.eval(target.phi_values[phi_index]);
+                            if reachable {
+                                let target = target_kind.get_target(prog);
 
-                            map.merge_value(prog, &mut todo, Value::Phi(phi), new_value)
+                                let phi = prog.get_block(target.block).phis[phi_index];
+                                let new_value = map.eval(target.phi_values[phi_index]);
+
+                                map.merge_value(prog, &mut todo, Value::Phi(phi), new_value)
+                            }
                         }
                         Usage::CallArgument { pos, index } => {
-                            match prog.get_instr(pos.instr) {
-                                InstructionInfo::Call { target, args } => {
-                                    if let &Value::Func(target) = target {
-                                        //merge in argument
-                                        let param = prog.get_func(target).params[index];
-                                        map.merge_value(prog, &mut todo, Value::Param(param), map.eval(args[index]));
-                                    } else {
-                                        //nothing to do here
+                            if map.reachable(pos.instr) {
+                                match prog.get_instr(pos.instr) {
+                                    InstructionInfo::Call { target, args } => {
+                                        if let &Value::Func(target) = target {
+                                            //merge in argument
+                                            let param = prog.get_func(target).params[index];
+                                            map.merge_value(prog, &mut todo, Value::Param(param), map.eval(args[index]));
+                                        } else {
+                                            //nothing to do here
+                                        }
                                     }
+                                    _ => unreachable!()
                                 }
-                                _ => unreachable!()
                             }
                         }
                         Usage::BranchCond { pos } => {
-                            match &prog.get_block(pos.block).terminator {
-                                Terminator::Branch { cond, true_target, false_target } => {
-                                    visit_branch(prog, &mut map, &mut todo, pos.func, cond, true_target, false_target)
+                            if blocks_reachable.contains(&pos.block) {
+                                match &prog.get_block(pos.block).terminator {
+                                    Terminator::Branch { cond, true_target, false_target } => {
+                                        visit_branch(prog, &mut map, &mut todo, pos.func, cond, true_target, false_target)
+                                    }
+                                    _ => unreachable!()
                                 }
-                                _ => unreachable!()
                             }
                         }
                         Usage::ReturnValue { pos } => {
-                            match &prog.get_block(pos.block).terminator {
-                                &Terminator::Return { value } => {
-                                    //merge in return value
-                                    map.merge_func_return(&mut todo, pos.func, map.eval(value))
+                            if blocks_reachable.contains(&pos.block) {
+                                match &prog.get_block(pos.block).terminator {
+                                    &Terminator::Return { value } => {
+                                        //merge in return value
+                                        map.merge_func_return(&mut todo, pos.func, map.eval(value))
+                                    }
+                                    _ => unreachable!()
                                 }
-                                _ => unreachable!()
                             }
                         }
                     }
@@ -199,8 +222,10 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                 for &usage in &use_info[func] {
                     if let Usage::CallTarget { pos } = usage {
-                        map.merge_value(prog, &mut todo, Value::Instr(pos.instr), return_lattice);
-                        todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
+                        if map.reachable(pos.instr) {
+                            map.merge_value(prog, &mut todo, Value::Instr(pos.instr), return_lattice);
+                            todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
+                        }
                     }
                 }
             }
