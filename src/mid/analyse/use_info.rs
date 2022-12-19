@@ -56,6 +56,7 @@ pub enum Usage<P = InstructionPos> {
     ArrayIndexPtrIndex { pos: P },
 
     CastValue { pos: P },
+    BlackBoxValue { pos: P },
 
     //values passed to target as phi value
     TargetPhiValue {
@@ -137,6 +138,9 @@ pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
         }
         &InstructionInfo::Cast { ty: _, kind: _, value } => {
             f(value, Usage::CastValue { pos });
+        }
+        &InstructionInfo::BlackBox { value } => {
+            f(value, Usage::BlackBoxValue { pos });
         }
     }
 }
@@ -330,6 +334,13 @@ impl UseInfo {
                 Usage::CastValue { pos } => {
                     match prog.get_instr_mut(pos.instr) {
                         InstructionInfo::Cast { value, .. } =>
+                            repl(count, value, old, new),
+                        _ => unreachable!()
+                    }
+                }
+                Usage::BlackBoxValue { pos } => {
+                    match prog.get_instr_mut(pos.instr) {
+                        InstructionInfo::BlackBox { value } =>
                             repl(count, value, old, new),
                         _ => unreachable!()
                     }

@@ -360,6 +360,12 @@ pub enum InstructionInfo {
     ///
     /// `Cast { after_ty: B, before_value: A } -> B`
     Cast { ty: Type, kind: CastKind, value: Value },
+
+    /// Return `value` as-is.
+    /// Optimizations should assume that:
+    /// * the operand value is actually used some some side-effect purpose
+    /// * the returned value is not known at compile time.
+    BlackBox { value: Value },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -434,6 +440,7 @@ impl InstructionInfo {
             InstructionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
             InstructionInfo::Cast { ty: after_ty, .. } => after_ty,
+            InstructionInfo::BlackBox { value } => prog.type_of_value(value),
         }
     }
 
@@ -467,6 +474,9 @@ impl InstructionInfo {
                 *index = f(*index);
             }
             InstructionInfo::Cast { ty: _, kind: _, value } => {
+                *value = f(*value);
+            }
+            InstructionInfo::BlackBox { value } => {
                 *value = f(*value);
             }
         }

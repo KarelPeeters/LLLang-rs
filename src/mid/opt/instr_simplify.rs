@@ -101,6 +101,8 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
                         replace(prog, instr.into(), new_value);
                     }
                 }
+
+                InstructionInfo::BlackBox { .. } => {}
             }
 
             assert_eq!(expected_instr_count, prog.nodes.blocks[block].instructions.len());

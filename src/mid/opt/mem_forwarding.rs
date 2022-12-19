@@ -89,12 +89,14 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
             //   * if we don't leak a slot to external or to this call the function can't store to it
             InstructionInfo::Call { .. } => return Lattice::Overdef,
 
+            // no memory interactions
             InstructionInfo::Load { .. } => {}
             InstructionInfo::Arithmetic { .. } => {}
             InstructionInfo::Comparison { .. } => {}
             InstructionInfo::TupleFieldPtr { .. } => {}
             InstructionInfo::PointerOffSet { .. } => {}
             InstructionInfo::Cast { .. } => {}
+            InstructionInfo::BlackBox { .. } => {}
         }
     }
 
@@ -246,6 +248,7 @@ fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
                 &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, base),
                 // TODO when we add ptr/int casts maybe we can look through them?
                 InstructionInfo::Cast { .. } => Origin::Unknown,
+                InstructionInfo::BlackBox { .. } => Origin::Unknown,
             }
         }
         Value::Extern(_) => Origin::FuncExternal,

@@ -142,12 +142,13 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                             unreachable!("this value should never change: {:?}", usage),
 
                         // instructions
+                        // TODO group all instruction operand usages together
                         Usage::LoadAddr { pos }
                         | Usage::StoreAddr { pos } | Usage::StoreValue { pos }
                         | Usage::TupleFieldPtrBase { pos }
                         | Usage::ArrayIndexPtrBase { pos } | Usage::ArrayIndexPtrIndex { pos }
                         | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos }
-                        | Usage::CastValue { pos } => {
+                        | Usage::CastValue { pos } | Usage::BlackBoxValue { pos } => {
                             visit_instr(prog, &mut map, &mut todo, pos.instr);
                         }
 
@@ -389,6 +390,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                 Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
             }
         }
+        &InstructionInfo::BlackBox { .. } => Lattice::Overdef,
     };
 
     map.merge_value(prog, todo, Value::Instr(instr), result)

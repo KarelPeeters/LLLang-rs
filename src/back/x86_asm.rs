@@ -632,6 +632,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_value_to_reg(Register::A, value, signed, 0);
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }
+                &InstructionInfo::BlackBox { value } => {
+                    self.append_value_to_mem(MemRegOffset::stack(instr_pos), value, 0);
+                }
             }
         }
 

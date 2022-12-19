@@ -160,6 +160,7 @@ fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
         InstructionInfo::TupleFieldPtr { base: _, index: _, tuple_ty: _ } => false,
         InstructionInfo::PointerOffSet { ty: _, base: _, index: _ } => false,
         InstructionInfo::Cast { ty: _, kind: _, value: _ } => false,
+        InstructionInfo::BlackBox { .. } => true,
     }
 }
 
