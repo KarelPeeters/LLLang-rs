@@ -357,9 +357,8 @@ pub enum InstructionInfo {
     PointerOffSet { ty: Type, base: Value, index: Value },
 
     /// Convert `value` to `ty`. `kind` specifies additional semantics this cast will have.
-    ///
     /// `Cast { after_ty: B, before_value: A } -> B`
-    Cast { ty: Type, kind: CastKind, value: Value },
+    Cast { ty: Type, sizes: CastSizes, value: Value },
 
     /// Return `value` as-is.
     /// Optimizations should assume that:
@@ -411,15 +410,20 @@ impl LogicalOp {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum CastKind {
-    /// Cast from an int to a possibly shorter int.
-    IntTruncate,
-    /// Cast from an int to a possibly longer int, sign- or zero-extending depending on the signedness.
-    IntExtend(Signed),
+#[derive(Debug, Copy, Clone)]
+pub struct CastSizes {
+    pub initial: u32,
+    pub truncate: u32,
+    pub sign_extend: u32,
+    pub zero_extend: u32,
+}
 
-    // TODO add casts between int and ptr
-    //   maybe call it bitwise? or is that something else?
+impl CastSizes {
+    pub fn new(initial: u32, truncate: u32, sign_extend: u32, zero_extend: u32) -> Self {
+        assert!(truncate <= initial);
+        assert!(truncate <= sign_extend && sign_extend <= zero_extend);
+        Self { initial, truncate, sign_extend, zero_extend }
+    }
 }
 
 impl InstructionInfo {

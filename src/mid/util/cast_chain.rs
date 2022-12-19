@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use derive_more::Constructor;
 
-use crate::mid::ir::{CastKind, InstructionInfo, Program, ProgramTypes, Signed, TypeInfo, Value};
+use crate::mid::ir::{InstructionInfo, Program, ProgramTypes, Signed, TypeInfo, Value};
 
 #[derive(Debug, Copy, Clone, Constructor, Eq, PartialEq)]
 pub struct CastOp {

@@ -4,7 +4,7 @@ use std::num::Wrapping;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;

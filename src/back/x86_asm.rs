@@ -5,7 +5,7 @@ use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastSizes, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
@@ -621,16 +621,14 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("add eax, ebx");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                &InstructionInfo::Cast { ty: new_ty, kind, value } => {
+                &InstructionInfo::Cast { ty: new_ty, sizes, value } => {
+                    self.append_instr(&format!(";Cast {:?}", sizes));
+
                     let new_layout = Layout::for_type(&self.prog, new_ty);
                     let a = Register::A.with_size(RegisterSize::for_size(new_layout.size).unwrap().unwrap());
 
-                    let signed = match kind {
-                        CastKind::IntTruncate => None,
-                        CastKind::IntExtend(signed) => Some(signed),
-                    };
+                    let CastSizes { initial, truncate, sign_extend, zero_extend } = sizes;
 
-                    self.append_instr(&format!(";Cast {:?}", kind));
                     self.append_value_to_reg(Register::A, value, signed, 0);
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }

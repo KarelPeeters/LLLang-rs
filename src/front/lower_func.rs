@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
@@ -9,7 +9,7 @@ use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::Signed;
+use crate::mid::ir::{CastSizes, Signed};
 use crate::mid::util::bit_int::BitInt;
 
 /// The state necessary to lower a single function.
@@ -177,15 +177,21 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         let ty_after = self.types.define_type(TypeInfo::Int(info_after));
         let ty_after_ir = self.types.map_type(self.prog, ty_after);
 
-        let cast_kind = match info_after.bits.cmp(&info_before.bits) {
-            Ordering::Equal => return value_before,
-            Ordering::Less => ir::CastKind::IntTruncate,
-            Ordering::Greater => ir::CastKind::IntExtend(info_before.signed),
+        let truncate = min(info_before.bits, info_after.bits);
+        let sign_extend = match info_before.signed {
+            Signed::Signed => info_after.bits,
+            Signed::Unsigned => truncate,
         };
+        let sizes = CastSizes::new(
+            info_before.bits,
+            truncate,
+            sign_extend,
+            info_after.bits,
+        );
 
         let instr = self.append_instr(block, ir::InstructionInfo::Cast {
             ty: ty_after_ir,
-            kind: cast_kind,
+            sizes,
             value: value_before,
         });
         instr.into()
