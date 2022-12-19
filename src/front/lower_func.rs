@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 
 use crate::front::{ast, cst};
-use crate::front::cst::{ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
+use crate::front::cst::{IntTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
@@ -167,32 +167,44 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Undef(ty_ptr_ir) })
     }
 
-    fn append_cast(&mut self, expr: &'ast ast::Expression, block: ir::Block, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
+    fn append_int_cast(&mut self, block: ir::Block, info_before: IntTypeInfo, info_after: IntTypeInfo, value_before: ir::Value) -> ir::Value {
+        // Conceptually all int casting follows the following steps:
+        // * Infinitely extend the value from its original size and signedness.
+        // * Truncate at the new size.
+        // * Finally assume the new signedness.
+        // This means that we should use the signedness from before the cast to extend.
+
+        let ty_after = self.types.define_type(TypeInfo::Int(info_after));
         let ty_after_ir = self.types.map_type(self.prog, ty_after);
 
+        let cast_kind = match info_after.bits.cmp(&info_before.bits) {
+            Ordering::Equal => return value_before,
+            Ordering::Less => CastKind::IntTruncate,
+            Ordering::Greater => CastKind::IntExtend(info_before.signed),
+        };
+
+        let instr = self.append_instr(block, ir::InstructionInfo::Cast {
+            ty: ty_after_ir,
+            kind: cast_kind,
+            value: value_before,
+        });
+        instr.into()
+    }
+
+    fn append_cast(&mut self, expr: &'ast ast::Expression, block: ir::Block, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
         match (&self.types[value_before.ty], &self.types[ty_after]) {
             (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
                 // IR pointers are untyped, so this is a no-op
                 Ok(value_before.ir)
             }
-            (TypeInfo::Int(info_before), TypeInfo::Int(info_after)) => {
-                // Conceptually all int casting follows the following steps:
-                // * Infinitely extend the value from its original size and signedness.
-                // * Truncate at the new size.
-                // * Finally assume the new signedness.
-
-                let cast_kind = match info_after.bits.cmp(&info_before.bits) {
-                    Ordering::Equal => return Ok(value_before.ir),
-                    Ordering::Less => CastKind::IntTruncate,
-                    Ordering::Greater => CastKind::IntExtend(info_before.signed),
-                };
-
-                let instr = self.append_instr(block, ir::InstructionInfo::Cast {
-                    ty: ty_after_ir,
-                    kind: cast_kind,
-                    value: value_before.ir,
-                });
-                Ok(instr.into())
+            (&TypeInfo::Int(info_before), &TypeInfo::Int(info_after)) => {
+                Ok(self.append_int_cast(block, info_before, info_after, value_before.ir))
+            }
+            (TypeInfo::Bool, &TypeInfo::Int(info_after)) => {
+                // We don't also have "int->bool" since that's just "!=".
+                // "bool->int" is just an unsigned int cast
+                let info_before = IntTypeInfo::new(Signed::Unsigned, 1);
+                Ok(self.append_int_cast(block, info_before, info_after, value_before.ir))
             }
             _ => Err(Error::InvalidCastTypes {
                 expression: expr,
