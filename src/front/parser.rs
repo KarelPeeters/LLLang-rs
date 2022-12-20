@@ -1,4 +1,5 @@
 use std::mem::swap;
+use std::num::ParseIntError;
 
 use TokenType as TT;
 
@@ -19,6 +20,11 @@ pub enum ParseError {
         ty: TT,
         description: &'static str,
         allowed: Vec<TokenType>,
+    },
+    IntLit {
+        span: Span,
+        value: String,
+        error: ParseIntError,
     },
     Eof {
         after: Pos,
@@ -934,10 +940,9 @@ impl<'s> Parser<'s> {
 
                     let index = self.expect_any(&[TT::IntLit, TT::Id], "dot index index")?;
                     let index = match index.ty {
-                        //TODO proper IntLit parsing
                         TT::IntLit => ast::DotIndexIndex::Tuple {
                             span: index.span,
-                            index: index.string.parse().unwrap(),
+                            index: parse_int_literal(index)?,
                         },
                         TT::Id => ast::DotIndexIndex::Struct(ast::Identifier {
                             span: index.span,
@@ -1050,7 +1055,7 @@ impl<'s> Parser<'s> {
                 self.expect(TT::OpenB, "blackbox start")?;
                 let value = self.boxed_expression()?;
                 self.expect(TT::CloseB, "blackbox end")?;
-                Ok(ast::Expression{
+                Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::BlackBox { value },
                 })
@@ -1189,9 +1194,7 @@ impl<'s> Parser<'s> {
                 self.pop()?;
                 let inner = self.type_decl()?;
                 self.expect(TT::Semi, "array type delimiter")?;
-                //TODO proper IntLit parsing
-                let length: u32 = self.expect(TT::IntLit, "array length")?.string
-                    .parse().unwrap();
+                let length = parse_int_literal(self.expect(TT::IntLit, "array length")?)?;
                 self.expect(TT::CloseS, "end of array type")?;
 
                 Ok(ast::Type {
@@ -1202,6 +1205,14 @@ impl<'s> Parser<'s> {
             _ => Err(Self::unexpected_token(self.peek(), TYPE_START_TOKENS, "type declaration")),
         }
     }
+}
+
+fn parse_int_literal(token: Token) -> Result<u32> {
+    token.string.parse().map_err(|e| ParseError::IntLit {
+        span: token.span,
+        value: token.string,
+        error: e,
+    })
 }
 
 pub fn parse_module(file: FileId, input: &str) -> Result<ast::ModuleContent> {
