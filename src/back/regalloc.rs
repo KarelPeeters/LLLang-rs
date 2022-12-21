@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use regalloc2 as r2;
-use regalloc2::{Inst, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass, VReg};
+use regalloc2::{Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass, VReg};
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, UseInfo};
-use crate::mid::ir::{Block, Function, Instruction, Phi, Program, Target, Terminator, Value};
+use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Phi, Program, Target, Terminator, Value};
 use crate::mid::normalize::remove_entry_phis::remove_entry_phis;
 use crate::mid::normalize::split_critical_edges::split_critical_edges;
 
@@ -21,7 +21,7 @@ pub fn test_regalloc(prog: &mut Program) {
     for func in use_info.funcs() {
         let wrapper = FuncWrapper::new(prog, func, &use_info);
 
-        let reg_count = 6;
+        let reg_count = 8;
         let regs = (0..reg_count).map(|i| PReg::new(i, RegClass::Int)).collect_vec();
 
         let env = MachineEnv {
@@ -39,19 +39,16 @@ pub fn test_regalloc(prog: &mut Program) {
         let result = r2::run(&wrapper, &env, &options).unwrap();
         println!("{:?}", result);
 
-        for (i, _) in wrapper.insts.iter().enumerate() {
-            let inst = Inst::new(i);
-            let allocs = result.inst_allocs(inst);
-            println!("{:?} has allocs {:?}", inst, allocs);
-        }
-
         println!("Generated code:");
         println!("{:?}", use_info);
 
         for &block in use_info.func_blocks(func) {
             println!("  {:?}:", block);
-            for edit in result.block_insts_and_edits(&wrapper, *wrapper.block_map.get(&block).unwrap()) {
-                println!("    {:?}", edit);
+            for item in result.block_insts_and_edits(&wrapper, *wrapper.block_map.get(&block).unwrap()) {
+                match item {
+                    InstOrEdit::Inst(inst) => println!("    {:?} {:?}", inst, result.inst_allocs(inst)),
+                    InstOrEdit::Edit(edit) => println!("    {:?}", edit),
+                }
             }
         }
     }
@@ -132,14 +129,29 @@ impl FuncWrapper {
                 let mut operands = vec![];
                 let mut clobbers = PRegSet::empty();
 
+                let instr_info = prog.get_instr(instr);
                 let output_reg = mapper.map_instr(instr);
-                operands.push(Operand::reg_def(output_reg));
 
-                for_each_usage_in_instr((), prog.get_instr(instr), |value, _| {
-                    if let Some(value_reg) = mapper.map_value(value) {
-                        operands.push(Operand::reg_use(value_reg));
+                match instr_info {
+                    &InstructionInfo::Arithmetic { kind, left, right } => {
+                        let left_reg = mapper.map_value(left).unwrap();
+                        let right_reg = mapper.map_value(right);
+
+                        operands.push(Operand::reg_reuse_def(output_reg, 1));
+                        operands.push(Operand::reg_use(left_reg));
+                        if let Some(right_reg) = right_reg {
+                            operands.push(Operand::reg_use(right_reg));
+                        }
                     }
-                });
+                    _ => {
+                        operands.push(Operand::reg_def(output_reg));
+                        for_each_usage_in_instr((), instr_info, |value, _| {
+                            if let Some(value_reg) = mapper.map_value(value) {
+                                operands.push(Operand::reg_use(value_reg));
+                            }
+                        });
+                    }
+                }
 
                 let info = InstInfo {
                     is_ret: false,
