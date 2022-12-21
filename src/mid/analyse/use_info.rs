@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use indexmap::IndexSet;
-use indexmap::map::IndexMap;
+use indexmap::map::{Entry, IndexMap};
 
 use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
 
@@ -159,26 +159,30 @@ impl UseInfo {
         let mut todo_funcs = VecDeque::new();
         let mut todo_blocks = VecDeque::new();
         let mut visited_funcs = IndexMap::new();
-        let mut visited_blocks = HashSet::new();
 
         todo_funcs.push_back(prog.main);
 
         while !todo_funcs.is_empty() | !todo_blocks.is_empty() {
             if let Some(func) = todo_funcs.pop_front() {
-                let prev = visited_funcs.insert(func, IndexSet::default());
-                if prev.is_none() {
-                    let func_info = prog.get_func(func);
-                    let block_pos = BlockPos { func, block: func_info.entry.block };
+                match visited_funcs.entry(func) {
+                    Entry::Occupied(_) => {
+                        // we've already visited this function
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(IndexSet::default());
 
-                    todo_blocks.push_back(block_pos);
-                    info.add_target_usages(&func_info.entry, TargetKind::EntryFrom(func))
+                        let func_info = prog.get_func(func);
+                        let block_pos = BlockPos { func, block: func_info.entry.block };
+
+                        todo_blocks.push_back(block_pos);
+                        info.add_target_usages(&func_info.entry, TargetKind::EntryFrom(func))
+                    }
                 }
             }
 
             if let Some(block_pos) = todo_blocks.pop_front() {
                 let BlockPos { func, block } = block_pos;
-
-                if visited_blocks.insert(block) {
+                if visited_funcs.get_mut(&func).unwrap().insert(block) {
                     let block_info = prog.get_block(block);
 
                     //instructions
