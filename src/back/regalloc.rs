@@ -127,14 +127,14 @@ impl FuncWrapper {
             // append instructions
             for &instr in &prog.get_block(block).instructions {
                 let mut operands = vec![];
-                let mut clobbers = PRegSet::empty();
+                let clobbers = PRegSet::empty();
 
                 let instr_info = prog.get_instr(instr);
                 let output_reg = mapper.map_instr(instr);
 
                 match instr_info {
-                    &InstructionInfo::Arithmetic { kind, left, right } => {
-                        let left_reg = mapper.map_value(left).unwrap();
+                    &InstructionInfo::Arithmetic { kind: _, left, right } => {
+                        let left_reg = mapper.map_value(left).unwrap_or_else(|| mapper.new_vreg());
                         let right_reg = mapper.map_value(right);
 
                         operands.push(Operand::reg_reuse_def(output_reg, 1));
@@ -246,7 +246,7 @@ impl FuncWrapper {
             blocks,
             insts: instrs,
             vregs: mapper.next_vreg,
-            mapper,
+            _mapper: mapper,
             block_map,
         }
     }
@@ -259,7 +259,7 @@ struct FuncWrapper {
     vregs: usize,
 
     block_map: HashMap<Block, r2::Block>,
-    mapper: Mapper,
+    _mapper: Mapper,
 }
 
 struct InstInfo {
