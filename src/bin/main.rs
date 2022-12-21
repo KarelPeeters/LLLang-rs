@@ -12,6 +12,7 @@ use itertools::Itertools;
 use walkdir::{DirEntry, WalkDir};
 
 use lllang::{back, front, mid};
+use lllang::back::regalloc::test_regalloc;
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
@@ -221,8 +222,11 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     }
     verify(&ir_program)?;
 
+    println!("----Regalloc---");
+    test_regalloc(&mut ir_program.clone());
+
     println!("----Backend----");
-    let asm = back::x86_asm::lower(&ir_program);
+    let asm = back::x86_asm::lower(&mut ir_program);
     let asm_file = ll_path.with_extension("asm");
     File::create(&asm_file).with_context(|| format!("Creating ASM file {:?}", asm_file))?
         .write_all(asm.as_bytes()).with_context(|| "Writing to ASM file")?;
