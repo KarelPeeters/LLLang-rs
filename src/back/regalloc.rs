@@ -19,6 +19,7 @@ pub fn test_regalloc(prog: &mut Program) {
     let use_info = UseInfo::new(prog);
 
     for func in use_info.funcs() {
+        let dom_info = DomInfo::new(prog, func);
         let wrapper = FuncWrapper::new(prog, func, &use_info);
 
         let reg_count = 8;
@@ -40,9 +41,8 @@ pub fn test_regalloc(prog: &mut Program) {
         println!("{:?}", result);
 
         println!("Generated code:");
-        println!("{:?}", use_info);
 
-        for &block in use_info.func_blocks(func) {
+        for &block in &dom_info.blocks {
             println!("  {:?}:", block);
             for item in result.block_insts_and_edits(&wrapper, *wrapper.block_map.get(&block).unwrap()) {
                 match item {
@@ -78,13 +78,34 @@ impl Mapper {
         self.map_value(instr.into()).unwrap()
     }
 
+    fn new_dummy(&mut self, value: Value, instrs: &mut Vec<InstInfo>) -> VReg {
+        let reg = self.new_vreg();
+
+        println!("{:?} <- dummy {:?} ({:?})", Inst::new(instrs.len()), value, reg);
+
+        instrs.push(InstInfo {
+            is_ret: false,
+            is_branch: false,
+            is_move: None,
+            operands: vec![Operand::reg_def(reg)],
+            clobbers: PRegSet::empty(),
+            branch_blockparams: vec![],
+        });
+
+        reg
+    }
+
     fn map_value(&mut self, value: Value) -> Option<VReg> {
         match value {
             Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) |
-            Value::Param(_) | Value::Slot(_) | Value::Extern(_) | Value::Data(_) => {
+            Value::Slot(_) | Value::Extern(_) | Value::Data(_) => {
                 // these typically don't require an actual register
                 // TODO put params in registers
                 None
+            }
+            Value::Param(_) => {
+                // params should have been mapped at the start of the function
+                Some(*self.value_map.get(&value).unwrap())
             }
             Value::Phi(_) | Value::Instr(_) => {
                 let next_vreg = &mut self.next_vreg;
@@ -99,10 +120,15 @@ impl Mapper {
             }
         }
     }
+
+    fn map_value_or_dummy(&mut self, value: Value, instrs: &mut Vec<InstInfo>) -> VReg {
+        self.map_value(value).unwrap_or_else(|| self.new_dummy(value, instrs))
+    }
 }
 
 impl FuncWrapper {
     fn new(prog: &Program, func: Function, _: &UseInfo) -> Self {
+        let func_info = prog.get_func(func);
         let dom_info = DomInfo::new(prog, func);
 
         let block_map: HashMap<Block, r2::Block> = dom_info.blocks.iter().enumerate().map(|(i, &b)| {
@@ -122,7 +148,18 @@ impl FuncWrapper {
             let inst_start = instrs.len();
 
             // map phis
-            let phis = prog.get_block(block).phis.iter().map(|&phi| mapper.map_phi(phi)).collect();
+            let phis = prog.get_block(block).phis.iter().map(|&phi| mapper.map_phi(phi)).collect_vec();
+
+            // map params
+            if func_info.entry.block == block {
+                assert!(phis.is_empty());
+                assert!(instrs.is_empty());
+                for &param in &func_info.params {
+                    // TODO put params in fixed registers? or fixed stack slots?
+                    let reg = mapper.new_dummy(param.into(), &mut instrs);
+                    mapper.value_map.insert(param.into(), reg);
+                }
+            }
 
             // append instructions
             for &instr in &prog.get_block(block).instructions {
@@ -134,7 +171,7 @@ impl FuncWrapper {
 
                 match instr_info {
                     &InstructionInfo::Arithmetic { kind: _, left, right } => {
-                        let left_reg = mapper.map_value(left).unwrap_or_else(|| mapper.new_vreg());
+                        let left_reg = mapper.map_value_or_dummy(left, &mut instrs);
                         let right_reg = mapper.map_value(right);
 
                         operands.push(Operand::reg_reuse_def(output_reg, 1));
@@ -153,6 +190,8 @@ impl FuncWrapper {
                     }
                 }
 
+                println!("{:?} <- {:?} ({:?})", Inst::new(instrs.len()), instr, operands);
+
                 let info = InstInfo {
                     is_ret: false,
                     is_branch: false,
@@ -161,9 +200,6 @@ impl FuncWrapper {
                     clobbers,
                     branch_blockparams: vec![],
                 };
-
-                println!("{:?} <- {:?}", Inst::new(instrs.len()), instr);
-
                 instrs.push(info);
             }
 
@@ -176,22 +212,7 @@ impl FuncWrapper {
                 let mut add_target = |t: &Target| {
                     has_target = true;
                     phi_args.push(t.phi_values.iter().map(|&phi_value| {
-                        mapper.map_value(phi_value).unwrap_or_else(|| {
-                            let reg = mapper.new_vreg();
-
-                            println!("{:?} <- phi_value {:?}", Inst::new(instrs.len()), phi_value);
-
-                            // define dummy store instruction
-                            instrs.push(InstInfo {
-                                is_ret: false,
-                                is_branch: false,
-                                is_move: None,
-                                operands: vec![Operand::reg_def(reg)],
-                                clobbers: PRegSet::empty(),
-                                branch_blockparams: vec![],
-                            });
-                            reg
-                        })
+                        mapper.map_value_or_dummy(phi_value, &mut instrs)
                     }).collect());
                 };
 
