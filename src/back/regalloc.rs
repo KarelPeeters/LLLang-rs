@@ -45,9 +45,15 @@ pub fn test_regalloc(prog: &mut Program) {
             println!("{:?} has allocs {:?}", inst, allocs);
         }
 
-        // for (k, v) in wrapper.mapper.value_map {
-        //     println!("{:?} -> {:?} got allocated as {:?}", k, v, result.allocs[v]);
-        // }
+        println!("Generated code:");
+        println!("{:?}", use_info);
+
+        for &block in use_info.func_blocks(func) {
+            println!("  {:?}:", block);
+            for edit in result.block_insts_and_edits(&wrapper, *wrapper.block_map.get(&block).unwrap()) {
+                println!("    {:?}", edit);
+            }
+        }
     }
 }
 
@@ -212,7 +218,7 @@ impl FuncWrapper {
 
             // finalize block
             let inst_end = instrs.len();
-            let inst_range = InstRange::forward(r2::Inst::new(inst_start), r2::Inst::new(inst_end));
+            let inst_range = InstRange::forward(Inst::new(inst_start), Inst::new(inst_end));
 
             let mut succs = vec![];
             prog.get_block(block).terminator.for_each_successor(|succ| succs.push(map_block(succ)));
@@ -229,6 +235,7 @@ impl FuncWrapper {
             insts: instrs,
             vregs: mapper.next_vreg,
             mapper,
+            block_map,
         }
     }
 }
@@ -238,6 +245,8 @@ struct FuncWrapper {
     blocks: Vec<R2BlockInfo>,
     insts: Vec<InstInfo>,
     vregs: usize,
+
+    block_map: HashMap<Block, r2::Block>,
     mapper: Mapper,
 }
 
@@ -291,27 +300,27 @@ impl r2::Function for FuncWrapper {
         &self.blocks[block.0 as usize].params
     }
 
-    fn is_ret(&self, inst: r2::Inst) -> bool {
+    fn is_ret(&self, inst: Inst) -> bool {
         self.insts[inst.0 as usize].is_ret
     }
 
-    fn is_branch(&self, inst: r2::Inst) -> bool {
+    fn is_branch(&self, inst: Inst) -> bool {
         self.insts[inst.0 as usize].is_branch
     }
 
-    fn branch_blockparams(&self, _: r2::Block, inst: r2::Inst, succ_idx: usize) -> &[VReg] {
+    fn branch_blockparams(&self, _: r2::Block, inst: Inst, succ_idx: usize) -> &[VReg] {
         &self.insts[inst.0 as usize].branch_blockparams[succ_idx]
     }
 
-    fn is_move(&self, inst: r2::Inst) -> Option<(Operand, Operand)> {
+    fn is_move(&self, inst: Inst) -> Option<(Operand, Operand)> {
         self.insts[inst.0 as usize].is_move
     }
 
-    fn inst_operands(&self, inst: r2::Inst) -> &[Operand] {
+    fn inst_operands(&self, inst: Inst) -> &[Operand] {
         &self.insts[inst.0 as usize].operands
     }
 
-    fn inst_clobbers(&self, inst: r2::Inst) -> PRegSet {
+    fn inst_clobbers(&self, inst: Inst) -> PRegSet {
         self.insts[inst.0 as usize].clobbers
     }
 
