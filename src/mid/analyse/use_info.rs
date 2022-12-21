@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};

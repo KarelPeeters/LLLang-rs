@@ -526,6 +526,12 @@ impl Terminator {
             Terminator::Unreachable => (),
         }
     }
+    
+    pub fn target_count(&self) -> usize {
+        let mut count = 0;
+        self.for_each_target(|_| count += 1);
+        count
+    }
 
     pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
         match self {
