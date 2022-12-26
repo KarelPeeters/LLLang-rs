@@ -14,7 +14,7 @@ pub enum VerifyError {
     ExpectedIntegerType(Option<Value>, Type, String),
     ExpectedTupleType(Type, String),
     ExpectedFunctionType(Type, String),
-    WrongCallArgCount(Type, String, usize),
+    WrongParamCount(Type, String, usize),
     TupleIndexOutOfBounds(Type, String, u32, u32),
 
     NonDeclaredValueUsed(Value, DomPosition),
@@ -64,6 +64,12 @@ pub fn verify(prog: &Program) -> Result {
 
         // check function signature match
         ensure_type_match(prog, func_info.ty, prog.types.lookup(&TypeInfo::Func(func_info.func_ty.clone())).unwrap())?;
+        if func_info.func_ty.params.len() != func_info.params.len() {
+            return Err(VerifyError::WrongParamCount(func_info.ty, prog.format_type(func_info.ty).to_string(), func_info.params.len()));
+        }
+        for (&param_ty, &param) in zip(&func_info.func_ty.params, &func_info.params) {
+            ensure_type_match(prog, param_ty, prog.type_of_value(param.into()))?;
+        }
 
         // check entry target
         ctx.check_target(&func_info.entry, DomPosition::FuncEntry(func))?;
@@ -170,7 +176,7 @@ fn check_instr_types(prog: &Program, instr: Instruction) -> Result {
                 .ok_or_else(|| VerifyError::ExpectedFunctionType(target_ty, prog.format_type(target_ty).to_string()))?;
 
             if target_func_ty.params.len() != args.len() {
-                return Err(VerifyError::WrongCallArgCount(target_ty, prog.format_type(target_ty).to_string(), args.len()));
+                return Err(VerifyError::WrongParamCount(target_ty, prog.format_type(target_ty).to_string(), args.len()));
             }
 
             for (&param, &arg) in zip(&target_func_ty.params, args) {

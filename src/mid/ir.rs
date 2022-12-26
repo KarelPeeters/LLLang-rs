@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 use derive_more::{Constructor, From};
+use itertools::Itertools;
 
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::{Arena, ArenaSet};
@@ -102,7 +103,7 @@ impl Default for Program {
 
         let block = nodes.blocks.push(BlockInfo::new());
         let entry = Target { block, phi_values: vec![] };
-        let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
+        let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry, vec![]);
         let main = nodes.funcs.push(main_info);
 
         Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_isize, main }
@@ -263,23 +264,28 @@ pub struct FunctionInfo {
 }
 
 impl FunctionInfo {
-    /// Create a new function with the given type. The entry blocks starts out empty and unreachable.
+    /// Create a new function with the given type.
+    /// * The params are automatically created.
+    /// * The entry blocks starts out empty and with an unreachable terminator.
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
         let block = prog.define_block(BlockInfo::new());
         let entry = Target { block, phi_values: vec![] };
+        let params = func_ty.params.iter()
+            .map(|&param_ty| prog.define_param(ParameterInfo { ty: param_ty }))
+            .collect_vec();
 
-        Self::new_given_parts(func_ty, ty, entry)
+        Self::new_given_parts(func_ty, ty, entry, params)
     }
 
-    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target) -> Self {
+    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target, params: Vec<Parameter>) -> Self {
         Self {
             ty,
             func_ty,
             global_name: None,
             debug_name: None,
             entry,
-            params: Vec::new(),
+            params,
             slots: Vec::new(),
         }
     }
