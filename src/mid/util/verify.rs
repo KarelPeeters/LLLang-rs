@@ -3,7 +3,7 @@ use std::iter::zip;
 
 use crate::mid::analyse::dom_info::{BlockPosition, DomInfo, DomPosition};
 use crate::mid::analyse::use_info::try_for_each_usage_in_instr;
-use crate::mid::ir::{Block, BlockInfo, Function, Instruction, InstructionInfo, Program, Type, TypeInfo, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Type, TypeInfo, Value};
 
 #[derive(Debug)]
 pub enum VerifyError {
@@ -19,7 +19,7 @@ pub enum VerifyError {
 
     NonDeclaredValueUsed(Value, DomPosition),
     NonDominatingValueUsed(Value, DomPosition, DomPosition),
-    WrongPhiCount(Block, Block),
+    WrongPhiCount(DomPosition, Block),
 }
 
 type Result<T = ()> = std::result::Result<T, VerifyError>;
@@ -54,10 +54,19 @@ pub fn verify(prog: &Program) -> Result {
 
     // check types and value domination
     for (func, func_info) in &prog.nodes.funcs {
+        let dom_info = &DomInfo::new(prog, func);
+
+        let ctx = Context {
+            prog,
+            declarer: &declarer,
+            dom_info,
+        };
+
         // check function signature match
         ensure_type_match(prog, func_info.ty, prog.types.lookup(&TypeInfo::Func(func_info.func_ty.clone())).unwrap())?;
 
-        let dom_info = &DomInfo::new(prog, func);
+        // check entry target
+        ctx.check_target(&func_info.entry, DomPosition::FuncEntry(func))?;
 
         for &block in &dom_info.blocks {
             let BlockInfo { phis: _, instructions, terminator } = prog.get_block(block);
@@ -71,36 +80,77 @@ pub fn verify(prog: &Program) -> Result {
                 // check instr arg domination
                 let use_pos = DomPosition::InBlock(func, block, BlockPosition::at_instruction(instr_index));
                 try_for_each_usage_in_instr((), instr_info, |value, _| {
-                    declarer.ensure_dominates(dom_info, value, use_pos)
+                    ctx.ensure_dominates(value, use_pos)
                 })?;
             }
 
-            // check terminator arg domination
-            let term_use_pos = DomPosition::InBlock(func, block, BlockPosition::after_instructions(instructions.len()));
-            terminator.try_for_each_non_target_value(|value| {
-                declarer.ensure_dominates(dom_info, value, term_use_pos)
-            })?;
+            // check terminator
+            let term_pos = DomPosition::InBlock(func, block, BlockPosition::after_instructions(instructions.len()));
 
-            terminator.try_for_each_target(|target| {
-                // check phi type match
-                let target_block_info = prog.get_block(target.block);
-                if target.phi_values.len() != target_block_info.phis.len() {
-                    return Err(VerifyError::WrongPhiCount(block, target.block));
+            match terminator {
+                &Terminator::Jump { ref target } => {
+                    ctx.check_target(target, term_pos)?
                 }
-                for (&phi, &phi_value) in zip(&target_block_info.phis, &target.phi_values) {
-                    ensure_type_match(prog, prog.get_phi(phi).ty, prog.type_of_value(phi_value))?;
+                &Terminator::Branch { cond, ref true_target, ref false_target } => {
+                    ensure_type_match(prog, prog.type_of_value(cond), prog.ty_bool())?;
+                    ctx.ensure_dominates(cond, term_pos)?;
+                    ctx.check_target(true_target, term_pos)?;
+                    ctx.check_target(false_target, term_pos)?;
                 }
-
-                // check phi domination
-                for &value in &target.phi_values {
-                    declarer.ensure_dominates(dom_info, value, term_use_pos)?;
+                &Terminator::Return { value } => {
+                    ensure_type_match(prog, prog.type_of_value(value), func_info.func_ty.ret)?;
                 }
-                Ok(())
-            })?;
+                &Terminator::Unreachable => {}
+            }
         }
     }
 
     Ok(())
+}
+
+#[derive(Copy, Clone)]
+struct Context<'a> {
+    prog: &'a Program,
+    declarer: &'a FuncDeclareChecker,
+    dom_info: &'a DomInfo,
+}
+
+impl<'a> Context<'a> {
+    fn check_target(&self, target: &Target, pos: DomPosition) -> Result {
+        let prog = self.prog;
+
+        // check phi type match
+        let target_block_info = prog.get_block(target.block);
+        if target.phi_values.len() != target_block_info.phis.len() {
+            return Err(VerifyError::WrongPhiCount(pos, target.block));
+        }
+        for (&phi, &phi_value) in zip(&target_block_info.phis, &target.phi_values) {
+            ensure_type_match(prog, prog.get_phi(phi).ty, prog.type_of_value(phi_value))?;
+        }
+
+        // check phi domination
+        for &value in &target.phi_values {
+            self.ensure_dominates(value, pos)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_dominates(&self, value: Value, use_pos: DomPosition) -> Result {
+        let def_pos = match value {
+            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => {
+                DomPosition::Global
+            }
+            Value::Param(_) | Value::Slot(_) | Value::Phi(_) | Value::Instr(_) => {
+                self.declarer.value_declared_pos.get(&value).copied().ok_or_else(|| VerifyError::NonDeclaredValueUsed(value, use_pos))?
+            }
+        };
+
+        if self.dom_info.pos_is_strict_dominator(def_pos, use_pos) {
+            Ok(())
+        } else {
+            Err(VerifyError::NonDominatingValueUsed(value, def_pos, use_pos))
+        }
+    }
 }
 
 fn check_instr_types(prog: &Program, instr: Instruction) -> Result {
@@ -187,23 +237,6 @@ impl FuncDeclareChecker {
         match prev {
             Some(prev) => Err(VerifyError::BlockDeclaredTwice(block, prev, func)),
             None => Ok(()),
-        }
-    }
-
-    fn ensure_dominates(&self, dom_info: &DomInfo, value: Value, use_pos: DomPosition) -> Result {
-        let def_pos = match value {
-            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => {
-                DomPosition::Global
-            }
-            Value::Param(_) | Value::Slot(_) | Value::Phi(_) | Value::Instr(_) => {
-                self.value_declared_pos.get(&value).copied().ok_or_else(|| VerifyError::NonDeclaredValueUsed(value, use_pos))?
-            }
-        };
-
-        if dom_info.pos_is_strict_dominator(def_pos, use_pos) {
-            Ok(())
-        } else {
-            Err(VerifyError::NonDominatingValueUsed(value, def_pos, use_pos))
         }
     }
 }
