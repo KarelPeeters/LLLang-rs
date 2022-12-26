@@ -5,6 +5,8 @@ use crate::util::IndexMutTwice;
 
 #[derive(Debug)]
 pub struct DomInfo {
+    // TODO make these private with getters at some point
+    pub func: Function,
     pub blocks: Vec<Block>,
     successors: Vec<FixedBitSet>,
     dominates: Vec<FixedBitSet>,
@@ -107,6 +109,7 @@ impl DomInfo {
             .collect();
 
         DomInfo {
+            func,
             blocks,
             successors,
             dominates,
@@ -158,5 +161,71 @@ impl DomInfo {
         (0..self.blocks.len())
             .filter(move |&pi| self.successors[pi][bi])
             .map(move |pi| self.blocks[pi])
+    }
+
+    /// Whether `define` strictly dominates `user`.
+    /// For values this corresponds to whether values defined at `define` are available as arguments at `user`.
+    pub fn pos_is_strict_dominator(&self, define: DomPosition, user: DomPosition) -> bool {
+        // things defined in different functions never dominate each other
+        if let (Some(d_func), Some(u_func)) = (define.function(), user.function()) {
+            if d_func != u_func {
+                return false;
+            }
+        }
+
+        match (define, user) {
+            // global dominates everything and nothing else dominates the entry
+            (DomPosition::Global, _) => true,
+            (_, DomPosition::Global) => false,
+
+            // the same is true for the entry (if the function matches, which it does)
+            (DomPosition::FuncEntry(_), _) => true,
+            (_, DomPosition::FuncEntry(_)) => false,
+
+            // an "instruction" dominates if it's earlier in the same block or if the block strictly dominates
+            (DomPosition::InBlock(_, d_block, d_index), DomPosition::InBlock(_, u_block, u_index)) => {
+                (d_block == u_block && d_index < u_index) || self.is_strict_dominator(d_block, u_block)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum DomPosition {
+    Global,
+    FuncEntry(Function),
+    InBlock(Function, Block, BlockPosition),
+}
+
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct BlockPosition {
+    index: usize,
+}
+
+impl DomPosition {
+    fn function(self) -> Option<Function> {
+        match self {
+            DomPosition::Global => None,
+            DomPosition::FuncEntry(func) => Some(func),
+            DomPosition::InBlock(func, _, _) => Some(func),
+        }
+    }
+}
+
+impl BlockPosition {
+    fn new(index: usize) -> Self {
+        Self { index }
+    }
+
+    pub fn before_instructions() -> Self {
+        Self::new(0)
+    }
+
+    pub fn at_instruction(instr_index: usize) -> Self {
+        Self::new(1 + instr_index)
+    }
+
+    pub fn after_instructions(instr_count: usize) -> Self {
+        Self::new(1 + instr_count)
     }
 }

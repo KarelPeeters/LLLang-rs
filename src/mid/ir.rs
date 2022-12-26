@@ -77,7 +77,7 @@ pub struct Program {
     #[allow(dead_code)]
     ty_bool: Type,
     #[allow(dead_code)]
-    ty_int: Type,
+    ty_isize: Type,
 
     //TODO change program to have multiple possible entries with arbitrary signatures instead
     //  partly for elegance but also because this is too limiting, all extern functions should be considered entry points
@@ -85,7 +85,7 @@ pub struct Program {
 }
 
 impl Default for Program {
-    /// Return the program representing `fn main() -> int { unreachable(); }`
+    /// Return the program representing `fn main() -> void { unreachable(); }`
     fn default() -> Self {
         let mut types = ArenaSet::default();
         let mut nodes = Arenas::default();
@@ -93,9 +93,11 @@ impl Default for Program {
         let ty_void = types.push(TypeInfo::Void);
         let ty_ptr = types.push(TypeInfo::Pointer);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
-        let ty_int = types.push(TypeInfo::Integer { bits: 32 });
+        // TODO change this when we switch to 64-bit
+        //   or just make this configurable?
+        let ty_isize = types.push(TypeInfo::Integer { bits: 32 });
 
-        let main_func_ty = FunctionType { params: Vec::new(), ret: ty_int };
+        let main_func_ty = FunctionType { params: Vec::new(), ret: ty_void };
         let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
 
         let block = nodes.blocks.push(BlockInfo::new());
@@ -103,7 +105,7 @@ impl Default for Program {
         let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry);
         let main = nodes.funcs.push(main_info);
 
-        Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_int, main }
+        Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_isize, main }
     }
 }
 
@@ -139,6 +141,10 @@ impl Program {
 
     pub fn ty_bool(&self) -> Type {
         self.ty_bool
+    }
+
+    pub fn ty_isize(&self) -> Type {
+        self.ty_isize
     }
 
     pub fn get_type(&self, ty: Type) -> &TypeInfo {
@@ -354,6 +360,7 @@ pub enum InstructionInfo {
     /// `value` can be negative..
     ///
     /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
+    // TODO clarify whether index is signed or unsigned
     PointerOffSet { ty: Type, base: Value, index: Value },
 
     /// Convert `value` to `ty`. `kind` specifies additional semantics this cast will have.
@@ -509,9 +516,21 @@ impl Target {
     }
 }
 
+// TODO all of these "(try)?_for_each_(.*)" function are getting annoying, is there a better way to do this?
 impl Terminator {
     pub fn replace_blocks(&mut self, mut f: impl FnMut(Block) -> Block) {
         self.for_each_target_mut(|target| target.replace_blocks(&mut f));
+    }
+
+    pub fn try_for_each_non_target_value<E>(&self, mut f: impl FnMut(Value) -> Result<(), E>) -> Result<(), E> {
+        match self {
+            Terminator::Jump { target: _ } => {}
+            &Terminator::Branch { cond, true_target: _, false_target: _ } => f(cond)?,
+            &Terminator::Return { value } => f(value)?,
+            Terminator::Unreachable => {}
+        }
+
+        Ok(())
     }
 
     pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
@@ -526,7 +545,7 @@ impl Terminator {
             Terminator::Unreachable => (),
         }
     }
-    
+
     pub fn target_count(&self) -> usize {
         let mut count = 0;
         self.for_each_target(|_| count += 1);
@@ -555,6 +574,19 @@ impl Terminator {
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
         }
+    }
+
+    pub fn try_for_each_target<E, F: FnMut(&Target) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
+        match self {
+            Terminator::Jump { target } => f(target)?,
+            Terminator::Branch { true_target, false_target, .. } => {
+                f(true_target)?;
+                f(false_target)?;
+            }
+            Terminator::Return { value: _ } => {}
+            Terminator::Unreachable => {}
+        }
+        Ok(())
     }
 
     pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {

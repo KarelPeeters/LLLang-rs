@@ -15,6 +15,7 @@ use lllang::{back, front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
+use lllang::mid::util::verify::{verify, VerifyError};
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -23,6 +24,7 @@ enum CompileError {
     InvalidFileName(OsString),
     DuplicateModule(String),
     Parse(ParseError),
+    Verify(VerifyError),
     Assemble,
     Link,
 }
@@ -112,11 +114,12 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
     Ok(prog)
 }
 
-fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> bool {
+fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
     let nodes_before = prog.nodes.total_node_count();
     let str_before = prog.to_string();
 
     let mut changed = pass(prog);
+    verify(&prog)?;
 
     let nodes_after = prog.nodes.total_node_count();
     let str_after = prog.to_string();
@@ -140,17 +143,17 @@ fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::
         changed = str_changed;
     }
 
-    changed
+    Ok(changed)
 }
 
-fn run_gc(prog: &mut mid::ir::Program) -> bool {
-    let changed = run_single_pass(prog, mid::opt::gc::gc);
+fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
+    let changed = run_single_pass(prog, mid::opt::gc::gc)?;
     // TODO maybe only do this in debug mode
-    assert!(!run_single_pass(prog, mid::opt::gc::gc), "GC has to be idempotent");
-    changed
+    assert!(!run_single_pass(prog, mid::opt::gc::gc)?, "GC has to be idempotent");
+    Ok(changed)
 }
 
-fn run_optimizations(prog: &mut mid::ir::Program) {
+fn run_optimizations(prog: &mut mid::ir::Program) -> Result<(), VerifyError> {
     let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
         mid::opt::slot_to_phi::slot_to_phi,
         mid::opt::inline::inline,
@@ -164,20 +167,22 @@ fn run_optimizations(prog: &mut mid::ir::Program) {
         mid::opt::mem_forwarding::mem_forwarding,
     ];
 
-    run_gc(prog);
+    run_gc(prog)?;
 
     loop {
         let mut changed = false;
 
         for pass in passes {
-            if run_single_pass(prog, pass) {
-                run_gc(prog);
+            if run_single_pass(prog, pass)? {
+                run_gc(prog)?;
                 changed |= true;
             }
         }
 
         if !changed { break; }
     }
+
+    Ok(())
 }
 
 fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
@@ -198,21 +203,23 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     let mut ir_program = front::lower::lower(resolved)
         .expect("failed to lower"); //TODO ? instead of panic here
     // always run a single GC pass to remove all of the dead functions from the saved ir file
-    run_gc(&mut ir_program);
+    run_gc(&mut ir_program)?;
     let ir_file = ll_path.with_extension("ir");
     File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
         .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
+    verify(&ir_program)?;
 
     println!("----Optimize---");
     let ir_opt_file = ll_path.with_extension("ir_opt");
     if optimize {
-        run_optimizations(&mut ir_program);
+        run_optimizations(&mut ir_program)?;
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
     } else {
         //clear file
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
     }
+    verify(&ir_program)?;
 
     println!("----Backend----");
     let asm = back::x86_asm::lower(&ir_program);

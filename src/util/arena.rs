@@ -189,6 +189,10 @@ pub struct ArenaSet<K: IndexType, T: Eq + Hash + Clone> {
 }
 
 impl<K: IndexType, T: Eq + Hash + Clone + Debug> ArenaSet<K, T> {
+    pub fn lookup(&self, value: &T) -> Option<K> {
+        self.map_back.get(value).map(|&i| K::new(Idx::new(i)))
+    }
+    
     pub fn push(&mut self, value: T) -> K {
         if let Some(&i) = self.map_back.get(&value) {
             K::new(Idx::new(i))
