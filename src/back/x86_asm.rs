@@ -10,14 +10,7 @@ use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
 pub fn lower(prog: &Program) -> String {
-    AsmBuilder {
-        prog,
-        next_label_number: Default::default(),
-        block_numbers: Default::default(),
-        func_numbers: Default::default(),
-        data_numbers: Default::default(),
-        used_externs: Default::default(),
-    }.lower()
+    AsmBuilder::new(prog).lower()
 }
 
 const STACK_ALIGNMENT: i32 = 4;
@@ -40,15 +33,28 @@ impl Output {
     }
 }
 
-struct AsmBuilder<'p> {
-    prog: &'p Program,
-    next_label_number: usize,
+pub struct AsmBuilder<'p> {
+    pub prog: &'p Program,
+    pub next_label_number: usize,
 
     //TODO make these match the indices in the IR debug format
-    block_numbers: IndexMap<Block, usize>,
-    func_numbers: IndexMap<Function, usize>,
-    data_numbers: IndexMap<Data, usize>,
-    used_externs: IndexSet<Extern>,
+    pub block_numbers: IndexMap<Block, usize>,
+    pub func_numbers: IndexMap<Function, usize>,
+    pub data_numbers: IndexMap<Data, usize>,
+    pub used_externs: IndexSet<Extern>,
+}
+
+impl<'p> AsmBuilder<'p> {
+    pub fn new(prog: &'p Program) -> Self {
+        Self {
+            prog,
+            next_label_number: Default::default(),
+            block_numbers: Default::default(),
+            func_numbers: Default::default(),
+            data_numbers: Default::default(),
+            used_externs: Default::default(),
+        }
+    }
 }
 
 struct AsmFuncBuilder<'p, 'o, 'r> {

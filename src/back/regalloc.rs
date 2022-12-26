@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use env_logger::Builder;
 
 use itertools::Itertools;
 use regalloc2 as r2;
@@ -36,7 +37,7 @@ pub fn test_regalloc(prog: &mut Program) {
             validate_ssa: true,
         };
 
-        // Builder::new().filter_level(LevelFilter::Trace).init();
+        //Builder::new().filter_level(LevelFilter::Trace).init();
         let result = r2::run(&wrapper, &env, &options).unwrap();
         println!("{:?}", result);
 
