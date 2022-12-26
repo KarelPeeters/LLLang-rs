@@ -103,46 +103,53 @@ pub struct UseInfo {
     block_usages: IndexMap<Block, Vec<BlockUsage>>,
 }
 
+pub fn for_each_usage_in_instr<P: Copy>(pos: P, instr_info: &InstructionInfo, mut f: impl FnMut(Value, Usage<P>)) {
+    try_for_each_usage_in_instr::<P, ()>(pos, instr_info, |value, usage| {
+        f(value, usage);
+        Ok(())
+    }).unwrap();
+}
+
 // TODO maybe create additional "InstrUsage" enum for only these Usages?
-pub fn for_each_usage_in_instr<P: Copy, F: FnMut(Value, Usage<P>)>(
+pub fn try_for_each_usage_in_instr<P: Copy, E>(
     pos: P,
     instr_info: &InstructionInfo,
-    mut f: F,
-) {
-    // match patterns in this function don't use .. since newly added fields could mean newly added usages!
+    mut f: impl FnMut(Value, Usage<P>) -> Result<(), E>,
+) -> Result<(), E> {
     match instr_info {
         &InstructionInfo::Load { addr, ty: _ } => {
-            f(addr, Usage::LoadAddr { pos })
+            f(addr, Usage::LoadAddr { pos })?;
         }
         &InstructionInfo::Store { addr, value, ty: _ } => {
-            f(addr, Usage::StoreAddr { pos });
-            f(value, Usage::StoreValue { pos });
+            f(addr, Usage::StoreAddr { pos })?;
+            f(value, Usage::StoreValue { pos })?;
         }
         &InstructionInfo::Call { target, ref args } => {
-            f(target, Usage::CallTarget { pos });
+            f(target, Usage::CallTarget { pos })?;
             for (index, &arg) in args.iter().enumerate() {
-                f(arg, Usage::CallArgument { pos, index });
+                f(arg, Usage::CallArgument { pos, index })?;
             }
         }
         &InstructionInfo::Arithmetic { kind: _, left, right } |
         &InstructionInfo::Comparison { kind: _, left, right } => {
-            f(left, Usage::BinaryOperandLeft { pos });
-            f(right, Usage::BinaryOperandRight { pos });
+            f(left, Usage::BinaryOperandLeft { pos })?;
+            f(right, Usage::BinaryOperandRight { pos })?;
         }
         &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
-            f(base, Usage::TupleFieldPtrBase { pos });
+            f(base, Usage::TupleFieldPtrBase { pos })?;
         }
         &InstructionInfo::PointerOffSet { base, index, ty: _ } => {
-            f(base, Usage::ArrayIndexPtrBase { pos });
-            f(index, Usage::ArrayIndexPtrIndex { pos });
+            f(base, Usage::ArrayIndexPtrBase { pos })?;
+            f(index, Usage::ArrayIndexPtrIndex { pos })?;
         }
         &InstructionInfo::Cast { ty: _, kind: _, value } => {
-            f(value, Usage::CastValue { pos });
+            f(value, Usage::CastValue { pos })?;
         }
         &InstructionInfo::BlackBox { value } => {
-            f(value, Usage::BlackBoxValue { pos });
+            f(value, Usage::BlackBoxValue { pos })?;
         }
     }
+    Ok(())
 }
 
 // TODO use visitor here as well
