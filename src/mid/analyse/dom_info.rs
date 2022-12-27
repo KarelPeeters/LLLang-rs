@@ -198,8 +198,11 @@ pub enum DomPosition {
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct BlockPosition {
-    index: usize,
+pub enum BlockPosition {
+    // Ord is derived correctly, the top element is the lowest one
+    Entry,
+    Instruction(usize),
+    Terminator,
 }
 
 impl DomPosition {
@@ -209,23 +212,5 @@ impl DomPosition {
             DomPosition::FuncEntry(func) => Some(func),
             DomPosition::InBlock(func, _, _) => Some(func),
         }
-    }
-}
-
-impl BlockPosition {
-    fn new(index: usize) -> Self {
-        Self { index }
-    }
-
-    pub fn before_instructions() -> Self {
-        Self::new(0)
-    }
-
-    pub fn at_instruction(instr_index: usize) -> Self {
-        Self::new(1 + instr_index)
-    }
-
-    pub fn after_instructions(instr_count: usize) -> Self {
-        Self::new(1 + instr_count)
     }
 }
