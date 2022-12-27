@@ -835,9 +835,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let ty_ir = self.prog.get_func(self.ir_func).func_ty.params[i];
             let ty_ptr = self.types.define_type_ptr(ty);
 
-            //create the param
-            let ir_param = self.prog.define_param(ir::ParameterInfo { ty: ty_ir });
-            self.prog.get_func_mut(self.ir_func).params.push(ir_param);
+            //get the corresponding param
+            let ir_param = self.prog.get_func(self.ir_func).params[i];
 
             //allocate a slot for the parameter so its address can be taken
             let debug_name = self.maybe_id_debug_name(&param.id);
