@@ -9,7 +9,7 @@ const TINY_FUNCTION_INSTRUCTION_LIMIT: usize = 16;
 
 /// Inline functions that are short or only used rarely.
 pub fn inline(prog: &mut Program) -> bool {
-    let mut changed = false;
+    let mut changes = 0;
 
     let use_info = UseInfo::new(prog);
     let mut inlined_calls = vec![];
@@ -40,10 +40,12 @@ pub fn inline(prog: &mut Program) -> bool {
     // TODO actually do all of them, not just the first one
     for &inlined_call in inlined_calls.iter().take(1) {
         run_inline_call(prog, &use_info, inlined_call);
-        changed |= true;
+        changes += 1;
     }
 
-    changed
+    println!("inlined {} calls", changes);
+
+    changes > 0
 }
 
 #[derive(Debug, Copy, Clone)]
