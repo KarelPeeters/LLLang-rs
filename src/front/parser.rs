@@ -32,7 +32,7 @@ pub enum ParseError {
     },
     CannotChainOperator {
         span: Span,
-    }
+    },
 }
 
 macro_rules! declare_tokens {
@@ -103,6 +103,9 @@ declare_tokens![
     Slash("/"),
     Percent("%"),
 
+    DoubleAmpersand("&&"),
+    DoublePipe("||"),
+
     Dot("."),
     DoubleColon("::"),
     Semi(";"),
@@ -112,6 +115,8 @@ declare_tokens![
     Eq("="),
     Ampersand("&"),
     Star("*"),
+    Pipe("|"),
+    Hat("^"),
 
     OpenB("("),
     CloseB(")"),
@@ -387,28 +392,42 @@ const TYPE_START_TOKENS: &[TT] = &[
     TT::OpenS
 ];
 
+#[derive(Debug, Copy, Clone)]
+enum ParseBinaryOp {
+    Binary(ast::BinaryOp),
+    Logical(ast::LogicalOp),
+}
+
+#[derive(Debug)]
 struct BinOpInfo {
     level: u8,
     token: TT,
     allow_chain: bool,
-    op: ast::BinaryOp,
+    op: ParseBinaryOp,
 }
 
-// TODO add binary bitwise and logical operators
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
-    BinOpInfo { level: 3, token: TT::DoubleEq, allow_chain: false, op: ast::BinaryOp::Eq },
-    BinOpInfo { level: 3, token: TT::NotEq, allow_chain: false, op: ast::BinaryOp::Neq },
-    BinOpInfo { level: 3, token: TT::GreaterEqual, allow_chain: false, op: ast::BinaryOp::Gte },
-    BinOpInfo { level: 3, token: TT::Greater, allow_chain: false, op: ast::BinaryOp::Gt },
-    BinOpInfo { level: 3, token: TT::LessEqual, allow_chain: false, op: ast::BinaryOp::Lte },
-    BinOpInfo { level: 3, token: TT::Less, allow_chain: false, op: ast::BinaryOp::Lt },
-
-    BinOpInfo { level: 5, token: TT::Plus, allow_chain: true, op: ast::BinaryOp::Add },
-    BinOpInfo { level: 5, token: TT::Minus, allow_chain: true, op: ast::BinaryOp::Sub },
-
-    BinOpInfo { level: 6, token: TT::Star, allow_chain: true, op: ast::BinaryOp::Mul },
-    BinOpInfo { level: 6, token: TT::Slash, allow_chain: true, op: ast::BinaryOp::Div },
-    BinOpInfo { level: 6, token: TT::Percent, allow_chain: true, op: ast::BinaryOp::Mod },
+    // logical
+    BinOpInfo { level: 1, token: TT::DoublePipe, allow_chain: true, op: ParseBinaryOp::Logical(ast::LogicalOp::Or) },
+    BinOpInfo { level: 2, token: TT::DoubleAmpersand, allow_chain: true, op: ParseBinaryOp::Logical(ast::LogicalOp::And) },
+    // comparison
+    BinOpInfo { level: 3, token: TT::DoubleEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Eq) },
+    BinOpInfo { level: 3, token: TT::NotEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Neq) },
+    BinOpInfo { level: 3, token: TT::GreaterEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gte) },
+    BinOpInfo { level: 3, token: TT::Greater, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gt) },
+    BinOpInfo { level: 3, token: TT::LessEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Lte) },
+    BinOpInfo { level: 3, token: TT::Less, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Lt) },
+    // bitwise
+    BinOpInfo { level: 4, token: TT::Pipe, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Or) },
+    BinOpInfo { level: 5, token: TT::Hat, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Xor) },
+    BinOpInfo { level: 6, token: TT::Ampersand, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::And) },
+    // add/sub
+    BinOpInfo { level: 7, token: TT::Plus, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Add) },
+    BinOpInfo { level: 7, token: TT::Minus, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Sub) },
+    // mul/div/mod
+    BinOpInfo { level: 8, token: TT::Star, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Mul) },
+    BinOpInfo { level: 8, token: TT::Slash, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Div) },
+    BinOpInfo { level: 8, token: TT::Percent, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Mod) },
 ];
 
 struct PrefixOpInfo {
@@ -841,7 +860,7 @@ impl<'s> Parser<'s> {
 
             if let Some(info) = info {
                 if info.level == level && !allow_chain {
-                    return Err(ParseError::CannotChainOperator { span: token.span })
+                    return Err(ParseError::CannotChainOperator { span: token.span });
                 }
                 if info.level <= level {
                     break;
@@ -851,14 +870,16 @@ impl<'s> Parser<'s> {
 
                 let right = self.precedence_climb_binop(info.level, info.allow_chain)?;
 
-                curr = ast::Expression {
-                    span: Span::new(curr.span.start, right.span.end),
-                    kind: ast::ExpressionKind::Binary {
-                        kind: info.op,
-                        left: Box::new(curr),
-                        right: Box::new(right),
-                    },
-                }
+                let left = Box::new(curr);
+                let right = Box::new(right);
+                let span = Span::new(left.span.start, right.span.end);
+
+                let kind = match info.op {
+                    ParseBinaryOp::Binary(kind) => ast::ExpressionKind::Binary { kind, left, right },
+                    ParseBinaryOp::Logical(kind) => ast::ExpressionKind::Logical { kind, left, right },
+                };
+
+                curr = ast::Expression { span, kind }
             } else {
                 break;
             }
