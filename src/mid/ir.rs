@@ -351,7 +351,7 @@ pub enum InstructionInfo {
     /// Perform binary comparison operation `kind(left, right)`;
     ///
     /// `Comparison { kind, left: iN, right: iN } -> i1`
-    Comparison { kind: LogicalOp, left: Value, right: Value },
+    Comparison { kind: ComparisonOp, left: Value, right: Value },
 
     // TODO should this really be an instruction?
     //   kind of, otherwise we may as well switch to sea of nodes and make arithmetic no longer an instruction
@@ -401,9 +401,8 @@ pub enum ArithmeticOp {
     Xor,
 }
 
-// TODO rename to ComparisonOp
 #[derive(Debug, Copy, Clone)]
-pub enum LogicalOp {
+pub enum ComparisonOp {
     Eq,
     Neq,
     Gt(Signed),
@@ -421,11 +420,11 @@ impl ArithmeticOp {
     }
 }
 
-impl LogicalOp {
+impl ComparisonOp {
     pub fn signed(self) -> Option<Signed> {
         match self {
-            LogicalOp::Eq | LogicalOp::Neq => None,
-            LogicalOp::Gt(s) | LogicalOp::Gte(s) | LogicalOp::Lt(s) | LogicalOp::Lte(s) => Some(s),
+            ComparisonOp::Eq | ComparisonOp::Neq => None,
+            ComparisonOp::Gt(s) | ComparisonOp::Gte(s) | ComparisonOp::Lt(s) | ComparisonOp::Lte(s) => Some(s),
         }
     }
 }

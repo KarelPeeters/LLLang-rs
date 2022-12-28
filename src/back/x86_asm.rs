@@ -5,7 +5,7 @@ use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, LogicalOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, ComparisonOp, Phi, Program, StackSlot, Target, Terminator, Value};
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
@@ -579,18 +579,18 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     //   * signed => "greater" and "less" => gl
                     //   * unsigned => "above" and "below" => ab
                     match kind {
-                        LogicalOp::Eq => self.append_instr("sete cl"),
-                        LogicalOp::Neq => self.append_instr("setne cl"),
+                        ComparisonOp::Eq => self.append_instr("sete cl"),
+                        ComparisonOp::Neq => self.append_instr("setne cl"),
 
-                        LogicalOp::Gt(Signed::Signed) => self.append_instr("setg cl"),
-                        LogicalOp::Lt(Signed::Signed) => self.append_instr("setl cl"),
-                        LogicalOp::Gte(Signed::Signed) => self.append_instr("setge cl"),
-                        LogicalOp::Lte(Signed::Signed) => self.append_instr("setle cl"),
+                        ComparisonOp::Gt(Signed::Signed) => self.append_instr("setg cl"),
+                        ComparisonOp::Lt(Signed::Signed) => self.append_instr("setl cl"),
+                        ComparisonOp::Gte(Signed::Signed) => self.append_instr("setge cl"),
+                        ComparisonOp::Lte(Signed::Signed) => self.append_instr("setle cl"),
 
-                        LogicalOp::Gt(Signed::Unsigned) => self.append_instr("seta cl"),
-                        LogicalOp::Lt(Signed::Unsigned) => self.append_instr("setb cl"),
-                        LogicalOp::Gte(Signed::Unsigned) => self.append_instr("setae cl"),
-                        LogicalOp::Lte(Signed::Unsigned) => self.append_instr("setbe cl"),
+                        ComparisonOp::Gt(Signed::Unsigned) => self.append_instr("seta cl"),
+                        ComparisonOp::Lt(Signed::Unsigned) => self.append_instr("setb cl"),
+                        ComparisonOp::Gte(Signed::Unsigned) => self.append_instr("setae cl"),
+                        ComparisonOp::Lte(Signed::Unsigned) => self.append_instr("setbe cl"),
                     }
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));

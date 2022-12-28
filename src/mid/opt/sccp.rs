@@ -4,7 +4,7 @@ use std::num::Wrapping;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, TargetKind, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, LogicalOp, Program, Signed, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, ComparisonOp, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -368,18 +368,18 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         &InstructionInfo::Comparison { kind, left, right } => {
             eval_binary(map, left, right, |_, left, right| {
                 let result_bool = match kind {
-                    LogicalOp::Eq => left == right,
-                    LogicalOp::Neq => left != right,
+                    ComparisonOp::Eq => left == right,
+                    ComparisonOp::Neq => left != right,
 
-                    LogicalOp::Gt(Signed::Signed) => left.signed() > right.signed(),
-                    LogicalOp::Gte(Signed::Signed) => left.signed() >= right.signed(),
-                    LogicalOp::Lt(Signed::Signed) => left.signed() < right.signed(),
-                    LogicalOp::Lte(Signed::Signed) => left.signed() <= right.signed(),
+                    ComparisonOp::Gt(Signed::Signed) => left.signed() > right.signed(),
+                    ComparisonOp::Gte(Signed::Signed) => left.signed() >= right.signed(),
+                    ComparisonOp::Lt(Signed::Signed) => left.signed() < right.signed(),
+                    ComparisonOp::Lte(Signed::Signed) => left.signed() <= right.signed(),
 
-                    LogicalOp::Gt(Signed::Unsigned) => left.unsigned() > right.unsigned(),
-                    LogicalOp::Gte(Signed::Unsigned) => left.unsigned() >= right.unsigned(),
-                    LogicalOp::Lt(Signed::Unsigned) => left.unsigned() < right.unsigned(),
-                    LogicalOp::Lte(Signed::Unsigned) => left.unsigned() <= right.unsigned(),
+                    ComparisonOp::Gt(Signed::Unsigned) => left.unsigned() > right.unsigned(),
+                    ComparisonOp::Gte(Signed::Unsigned) => left.unsigned() >= right.unsigned(),
+                    ComparisonOp::Lt(Signed::Unsigned) => left.unsigned() < right.unsigned(),
+                    ComparisonOp::Lte(Signed::Unsigned) => left.unsigned() <= right.unsigned(),
                 };
 
                 let result = BitInt::from_bool(result_bool);

@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{ArithmeticOp, Const, InstructionInfo, LogicalOp, Program, Value};
+use crate::mid::ir::{ArithmeticOp, Const, InstructionInfo, ComparisonOp, Program, Value};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
@@ -60,12 +60,12 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
                 &InstructionInfo::Comparison { kind, left, right } => {
                     if left == right {
                         let result = match kind {
-                            LogicalOp::Eq => true,
-                            LogicalOp::Neq => false,
-                            LogicalOp::Gt(_) => false,
-                            LogicalOp::Gte(_) => true,
-                            LogicalOp::Lt(_) => false,
-                            LogicalOp::Lte(_) => true,
+                            ComparisonOp::Eq => true,
+                            ComparisonOp::Neq => false,
+                            ComparisonOp::Gt(_) => false,
+                            ComparisonOp::Gte(_) => true,
+                            ComparisonOp::Lt(_) => false,
+                            ComparisonOp::Lte(_) => true,
                         };
 
                         let result_const = Const::new(ty_bool, BitInt::from_bool(result));
