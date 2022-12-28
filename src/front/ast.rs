@@ -195,6 +195,8 @@ pub struct Expression {
 
 #[derive(Debug)]
 pub enum ExpressionKind {
+    Wrapped { inner: Box<Expression> },
+
     Null,
     BoolLit { value: bool },
     IntLit { value: String, ty: Option<Type> },

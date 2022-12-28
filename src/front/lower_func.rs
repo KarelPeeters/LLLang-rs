@@ -294,6 +294,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         expr: &'ast ast::Expression,
     ) -> Result<'ast, (Flow, LRValue)> {
         let result: (Flow, LRValue) = match &expr.kind {
+            ast::ExpressionKind::Wrapped { inner } => {
+                self.append_expr(flow, scope, inner)?
+            }
             ast::ExpressionKind::Null | ast::ExpressionKind::BoolLit { .. } | ast::ExpressionKind::IntLit { .. } | ast::ExpressionKind::StringLit { .. } => {
                 let value = self.lower_literal(expr)?;
                 (flow, value)

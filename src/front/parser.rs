@@ -1018,11 +1018,13 @@ impl<'s> Parser<'s> {
                 })
             }
             TT::OpenB => {
-                // TODO wrap in an expression again to get proper spans
                 self.pop()?;
-                let expr = self.clear_restrict(|s| s.expression())?;
+                let inner = self.clear_restrict(|s| s.boxed_expression())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
-                Ok(expr)
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::Wrapped { inner },
+                })
             }
             TT::Return => {
                 //TODO think about whether this is the right spot to parse a return

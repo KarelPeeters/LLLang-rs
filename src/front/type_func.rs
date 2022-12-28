@@ -44,6 +44,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
         let expr_origin = Origin::Expression(expr);
 
         let result: TypeVar = match &expr.kind {
+            ast::ExpressionKind::Wrapped { inner } => {
+                self.visit_expr(scope, inner)?
+            }
             ast::ExpressionKind::Null => {
                 // null can take on any pointer type
                 let inner_ty = self.problem.unknown(expr_origin);
@@ -168,10 +171,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             }
             ast::ExpressionKind::Logical { kind, left, right } => {
                 let (LogicalOp::And | LogicalOp::Or) = kind;
-                
+
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
-                
+
                 let ty_bool = self.problem.ty_bool();
                 self.problem.equal(ty_bool, left_ty);
                 self.problem.equal(ty_bool, right_ty);
@@ -257,7 +260,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         expected: struct_ty_info.fields.iter().map(|info| info.id.to_owned()).collect(),
                         actual: fields.iter().map(|(id, _)| id.string.clone()).collect(),
                         expr,
-                    })
+                    });
                 }
 
                 // require that field types match
