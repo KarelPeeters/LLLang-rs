@@ -565,15 +565,15 @@ impl<'s> Parser<'s> {
 }
 
 impl<'s> Parser<'s> {
-    fn set_restrict<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
+    fn restrict<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
         let old = std::mem::replace(&mut self.restrictions, res);
         let result = f(self);
         self.restrictions = old;
         result
     }
 
-    fn clear_restrict<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.set_restrict(Restrictions::NONE, f)
+    fn unrestrict<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.restrict(Restrictions::NONE, f)
     }
 
     fn module(&mut self) -> Result<ast::ModuleContent> {
@@ -703,7 +703,7 @@ impl<'s> Parser<'s> {
             }
             TT::If => {
                 self.pop()?;
-                let cond = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.boxed_expression())?;
+                let cond = self.restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.expression_boxed())?;
                 let then_block = self.block()?;
 
                 let else_block = self.accept(TT::Else)?
@@ -727,7 +727,7 @@ impl<'s> Parser<'s> {
             TT::While => {
                 self.pop()?;
 
-                let cond = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.boxed_expression())?;
+                let cond = self.restrict(Restrictions::NO_STRUCT_LITERAL, |s| s.expression_boxed())?;
                 let body = self.block()?;
 
                 let span = Span::new(start_pos, self.last_popped_end);
@@ -740,11 +740,11 @@ impl<'s> Parser<'s> {
                 let index_ty = self.maybe_type_decl()?;
 
                 self.expect(TT::In, "in")?;
-                let start = self.boxed_expression()?;
+                let start = self.expression_boxed()?;
                 self.expect(TT::DoubleDot, "range separator")?;
 
-                let end = self.set_restrict(Restrictions::NO_STRUCT_LITERAL, |s| {
-                    s.boxed_expression()
+                let end = self.restrict(Restrictions::NO_STRUCT_LITERAL, |s| {
+                    s.expression_boxed()
                 })?;
 
                 let body = self.block()?;
@@ -753,15 +753,15 @@ impl<'s> Parser<'s> {
                 (ast::StatementKind::For(ast::ForStatement { span, index, index_ty, start, end, body }), false)
             }
             TT::OpenC => {
-                let block = self.clear_restrict(|s| s.block())?;
+                let block = self.unrestrict(|s| s.block())?;
                 (ast::StatementKind::Block(block), false)
             }
             _ => {
-                let left = self.boxed_expression()?;
+                let left = self.expression_boxed()?;
 
                 let kind = if self.accept(TT::Eq)?.is_some() {
                     //assignment
-                    let right = self.boxed_expression()?;
+                    let right = self.expression_boxed()?;
                     ast::StatementKind::Assignment(ast::Assignment {
                         span: Span::new(left.span.start, right.span.end),
                         left,
@@ -791,13 +791,13 @@ impl<'s> Parser<'s> {
 
         let ty = self.maybe_type_decl()?;
         let init = self.accept(TT::Eq)?
-            .map(|_| self.boxed_expression())
+            .map(|_| self.expression_boxed())
             .transpose()?;
 
         Ok(ast::Declaration { span: Span::new(start_pos, self.last_popped_end), mutable, ty, id, init })
     }
 
-    fn boxed_expression(&mut self) -> Result<Box<ast::Expression>> {
+    fn expression_boxed(&mut self) -> Result<Box<ast::Expression>> {
         Ok(Box::new(self.expression()?))
     }
 
@@ -929,7 +929,7 @@ impl<'s> Parser<'s> {
                 TT::OpenS => {
                     //array indexing
                     self.pop()?;
-                    let index = self.boxed_expression()?;
+                    let index = self.expression_boxed()?;
                     self.expect(TT::CloseS, "")?;
 
                     (POSTFIX_DEFAULT_LEVEL, PostFixStateKind::ArrayIndex { index })
@@ -1019,7 +1019,7 @@ impl<'s> Parser<'s> {
             }
             TT::OpenB => {
                 self.pop()?;
-                let inner = self.clear_restrict(|s| s.boxed_expression())?;
+                let inner = self.unrestrict(|s| s.expression_boxed())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
@@ -1033,7 +1033,7 @@ impl<'s> Parser<'s> {
                 let value = if self.peek().ty == TT::Semi {
                     None
                 } else {
-                    Some(self.boxed_expression()?)
+                    Some(self.expression_boxed()?)
                 };
 
                 Ok(ast::Expression {
@@ -1056,7 +1056,7 @@ impl<'s> Parser<'s> {
             TT::BlackBox => {
                 self.pop()?;
                 self.expect(TT::OpenB, "blackbox start")?;
-                let value = self.boxed_expression()?;
+                let value = self.expression_boxed()?;
                 self.expect(TT::CloseB, "blackbox end")?;
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
@@ -1075,7 +1075,7 @@ impl<'s> Parser<'s> {
             let id = s.identifier("tuple literal field")?;
             s.expect(TT::Colon, "tuple literal field separator")?;
 
-            let value = s.set_restrict(Restrictions::NO_TERNARY, |s| {
+            let value = s.restrict(Restrictions::NO_TERNARY, |s| {
                 s.expression()
             })?;
 
