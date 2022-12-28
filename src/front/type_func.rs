@@ -103,6 +103,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
+                let ty_bool = self.problem.ty_bool();
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
 
@@ -120,13 +121,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     // any int -> bool
                     BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
                         let ty = self.problem.unknown_int(expr_origin, None);
-                        (self.problem.ty_bool(), Some(ty))
+                        (ty_bool, Some(ty))
                     }
                     // any int or bool -> bool
                     // TODO maybe this should also accept structs and tuples?
                     BinaryOp::Eq | BinaryOp::Neq => {
                         let ty = self.problem.unknown_int_or_bool(expr_origin, None);
-                        (ty, Some(ty))
+                        (ty_bool, Some(ty))
                     }
                     // unsigned int or bool -> same type
                     BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {

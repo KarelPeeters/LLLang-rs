@@ -34,6 +34,15 @@ impl LRValue {
             LRValue::Right(value) => value.ty,
         }
     }
+
+    /// Get the IR type of this value as seen by the end user.
+    /// For LValues we don't know the type, since pointers are untyped.
+    pub fn ty_ir(self, prog: &ir::Program) -> Option<ir::Type> {
+        match self {
+            LRValue::Left(_) => None,
+            LRValue::Right(typed_value) => Some(prog.type_of_value(typed_value.ir)),
+        }
+    }
 }
 
 /// A `ir::Value` with its corresponding `cst::Type`. The `ir::Value` itself doesn't contain enough information because

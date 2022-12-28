@@ -580,14 +580,26 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         //check that the returned value's type is indeed expect_ty
         if cfg!(debug_assertions) {
+            let (_, result_value) = result;
+
             let expect_ty = self.expr_type(expr);
-            let actual_ty = result.1.ty(&self.types);
+            let actual_ty = result_value.ty(&self.types);
 
             assert_eq!(
                 expect_ty, actual_ty,
                 "bug in lower, inferred type '{}' for expression but generated code returns '{}'",
                 self.types.format_type(expect_ty), self.types.format_type(actual_ty)
             );
+
+            if let Some(actual_ty_ir) = result_value.ty_ir(self.prog) {
+                let expect_ty_ir = self.types.map_type(&mut self.prog, expect_ty);
+
+                assert_eq!(
+                    expect_ty_ir, actual_ty_ir,
+                    "bug in lower, inferred type '{}' for expression but generated code returns '{}'",
+                    self.prog.format_type(expect_ty_ir), self.prog.format_type(actual_ty_ir)
+                );
+            };
         }
 
         Ok(result)
