@@ -42,19 +42,41 @@ pub struct LoopInfo {
     has_reachable_break: bool,
 }
 
-fn binary_op_to_instr(ast_kind: ast::BinaryOp, signed: Signed, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
+#[derive(Debug)]
+enum BinaryArgType {
+    Int(Signed),
+    Bool,
+}
+
+impl BinaryArgType {
+    fn unwrap_int(self) -> Signed {
+        unwrap_match!(self, BinaryArgType::Int(signed) => signed)
+    }
+}
+
+fn binary_op_to_instr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
     match ast_kind {
-        ast::BinaryOp::Add => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right },
-        ast::BinaryOp::Sub => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right },
-        ast::BinaryOp::Mul => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right },
-        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(signed), left, right },
-        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(signed), left, right },
+        ast::BinaryOp::Add => {
+            arg_ty.unwrap_int();
+            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right }
+        }
+        ast::BinaryOp::Sub => {
+            arg_ty.unwrap_int();
+            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right }
+        }
+        ast::BinaryOp::Mul => {
+            arg_ty.unwrap_int();
+            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right }
+        }
+        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gte(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gt(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lte(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lt(arg_ty.unwrap_int()), left, right },
+
         ast::BinaryOp::Eq => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Eq, left, right },
         ast::BinaryOp::Neq => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Neq, left, right },
-        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gte(signed), left, right },
-        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gt(signed), left, right },
-        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lte(signed), left, right },
-        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lt(signed), left, right },
         ast::BinaryOp::And => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::And, left, right },
         ast::BinaryOp::Or => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, left, right },
         ast::BinaryOp::Xor => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, left, right },
@@ -342,8 +364,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 } else {
                     //basic binary operation
                     assert_eq!(value_left.ty, value_right.ty);
-                    let signed = self.types[value_left.ty].unwrap_int().unwrap().signed;
-                    let instr = binary_op_to_instr(*kind, signed, value_left.ir, value_right.ir);
+                    let arg_ty = match self.types[value_left.ty] {
+                        TypeInfo::Bool => BinaryArgType::Bool,
+                        TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
+                        _ => panic!(),
+                    };
+                    let instr = binary_op_to_instr(*kind, arg_ty, value_left.ir, value_right.ir);
                     ir::Value::Instr(self.append_instr(after_right.block, instr))
                 };
 

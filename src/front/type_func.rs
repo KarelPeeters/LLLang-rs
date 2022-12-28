@@ -106,30 +106,41 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
 
-                match kind {
+                let (result_ty, arg_ty) = match kind {
+                    // special case for pointer math
                     BinaryOp::Add | BinaryOp::Sub => {
                         self.problem.add_sub_constraint(left_ty, right_ty);
-                        left_ty
+                        (left_ty, None)
                     }
+                    // any int -> same int
                     BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                        let value_ty = self.problem.unknown_int(expr_origin, None);
-                        self.problem.equal(value_ty, left_ty);
-                        self.problem.equal(value_ty, right_ty);
-                        value_ty
+                        let ty = self.problem.unknown_int(expr_origin, None);
+                        (ty, Some(ty))
                     }
-                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
-                        let value_ty = self.problem.unknown_int(expr_origin, None);
-                        self.problem.equal(value_ty, left_ty);
-                        self.problem.equal(value_ty, right_ty);
-                        self.problem.ty_bool()
+                    // any int -> bool
+                    BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
+                        let ty = self.problem.unknown_int(expr_origin, None);
+                        (self.problem.ty_bool(), Some(ty))
                     }
-                    BinaryOp::And | BinaryOp::Or | BinaryOp::Xor =>  {
-                        let value_ty = self.problem.unknown_int(expr_origin, Some(Signed::Unsigned));
-                        self.problem.equal(value_ty, left_ty);
-                        self.problem.equal(value_ty, right_ty);
-                        value_ty
+                    // any int or bool -> bool
+                    // TODO maybe this should also accept structs and tuples?
+                    BinaryOp::Eq | BinaryOp::Neq => {
+                        let ty = self.problem.unknown_int_or_bool(expr_origin, None);
+                        (ty, Some(ty))
                     }
+                    // unsigned int or bool -> same type
+                    BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
+                        let ty = self.problem.unknown_int_or_bool(expr_origin, Some(Signed::Unsigned));
+                        (ty, Some(ty))
+                    }
+                };
+
+                if let Some(arg_ty) = arg_ty {
+                    self.problem.equal(arg_ty, left_ty);
+                    self.problem.equal(arg_ty, right_ty);
                 }
+
+                result_ty
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {

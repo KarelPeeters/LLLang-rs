@@ -17,7 +17,7 @@ pub struct TypeVar(usize);
 struct VarState<'ast> {
     // these never change after initial creation
     origin: Origin<'ast>,
-    must_be_int: MustBeInt,
+    post_check: PostCheck,
 
     // these change during solving
     default_void: bool,
@@ -25,10 +25,10 @@ struct VarState<'ast> {
 }
 
 #[derive(Debug, Copy, Clone)]
-enum MustBeInt {
-    // Must be an integer, and if Some(signed) it must have the given signedness.
-    Yes(Option<Signed>),
-    No,
+enum PostCheck {
+    None,
+    Int(Option<Signed>),
+    BoolOrInt(Option<Signed>),
 }
 
 #[derive(Copy, Clone)]
@@ -134,12 +134,12 @@ impl<'ast> TypeProblem<'ast> {
         self.state.len()
     }
 
-    fn new_var(&mut self, origin: Origin<'ast>, info: Option<VarTypeInfo<'ast>>, must_be_int: MustBeInt, default_void: bool) -> TypeVar {
+    fn new_var(&mut self, origin: Origin<'ast>, info: Option<VarTypeInfo<'ast>>, post_check: PostCheck, default_void: bool) -> TypeVar {
         // Some(Wildcard) means that we don't know anything about a type, so convert it to None
         let info = info.filter(|info| info != &VarTypeInfo::Wildcard);
 
         let i = self.state.len();
-        self.state.push(VarState { origin, must_be_int, default_void, info });
+        self.state.push(VarState { origin, post_check, default_void, info });
         TypeVar(i)
     }
 
@@ -165,23 +165,28 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Create a new TypeVar without any known type information.
     pub fn unknown(&mut self, origin: Origin<'ast>) -> TypeVar {
-        self.new_var(origin, None, MustBeInt::No, false)
+        self.new_var(origin, None, PostCheck::None, false)
     }
 
     /// Create a new TypeVar without a known type, but that gets assigned the void type if at the end of inference this
     /// type still has no inferred type.
     pub fn unknown_default_void(&mut self, origin: Origin<'ast>) -> TypeVar {
-        self.new_var(origin, None, MustBeInt::No, true)
+        self.new_var(origin, None, PostCheck::None, true)
     }
 
     /// Create a new TypeVar that can be assigned any integer type.
     pub fn unknown_int(&mut self, origin: Origin<'ast>, signed: Option<Signed>) -> TypeVar {
-        self.new_var(origin, None, MustBeInt::Yes(signed), false)
+        self.new_var(origin, None, PostCheck::Int(signed), false)
+    }
+
+    /// Create a new TypeVar that can be assigned any integer type.
+    pub fn unknown_int_or_bool(&mut self, origin: Origin<'ast>, signed: Option<Signed>) -> TypeVar {
+        self.new_var(origin, None, PostCheck::BoolOrInt(signed), false)
     }
 
     /// Create a new TypeVar with a known type pattern
     pub fn known(&mut self, origin: Origin<'ast>, info: VarTypeInfo<'ast>) -> TypeVar {
-        self.new_var(origin, Some(info), MustBeInt::No, false)
+        self.new_var(origin, Some(info), PostCheck::None, false)
     }
 
     /// Create a new TypeVar with a fully known type.
@@ -242,10 +247,10 @@ impl<'ast> TypeProblem<'ast> {
 
             let state = &self.state[i];
             let ty_info = &types[ty];
-            if !self.state[i].must_be_int.is_satisfied_by(ty_info) {
+            if !self.state[i].post_check.is_satisfied_by(ty_info) {
                 panic!(
-                    "Type for {:?} with origin \n{:?}\nshould satisfy {:?}, but was\n{:?} {:?}\n",
-                    var, state.origin, state.must_be_int, types[ty], ty_info,
+                    "Type for {:?} with origin \n{:?}\nshould match {:?}, but was\n{:?} {:?}\n",
+                    var, state.origin, state.post_check.to_short_string(), types[ty], ty_info,
                 )
             }
 
@@ -460,21 +465,38 @@ impl<'ast> TypeProblem<'ast> {
     }
 }
 
-impl MustBeInt {
+impl PostCheck {
     fn is_satisfied_by<T>(self, info: &TypeInfo<T>) -> bool {
-        match self {
-            MustBeInt::No => true,
-            MustBeInt::Yes(signed) => {
-                match info {
-                    TypeInfo::Int(info) => {
-                        match signed {
-                            Some(signed) => info.signed == signed,
-                            None => true,
-                        }
-                    }
-                    _ => false,
-                }
+        let (is_bool, is_int) = match info {
+            TypeInfo::Bool => (true, None),
+            TypeInfo::Int(info) => (false, Some(info.signed)),
+            _ => (false, None)
+        };
+
+        let is_int_with_signedness = |expected: Option<Signed>| {
+            match (is_int, expected) {
+                (None, _) => false,
+                (Some(_), None) => true,
+                (Some(actual), Some(expected)) => actual == expected,
             }
+        };
+
+        match self {
+            PostCheck::None => true,
+            PostCheck::Int(signed) => is_int_with_signedness(signed),
+            PostCheck::BoolOrInt(signed) => is_bool || is_int_with_signedness(signed),
+        }
+    }
+
+    fn to_short_string(self) -> &'static str {
+        match self {
+            PostCheck::None => "",
+            PostCheck::Int(None) => "i??/u??",
+            PostCheck::Int(Some(Signed::Signed)) => "i??",
+            PostCheck::Int(Some(Signed::Unsigned)) => "u??",
+            PostCheck::BoolOrInt(None) => "bool/i??/u??",
+            PostCheck::BoolOrInt(Some(Signed::Signed)) => "bool/i??",
+            PostCheck::BoolOrInt(Some(Signed::Unsigned)) => "bool/u??",
         }
     }
 }
@@ -495,18 +517,13 @@ impl<'ast> std::fmt::Debug for TypeProblem<'ast> {
             let var = TypeVar(i);
             let state = &self.state[i];
 
-            let must_be_int = match state.must_be_int {
-                MustBeInt::No => "",
-                MustBeInt::Yes(None) => "ui??",
-                MustBeInt::Yes(Some(Signed::Signed)) => "i??",
-                MustBeInt::Yes(Some(Signed::Unsigned)) => "u??",
-            };
+            let post_check = state.post_check.to_short_string();
             let default_void = match state.default_void {
                 true => "->void",
                 false => "",
             };
 
-            writeln!(f, "        {:?}[{}{}]: {:?}, {:?}", var, must_be_int, default_void, state.info, state.origin)?;
+            writeln!(f, "        {:?}[{}{}]: {:?}, {:?}", var, post_check, default_void, state.info, state.origin)?;
         }
 
         writeln!(f, "    ],\n    constraints: [")?;

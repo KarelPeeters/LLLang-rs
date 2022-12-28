@@ -1018,6 +1018,7 @@ impl<'s> Parser<'s> {
                 })
             }
             TT::OpenB => {
+                // TODO wrap in an expression again to get proper spans
                 self.pop()?;
                 let expr = self.clear_restrict(|s| s.expression())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
