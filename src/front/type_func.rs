@@ -36,6 +36,44 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
         self.items.resolve_path_type(ScopeKind::Real, scope, path)
     }
 
+    fn visit_binary_op(&mut self, origin: Origin<'ast>, kind: BinaryOp, left_ty: TypeVar, right_ty: TypeVar) -> Result<'ast, TypeVar> {
+        let ty_bool = self.problem.ty_bool();
+
+        let (arg_ty, result_ty) = match kind {
+            BinaryOp::Add | BinaryOp::Sub => {
+                // special case for pointer math
+                self.problem.add_sub_constraint(left_ty, right_ty);
+                return Ok(left_ty);
+            }
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                // any int -> same int
+                let ty = self.problem.unknown_int(origin, None);
+                (ty, ty)
+            }
+            BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
+                // any int -> bool
+                let ty = self.problem.unknown_int(origin, None);
+                (ty, ty_bool)
+            }
+            BinaryOp::Eq | BinaryOp::Neq => {
+                // any int or bool -> bool
+                // TODO maybe this should also accept structs and tuples?
+                let ty = self.problem.unknown_int_or_bool(origin, None);
+                (ty, ty_bool)
+            }
+            BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
+                // unsigned int or bool -> same type
+                let ty = self.problem.unknown_int_or_bool(origin, Some(Signed::Unsigned));
+                (ty, ty)
+            }
+        };
+
+        self.problem.equal(arg_ty, left_ty);
+        self.problem.equal(arg_ty, right_ty);
+
+        Ok(result_ty)
+    }
+
     fn visit_expr(
         &mut self,
         scope: &Scope<ScopedItem>,
@@ -106,45 +144,9 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let ty_bool = self.problem.ty_bool();
                 let left_ty = self.visit_expr(&scope, left)?;
                 let right_ty = self.visit_expr(&scope, right)?;
-
-                let (result_ty, arg_ty) = match kind {
-                    // special case for pointer math
-                    BinaryOp::Add | BinaryOp::Sub => {
-                        self.problem.add_sub_constraint(left_ty, right_ty);
-                        (left_ty, None)
-                    }
-                    // any int -> same int
-                    BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                        let ty = self.problem.unknown_int(expr_origin, None);
-                        (ty, Some(ty))
-                    }
-                    // any int -> bool
-                    BinaryOp::Gte | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Lt => {
-                        let ty = self.problem.unknown_int(expr_origin, None);
-                        (ty_bool, Some(ty))
-                    }
-                    // any int or bool -> bool
-                    // TODO maybe this should also accept structs and tuples?
-                    BinaryOp::Eq | BinaryOp::Neq => {
-                        let ty = self.problem.unknown_int_or_bool(expr_origin, None);
-                        (ty_bool, Some(ty))
-                    }
-                    // unsigned int or bool -> same type
-                    BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
-                        let ty = self.problem.unknown_int_or_bool(expr_origin, Some(Signed::Unsigned));
-                        (ty, Some(ty))
-                    }
-                };
-
-                if let Some(arg_ty) = arg_ty {
-                    self.problem.equal(arg_ty, left_ty);
-                    self.problem.equal(arg_ty, right_ty);
-                }
-
-                result_ty
+                self.visit_binary_op(expr_origin, *kind, left_ty, right_ty)?
             }
             ast::ExpressionKind::Unary { kind, inner } => {
                 match kind {
