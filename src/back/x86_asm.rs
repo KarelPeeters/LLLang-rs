@@ -552,14 +552,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     match kind {
                         ArithmeticOp::Add => self.append_instr(&format!("add {}, {}", a, b)),
                         ArithmeticOp::Sub => self.append_instr(&format!("sub {}, {}", a, b)),
-                        ArithmeticOp::Mul(signed) => {
-                            let instr = match signed {
-                                Signed::Signed => "imul",
-                                Signed::Unsigned => "mul",
-                            };
-                            // Register A is implicitly used as the output and rhs.
-                            self.append_instr(&format!("{} {}", instr, b));
-                        }
+                        ArithmeticOp::Mul => self.append_instr(&format!("imul {}", b)),
                         ArithmeticOp::Div(signed) => self.append_div(size, signed),
                         ArithmeticOp::Mod(signed) => {
                             self.append_div(size, signed);

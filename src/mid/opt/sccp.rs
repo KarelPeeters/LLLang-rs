@@ -346,13 +346,12 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     // we can choose either, the result would be the same
                     ArithmeticOp::Add => (left_unsigned + right_unsigned).0,
                     ArithmeticOp::Sub => (left_unsigned - right_unsigned).0,
+                    ArithmeticOp::Mul => (left_unsigned * right_unsigned).0,
 
                     //TODO should x/0 and x%0 be undefined?
-                    ArithmeticOp::Mul(Signed::Signed) => (left_signed * right_signed).0 as UStorage,
                     ArithmeticOp::Div(Signed::Signed) => (left_signed / right_signed).0 as UStorage,
                     ArithmeticOp::Mod(Signed::Signed) => (left_signed % right_signed).0 as UStorage,
 
-                    ArithmeticOp::Mul(Signed::Unsigned) => (left_unsigned * right_unsigned).0,
                     ArithmeticOp::Div(Signed::Unsigned) => (left_unsigned / right_unsigned).0,
                     ArithmeticOp::Mod(Signed::Unsigned) => (left_unsigned % right_unsigned).0,
                 };

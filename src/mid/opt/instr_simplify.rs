@@ -49,7 +49,7 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
                                 replace(prog, instr.into(), zero.into());
                             }
                         }
-                        ArithmeticOp::Mul(_) => {}
+                        ArithmeticOp::Mul => {}
                         ArithmeticOp::Div(_) => {}
                         ArithmeticOp::Mod(_) => {}
                     };

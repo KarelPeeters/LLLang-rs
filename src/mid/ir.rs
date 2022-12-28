@@ -391,7 +391,7 @@ pub enum Signed {
 pub enum ArithmeticOp {
     Add,
     Sub,
-    Mul(Signed),
+    Mul,
     Div(Signed),
     Mod(Signed),
 }
@@ -409,8 +409,8 @@ pub enum LogicalOp {
 impl ArithmeticOp {
     pub fn signed(self) -> Option<Signed> {
         match self {
-            ArithmeticOp::Add | ArithmeticOp::Sub => None,
-            ArithmeticOp::Mul(s) | ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
+            ArithmeticOp::Add | ArithmeticOp::Sub | ArithmeticOp::Mul => None,
+            ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
         }
     }
 }
