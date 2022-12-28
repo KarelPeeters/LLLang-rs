@@ -86,7 +86,7 @@ impl<'a> MappingTypeStore<'a> {
         let ir_ty = match &self.inner[ty] {
             ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
             TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
-            TypeInfo::Void => prog.ty_ptr(),
+            TypeInfo::Void => prog.ty_void(),
             TypeInfo::Bool => prog.ty_bool(),
             &TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
                 // In the IR signed-ness is not a property of the type, only of the operations.
