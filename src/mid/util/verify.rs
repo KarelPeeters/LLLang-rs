@@ -41,6 +41,7 @@ pub fn verify(prog: &Program) -> Result {
         declarer.declare_all(&func_info.params, DomPosition::FuncEntry(func))?;
         declarer.declare_all(&func_info.slots, DomPosition::FuncEntry(func))?;
 
+        // TODO this way of visiting blocks means we never verify unreachable blocks. Is that okay?
         prog.try_visit_blocks(func_info.entry.block, |block| {
             let BlockInfo { phis, instructions, terminator: _ } = prog.get_block(block);
 

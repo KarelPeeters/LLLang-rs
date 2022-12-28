@@ -885,6 +885,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             }
         }
 
+        // TODO insert proper return for non-reachable end?
+
         Ok(())
     }
 }
