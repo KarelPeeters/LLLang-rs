@@ -52,6 +52,9 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
                         ArithmeticOp::Mul => {}
                         ArithmeticOp::Div(_) => {}
                         ArithmeticOp::Mod(_) => {}
+                        ArithmeticOp::And => {}
+                        ArithmeticOp::Or => {}
+                        ArithmeticOp::Xor => {}
                     };
                 }
                 &InstructionInfo::Comparison { kind, left, right } => {

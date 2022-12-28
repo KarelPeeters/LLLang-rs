@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use itertools::Itertools;
 
 use crate::front::{ast, cst, error};
-use crate::front::ast::{BinaryOp, DotIndexIndex};
+use crate::front::ast::{BinaryOp, DotIndexIndex, LogicalOp};
 use crate::front::cst::{FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore};
@@ -123,6 +123,12 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         self.problem.equal(value_ty, right_ty);
                         self.problem.ty_bool()
                     }
+                    BinaryOp::And | BinaryOp::Or | BinaryOp::Xor =>  {
+                        let value_ty = self.problem.unknown_int(expr_origin, Some(Signed::Unsigned));
+                        self.problem.equal(value_ty, left_ty);
+                        self.problem.equal(value_ty, right_ty);
+                        value_ty
+                    }
                 }
             }
             ast::ExpressionKind::Unary { kind, inner } => {
@@ -147,6 +153,17 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         value_ty
                     }
                 }
+            }
+            ast::ExpressionKind::Logical { kind, left, right } => {
+                let (LogicalOp::And | LogicalOp::Or) = kind;
+                
+                let left_ty = self.visit_expr(&scope, left)?;
+                let right_ty = self.visit_expr(&scope, right)?;
+                
+                let ty_bool = self.problem.ty_bool();
+                self.problem.equal(ty_bool, left_ty);
+                self.problem.equal(ty_bool, right_ty);
+                ty_bool
             }
             ast::ExpressionKind::Call { target, args } => {
                 let target_ty = self.visit_expr(scope, target)?;

@@ -347,6 +347,9 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
                     ArithmeticOp::Add => (left_unsigned + right_unsigned).0,
                     ArithmeticOp::Sub => (left_unsigned - right_unsigned).0,
                     ArithmeticOp::Mul => (left_unsigned * right_unsigned).0,
+                    ArithmeticOp::And => (left_unsigned & right_unsigned).0,
+                    ArithmeticOp::Or => (left_unsigned | right_unsigned).0,
+                    ArithmeticOp::Xor => (left_unsigned ^ right_unsigned).0,
 
                     //TODO should x/0 and x%0 be undefined?
                     ArithmeticOp::Div(Signed::Signed) => (left_signed / right_signed).0 as UStorage,

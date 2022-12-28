@@ -240,6 +240,11 @@ pub enum ExpressionKind {
         kind: UnaryOp,
         inner: Box<Expression>,
     },
+    Logical {
+        kind: LogicalOp,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
 
     Return { value: Option<Box<Expression>> },
     Continue,
@@ -265,6 +270,10 @@ pub enum BinaryOp {
     Gt,
     Lte,
     Lt,
+
+    And,
+    Or,
+    Xor,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -272,6 +281,12 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Neg,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum LogicalOp {
+    And,
+    Or,
 }
 
 #[derive(Debug)]

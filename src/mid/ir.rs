@@ -335,6 +335,7 @@ pub enum InstructionInfo {
     /// Store `value` into `addr`.
     ///
     /// `Store { addr: &, ty=T, value: T } -> void`
+    // TODO remove the ty field here?
     Store { addr: Value, ty: Type, value: Value },
 
     /// Call `target` with arguments `args`.
@@ -394,8 +395,13 @@ pub enum ArithmeticOp {
     Mul,
     Div(Signed),
     Mod(Signed),
+    // TODO split these into separate bitwise op?
+    And,
+    Or,
+    Xor,
 }
 
+// TODO rename to ComparisonOp
 #[derive(Debug, Copy, Clone)]
 pub enum LogicalOp {
     Eq,
@@ -409,7 +415,7 @@ pub enum LogicalOp {
 impl ArithmeticOp {
     pub fn signed(self) -> Option<Signed> {
         match self {
-            ArithmeticOp::Add | ArithmeticOp::Sub | ArithmeticOp::Mul => None,
+            ArithmeticOp::Add | ArithmeticOp::Sub | ArithmeticOp::Mul | ArithmeticOp::And | ArithmeticOp::Or | ArithmeticOp::Xor => None,
             ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
         }
     }

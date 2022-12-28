@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 
 use crate::front::{ast, cst};
+use crate::front::ast::LogicalOp;
 use crate::front::cst::{IntTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
@@ -54,6 +55,9 @@ fn binary_op_to_instr(ast_kind: ast::BinaryOp, signed: Signed, left: ir::Value, 
         ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Gt(signed), left, right },
         ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lte(signed), left, right },
         ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::LogicalOp::Lt(signed), left, right },
+        ast::BinaryOp::And => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::And, left, right },
+        ast::BinaryOp::Or => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, left, right },
+        ast::BinaryOp::Xor => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, left, right },
     }
 }
 
@@ -136,21 +140,42 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             left: ir::Const { ty: ty_ir, value: BitInt::zero(bits) }.into(),
             right: value,
         };
-        ir::Value::Instr(self.append_instr(block, instr))
+        self.append_instr(block, instr).into()
     }
 
     #[must_use]
-    fn append_load(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
+    fn append_not(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
+        let ty_ir = self.prog.type_of_value(value);
+        assert_eq!(ty_ir, self.prog.ty_bool());
+
+        let instr = ir::InstructionInfo::Arithmetic {
+            kind: ir::ArithmeticOp::Xor,
+            left: value,
+            right: self.prog.const_bool(true).into(),
+        };
+        self.append_instr(block, instr).into()
+    }
+
+    fn append_store(&mut self, block: ir::Block, addr: ir::Value, value: ir::Value) {
+        let ty = self.prog.type_of_value(value);
+        self.append_instr(block, ir::InstructionInfo::Store { addr, ty, value });
+    }
+
+    #[must_use]
+    fn append_load(&mut self, block: ir::Block, addr: ir::Value, ty: ir::Type) -> ir::Value {
+        self.append_instr(block, ir::InstructionInfo::Load { addr, ty }).into()
+    }
+
+    #[must_use]
+    fn append_load_lr(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
             LRValue::Left(value) => {
                 let inner_ty = self.types[value.ty].unwrap_ptr()
                     .expect("Left should have pointer type");
                 let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
 
-                let load_instr = ir::InstructionInfo::Load { ty: inner_ty_ir, addr: value.ir };
-                let load_instr = self.append_instr(block, load_instr);
-
-                TypedValue { ty: inner_ty, ir: ir::Value::Instr(load_instr) }
+                let loaded = self.append_load(block, value.ir, inner_ty_ir);
+                TypedValue { ty: inner_ty, ir: loaded }
             }
             LRValue::Right(value) =>
                 value,
@@ -280,27 +305,18 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     |s: &mut Self, then_start: Flow| {
                         let (then_end, then_value) =
                             s.append_expr_loaded(then_start, scope, then_value)?;
-
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: then_value.ir };
-                        s.append_instr(then_end.block, store);
-
+                        s.append_store(then_end.block, result_slot.into(), then_value.ir);
                         Ok(then_end)
                     },
                     |s: &mut Self, else_start: Flow| {
                         let (else_end, else_value) =
                             s.append_expr_loaded(else_start, scope, else_value)?;
-
-                        let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(result_slot), ty: ty_ir, value: else_value.ir };
-                        s.append_instr(else_end.block, store);
-
+                        s.append_store(else_end.block, result_slot.into(), else_value.ir);
                         Ok(else_end)
                     },
                 )?;
 
-                let load = ir::InstructionInfo::Load { ty: ty_ir, addr: ir::Value::Slot(result_slot) };
-                let load = self.append_instr(end_start.block, load);
-                let result_value = ir::Value::Instr(load);
-
+                let result_value = self.append_load(end_start.block, result_slot.into(), ty_ir);
                 (end_start, LRValue::Right(TypedValue { ty, ir: result_value }))
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
@@ -362,6 +378,32 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }
+            }
+            ast::ExpressionKind::Logical { kind, left, right } => {
+                let ty_bool_ir = self.prog.ty_bool();
+                let ty_bool = self.types.type_bool();
+
+                let slot = self.define_slot(ty_bool_ir, None);
+
+                let (after_left, left_value) = self.append_expr_loaded(flow, scope, left)?;
+                assert_eq!(left_value.ty, ty_bool);
+
+                let cond = match kind {
+                    LogicalOp::And => left_value.ir,
+                    LogicalOp::Or => self.append_not(after_left.block, left_value.ir),
+                };
+
+                let after_both = self.append_if(after_left, cond, |s, flow| {
+                    let (after_right, right_value) = s.append_expr_loaded(flow, scope, right)?;
+                    s.append_store(after_right.block, slot.into(), right_value.ir);
+                    Ok(after_right)
+                }, |s, flow| {
+                    s.append_store(flow.block, slot.into(), left_value.ir);
+                    Ok(flow)
+                })?;
+
+                let result_value = self.append_load(after_both.block, slot.into(), ty_bool_ir);
+                (after_both, LRValue::Right(TypedValue { ty: ty_bool, ir: result_value }))
             }
             ast::ExpressionKind::Call { target, args } => {
                 //evaluate target
@@ -487,7 +529,6 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let field_index = struct_ty_info.find_field_index(&field_id.string).unwrap();
 
                     let (after_value, field_value) = self.append_expr_loaded(flow, scope, field_value)?;
-                    let field_ty_ir = self.types.map_type(self.prog, field_value.ty);
 
                     let field_ptr = ir::InstructionInfo::TupleFieldPtr {
                         tuple_ty: struct_ty_ir,
@@ -496,20 +537,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     };
                     let field_ptr = self.append_instr(after_value.block, field_ptr);
 
-                    let store = ir::InstructionInfo::Store {
-                        addr: field_ptr.into(),
-                        ty: field_ty_ir,
-                        value: field_value.ir,
-                    };
-                    self.append_instr(after_value.block, store);
+                    self.append_store(after_value.block, field_ptr.into(), field_value.ir);
 
                     Ok(after_value)
                 })?;
 
-                let load = ir::InstructionInfo::Load { addr: slot.into(), ty: struct_ty_ir };
-                let load = self.append_instr(after_stores.block, load);
-
-                (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: load.into() }))
+                let result_value = self.append_load(after_stores.block, slot.into(), struct_ty_ir);
+                (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: result_value }))
             }
             ast::ExpressionKind::BlackBox { value } => {
                 let (flow_after, value) = self.append_expr_loaded(flow, scope, value)?;
@@ -582,7 +616,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         expr: &'ast ast::Expression,
     ) -> Result<'ast, (Flow, TypedValue)> {
         let (after_value, value) = self.append_expr(flow, scope, expr)?;
-        let loaded_value = self.append_load(after_value.block, value);
+        let loaded_value = self.append_load_lr(after_value.block, value);
 
         Ok((after_value, loaded_value))
     }
@@ -679,8 +713,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //optionally store the value
                 if let Some(value) = value {
-                    let store = ir::InstructionInfo::Store { addr: ir::Value::Slot(slot), ty: ty_ir, value: value.ir };
-                    self.append_instr(after_value.block, store);
+                    self.append_store(after_value.block, slot.into(), value.ir);
                 }
 
                 Ok(after_value)
@@ -689,11 +722,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_addr, addr) = self.append_expr_lvalue(flow, scope, &assign.left)?;
                 let (after_value, value) =
                     self.append_expr_loaded(after_addr, scope, &assign.right)?;
-
-                let ty_ir = self.types.map_type(self.prog, value.ty);
-                let store = ir::InstructionInfo::Store { addr: addr.ir, ty: ty_ir, value: value.ir };
-                self.append_instr(after_value.block, store);
-
+                self.append_store(after_value.block, addr.ir, value.ir);
                 Ok(after_value)
             }
             ast::StatementKind::If(if_stmt) => {
@@ -751,8 +780,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //declare slot for index
                 let mut index_scope = scope.nest();
                 let debug_name = self.maybe_id_debug_name(&for_stmt.index);
-                let index_slot = self.define_slot(index_ty_ir, Some(debug_name));
-                let index_slot = ir::Value::Slot(index_slot);
+                let index_slot: ir::Value = self.define_slot(index_ty_ir, Some(debug_name)).into();
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
                 //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
@@ -761,16 +789,15 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 index_scope.maybe_declare(&for_stmt.index, item)?;
 
                 //index = start
-                self.append_instr(flow.block, ir::InstructionInfo::Store { addr: index_slot, ty: index_ty_ir, value: start_value.ir });
+                self.append_store(flow.block, index_slot, start_value.ir);
 
                 //index < end
                 let cond = |s: &mut Self, cond_start: Flow| {
-                    let load = ir::InstructionInfo::Load { ty: index_ty_ir, addr: index_slot };
-                    let load = s.append_instr(cond_start.block, load);
+                    let load = s.append_load(cond_start.block, index_slot, index_ty_ir);
 
                     let cond = ir::InstructionInfo::Comparison {
                         kind: ir::LogicalOp::Lt(index_info.signed),
-                        left: ir::Value::Instr(load),
+                        left: load,
                         right: end_value.ir,
                     };
                     let cond = s.append_instr(cond_start.block, cond);
@@ -782,22 +809,16 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let body = |s: &mut Self, body_start: Flow| {
                     let body_end = s.append_nested_block(body_start, &index_scope, &for_stmt.body)?;
 
-                    let load = ir::InstructionInfo::Load { ty: index_ty_ir, addr: index_slot };
-                    let load = s.append_instr(body_end.block, load);
+                    let load = s.append_load(body_end.block, index_slot, index_ty_ir);
 
                     let inc = ir::InstructionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
-                        left: ir::Value::Instr(load),
+                        left: load,
                         right: const_one.into(),
                     };
                     let inc = s.append_instr(body_end.block, inc);
 
-                    let store = ir::InstructionInfo::Store {
-                        addr: index_slot,
-                        ty: index_ty_ir,
-                        value: ir::Value::Instr(inc),
-                    };
-                    s.append_instr(body_end.block, store);
+                    s.append_store(body_end.block, index_slot, inc.into());
 
                     Ok(body_end)
                 };
@@ -843,12 +864,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let slot = self.define_slot(ty_ir, Some(debug_name));
 
             //immediately copy the param into the slot
-            let store = ir::InstructionInfo::Store {
-                addr: ir::Value::Slot(slot),
-                ty: ty_ir,
-                value: ir::Value::Param(ir_param),
-            };
-            self.append_instr(start.block, store);
+            self.append_store(start.block, slot.into(), ir_param.into());
 
             let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));

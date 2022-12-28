@@ -558,6 +558,9 @@ impl AsmFuncBuilder<'_, '_, '_> {
                             self.append_div(size, signed);
                             self.append_instr(&format!("mov {}, {}", a, d));
                         }
+                        ArithmeticOp::And => self.append_instr(&format!("and {}, {}", a, b)),
+                        ArithmeticOp::Or => self.append_instr(&format!("or {}, {}", a, b)),
+                        ArithmeticOp::Xor => self.append_instr(&format!("xor {}, {}", a, b)),
                     }
 
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
