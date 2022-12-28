@@ -30,6 +30,9 @@ pub enum ParseError {
         after: Pos,
         expected: &'static str,
     },
+    CannotChainOperator {
+        span: Span,
+    }
 }
 
 macro_rules! declare_tokens {
@@ -387,22 +390,25 @@ const TYPE_START_TOKENS: &[TT] = &[
 struct BinOpInfo {
     level: u8,
     token: TT,
-    bind_left: bool,
+    allow_chain: bool,
     op: ast::BinaryOp,
 }
 
+// TODO add binary bitwise and logical operators
 const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
-    BinOpInfo { level: 3, token: TT::DoubleEq, bind_left: true, op: ast::BinaryOp::Eq },
-    BinOpInfo { level: 3, token: TT::NotEq, bind_left: true, op: ast::BinaryOp::Neq },
-    BinOpInfo { level: 3, token: TT::GreaterEqual, bind_left: true, op: ast::BinaryOp::Gte },
-    BinOpInfo { level: 3, token: TT::Greater, bind_left: true, op: ast::BinaryOp::Gt },
-    BinOpInfo { level: 3, token: TT::LessEqual, bind_left: true, op: ast::BinaryOp::Lte },
-    BinOpInfo { level: 3, token: TT::Less, bind_left: true, op: ast::BinaryOp::Lt },
-    BinOpInfo { level: 5, token: TT::Plus, bind_left: true, op: ast::BinaryOp::Add },
-    BinOpInfo { level: 5, token: TT::Minus, bind_left: true, op: ast::BinaryOp::Sub },
-    BinOpInfo { level: 6, token: TT::Slash, bind_left: true, op: ast::BinaryOp::Div },
-    BinOpInfo { level: 6, token: TT::Star, bind_left: true, op: ast::BinaryOp::Mul },
-    BinOpInfo { level: 6, token: TT::Percent, bind_left: true, op: ast::BinaryOp::Mod },
+    BinOpInfo { level: 3, token: TT::DoubleEq, allow_chain: false, op: ast::BinaryOp::Eq },
+    BinOpInfo { level: 3, token: TT::NotEq, allow_chain: false, op: ast::BinaryOp::Neq },
+    BinOpInfo { level: 3, token: TT::GreaterEqual, allow_chain: false, op: ast::BinaryOp::Gte },
+    BinOpInfo { level: 3, token: TT::Greater, allow_chain: false, op: ast::BinaryOp::Gt },
+    BinOpInfo { level: 3, token: TT::LessEqual, allow_chain: false, op: ast::BinaryOp::Lte },
+    BinOpInfo { level: 3, token: TT::Less, allow_chain: false, op: ast::BinaryOp::Lt },
+
+    BinOpInfo { level: 5, token: TT::Plus, allow_chain: true, op: ast::BinaryOp::Add },
+    BinOpInfo { level: 5, token: TT::Minus, allow_chain: true, op: ast::BinaryOp::Sub },
+
+    BinOpInfo { level: 6, token: TT::Star, allow_chain: true, op: ast::BinaryOp::Mul },
+    BinOpInfo { level: 6, token: TT::Slash, allow_chain: true, op: ast::BinaryOp::Div },
+    BinOpInfo { level: 6, token: TT::Percent, allow_chain: true, op: ast::BinaryOp::Mod },
 ];
 
 struct PrefixOpInfo {
@@ -802,7 +808,7 @@ impl<'s> Parser<'s> {
     }
 
     fn expression(&mut self) -> Result<ast::Expression> {
-        let expr = self.precedence_climb_binop(0)?;
+        let expr = self.precedence_climb_binop(0, true)?;
         let start = expr.span.start;
 
         if !self.restrictions.no_ternary && self.accept(TT::QuestionMark)?.is_some() {
@@ -825,7 +831,7 @@ impl<'s> Parser<'s> {
         }
     }
 
-    fn precedence_climb_binop(&mut self, lower_level: u8) -> Result<ast::Expression> {
+    fn precedence_climb_binop(&mut self, level: u8, allow_chain: bool) -> Result<ast::Expression> {
         let mut curr = self.unary()?;
 
         loop {
@@ -834,11 +840,16 @@ impl<'s> Parser<'s> {
                 .find(|i| i.token == token.ty);
 
             if let Some(info) = info {
-                if info.level < lower_level { break; }
+                if info.level == level && !allow_chain {
+                    return Err(ParseError::CannotChainOperator { span: token.span })
+                }
+                if info.level <= level {
+                    break;
+                }
+
                 self.pop()?;
 
-                let next_lower_level = info.level + (info.bind_left as u8);
-                let right = self.precedence_climb_binop(next_lower_level)?;
+                let right = self.precedence_climb_binop(info.level, info.allow_chain)?;
 
                 curr = ast::Expression {
                     span: Span::new(curr.span.start, right.span.end),
