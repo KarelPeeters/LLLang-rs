@@ -154,7 +154,7 @@ fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
     Ok(changed)
 }
 
-fn run_optimizations(prog: &mut mid::ir::Program) -> Result<(), VerifyError> {
+fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
     let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
         mid::opt::slot_to_phi::slot_to_phi,
         mid::opt::inline::inline,
@@ -169,14 +169,25 @@ fn run_optimizations(prog: &mut mid::ir::Program) -> Result<(), VerifyError> {
     ];
 
     run_gc(prog)?;
+    let mut prog_before = prog.clone();
 
     loop {
         let mut changed = false;
 
         for pass in passes {
-            if run_single_pass(prog, pass)? {
+            let result = run_single_pass(prog, pass);
+
+            if result.is_err() {
+                File::create(path_before).with_context(|| "creating before file")?
+                    .write_fmt(format_args!("{}", prog_before)).with_context(|| "writing before file")?;
+                File::create(path_after).with_context(|| "creating after file")?
+                    .write_fmt(format_args!("{}", prog)).with_context(|| "writing after file")?;
+            }
+
+            if result? {
                 run_gc(prog)?;
                 changed |= true;
+                prog_before = prog.clone();
             }
         }
 
@@ -219,8 +230,10 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
 
     println!("----Optimize---");
     let ir_opt_file = ll_path.with_extension("ir_opt");
+    let ir_opt_before_file = ll_path.with_extension("ir_opt_before");
+    let ir_opt_after_file = ll_path.with_extension("ir_opt_after");
     if optimize {
-        run_optimizations(&mut ir_program)?;
+        run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
     } else {
