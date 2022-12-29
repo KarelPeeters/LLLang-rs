@@ -144,13 +144,14 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                 for &usage in &use_info[value] {
                     match usage {
-                        Usage::Main | Usage::CallTarget { .. } =>
-                            unreachable!("this value should never change: {:?}", usage),
+                        Usage::Main =>
+                            unreachable!("This value should never change: {:?}, but changed to {:?}", usage, map.eval(value)),
 
                         // instructions
                         // TODO group all instruction operand usages together
                         Usage::LoadAddr { pos }
                         | Usage::StoreAddr { pos } | Usage::StoreValue { pos }
+                        | Usage::CallTarget { pos }
                         | Usage::TupleFieldPtrBase { pos }
                         | Usage::ArrayIndexPtrBase { pos } | Usage::ArrayIndexPtrIndex { pos }
                         | Usage::BinaryOperandLeft { pos } | Usage::BinaryOperandRight { pos }
