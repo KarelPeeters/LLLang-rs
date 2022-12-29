@@ -103,6 +103,8 @@ declare_tokens![
     Slash("/"),
     Percent("%"),
 
+    // TODO find a better and more general solution to token overlaps
+    //   (probably by rewriting the tokenizer to split tokens on-demand)
     DoubleAmpersand("&&"),
     DoublePipe("||"),
 
@@ -367,6 +369,7 @@ struct Parser<'a> {
 const EXPR_START_TOKENS: &[TT] = &[
     TT::Return,
     TT::Ampersand,
+    TT::DoubleAmpersand,
     TT::Star,
     TT::Minus,
     TT::IntLit,
@@ -387,6 +390,7 @@ const TYPE_START_TOKENS: &[TT] = &[
     TT::I16,
     TT::I32,
     TT::Ampersand,
+    TT::DoubleAmpersand,
     TT::Id,
     TT::OpenB,
     TT::OpenS
@@ -434,12 +438,14 @@ struct PrefixOpInfo {
     level: u8,
     token: TT,
     op: ast::UnaryOp,
+    double: bool,
 }
 
 const PREFIX_OPERATOR_INFO: &[PrefixOpInfo] = &[
-    PrefixOpInfo { level: 2, token: TT::Ampersand, op: ast::UnaryOp::Ref },
-    PrefixOpInfo { level: 2, token: TT::Star, op: ast::UnaryOp::Deref },
-    PrefixOpInfo { level: 2, token: TT::Minus, op: ast::UnaryOp::Neg },
+    PrefixOpInfo { level: 2, token: TT::Ampersand, op: ast::UnaryOp::Ref, double: false },
+    PrefixOpInfo { level: 2, token: TT::DoubleAmpersand, op: ast::UnaryOp::Ref, double: true },
+    PrefixOpInfo { level: 2, token: TT::Star, op: ast::UnaryOp::Deref, double: false },
+    PrefixOpInfo { level: 2, token: TT::Minus, op: ast::UnaryOp::Neg, double: false },
 ];
 
 const POSTFIX_DEFAULT_LEVEL: u8 = 3;
@@ -450,14 +456,23 @@ struct PrefixState {
     level: u8,
     start: Pos,
     op: ast::UnaryOp,
+    double: bool,
 }
 
 impl PrefixState {
-    fn apply(self, inner: ast::Expression) -> ast::Expression {
-        let inner = Box::new(inner);
+    fn apply_single(&self, inner: ast::Expression) -> ast::Expression {
         ast::Expression {
             span: Span::new(self.start, inner.span.end),
-            kind: ast::ExpressionKind::Unary { kind: self.op, inner },
+            kind: ast::ExpressionKind::Unary { kind: self.op, inner: Box::new(inner) },
+        }
+    }
+
+    fn apply(self, inner: ast::Expression) -> ast::Expression {
+        let result = self.apply_single(inner);
+        if self.double {
+            self.apply_single(result)
+        } else {
+            result
         }
     }
 }
@@ -935,7 +950,7 @@ impl<'s> Parser<'s> {
 
             if let Some(info) = info {
                 let token = self.pop()?;
-                result.push(PrefixState { level: info.level, start: token.span.start, op: info.op });
+                result.push(PrefixState { level: info.level, start: token.span.start, op: info.op, double: info.double });
             } else {
                 break;
             }
@@ -1194,6 +1209,18 @@ impl<'s> Parser<'s> {
                     kind: ast::TypeKind::Ref(Box::new(inner)),
                 })
             }
+            TT::DoubleAmpersand => {
+                self.pop()?;
+                let inner = self.type_decl()?;
+                Ok(ast::Type {
+                    span: Span::new(start_pos, inner.span.end),
+                    kind: ast::TypeKind::Ref(Box::new(ast::Type {
+                        span: Span::new(start_pos, inner.span.end),
+                        kind: ast::TypeKind::Ref(Box::new(inner)),
+                    })),
+                })
+            }
+
             TT::Id => {
                 let path = self.path()?;
                 Ok(ast::Type {
