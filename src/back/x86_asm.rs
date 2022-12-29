@@ -5,7 +5,7 @@ use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, ComparisonOp, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, Phi, Program, StackSlot, Target, Terminator, Value};
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
@@ -126,7 +126,7 @@ impl AsmBuilder<'_> {
         let param_types = func_info.params.iter()
             .map(|&param| self.prog.get_param(param).ty)
             .collect_vec();
-        let param_layout = TupleLayout::for_types(&self.prog, param_types.iter().copied());
+        let param_layout = TupleLayout::for_types(self.prog, param_types.iter().copied());
 
         //collect all of the values that need to be stored on the stack
         let mut slot_stack_indices = IndexMap::new();
@@ -158,7 +158,7 @@ impl AsmBuilder<'_> {
             }
         });
 
-        let local_layout = TupleLayout::for_types(&self.prog, local_types.iter().copied());
+        let local_layout = TupleLayout::for_types(self.prog, local_types.iter().copied());
 
         let func_number = self.func_number(func);
         if let Some(debug_name) = &func_info.debug_name {
@@ -279,7 +279,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         //TODO redesign this stack_delta stuff, the current implementation is just one big minefield
 
         let ty = self.prog.type_of_value(value);
-        let layout = Layout::for_type(&self.prog, ty);
+        let layout = Layout::for_type(self.prog, ty);
 
         match value {
             Value::Void | Value::Undef(_) => {
@@ -356,7 +356,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         //  where source can then have a function to_MemRegOffset and to_register? (or either of them)
 
         let ty = self.prog.type_of_value(value);
-        let layout = Layout::for_type(&self.prog, ty);
+        let layout = Layout::for_type(self.prog, ty);
 
         let register_size = RegisterSize::for_size(layout.size)
             .unwrap_or_else(|()| panic!("Tried to put value {:?} with size {} into reg", value, layout.size))
@@ -471,7 +471,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
         if !block.phis.is_empty() {
             self.append_instr(";Phi copy");
             for phi in &block.phis {
-                let size = Layout::for_type(&self.prog, self.prog.get_phi(*phi).ty).size;
+                let size = Layout::for_type(self.prog, self.prog.get_phi(*phi).ty).size;
 
                 let PhiIndices { pre, post } = self.phi_stack_indices[phi];
                 let pre_pos = self.local_layout.offsets[pre];
@@ -485,21 +485,21 @@ impl AsmFuncBuilder<'_, '_, '_> {
         for instr in &block.instructions {
             let instr_pos = self.local_layout.offsets[self.instr_stack_indices[instr]];
 
-            match self.prog.get_instr(*instr) {
-                &InstructionInfo::Store { addr, ty, value } => {
+            match *self.prog.get_instr(*instr) {
+                InstructionInfo::Store { addr, ty, value } => {
                     assert_eq!(ty, self.prog.type_of_value(value));
                     self.append_instr(";Store");
                     self.append_value_to_reg(Register::B, addr, None, 0);
                     self.append_value_to_mem(Register::B.mem(), value, 0);
                 }
-                &InstructionInfo::Load { addr, ty } => {
+                InstructionInfo::Load { addr, ty } => {
                     let result_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";Load");
                     self.append_value_to_reg(Register::B, addr, None, 0);
                     self.append_mem_copy(MemRegOffset::stack(instr_pos), Register::B.mem(), result_layout.size);
                 }
-                &InstructionInfo::Call { target, ref args } => {
+                InstructionInfo::Call { target, ref args } => {
                     self.append_instr(";Call");
 
                     let func_ty = self.prog.type_of_value(target);
@@ -507,7 +507,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                         .expect("Call target must have function type");
 
                     //TODO check whether eg f(a: byte, b: byte) should indeed be packed in stdcall
-                    let param_layout = TupleLayout::for_types(&self.prog, func_ty.params.iter().copied());
+                    let param_layout = TupleLayout::for_types(self.prog, func_ty.params.iter().copied());
                     if param_layout.layout.alignment > STACK_ALIGNMENT {
                         panic!("Cannot use argument type with alignment {} on stack with alignment {}", param_layout.layout.alignment, STACK_ALIGNMENT)
                     }
@@ -527,7 +527,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("call eax");
 
                     //copy the return register to the stack
-                    let return_layout = Layout::for_type(&self.prog, func_ty.ret);
+                    let return_layout = Layout::for_type(self.prog, func_ty.ret);
                     let return_register_size = RegisterSize::for_size(return_layout.size)
                         .unwrap_or_else(|()| panic!("Return value for {:?} size {} does not fit in register", instr, return_layout.size));
 
@@ -537,7 +537,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                         );
                     }
                 }
-                &InstructionInfo::Arithmetic { kind, left, right } => {
+                InstructionInfo::Arithmetic { kind, left, right } => {
                     self.append_instr(";Arithmetic");
 
                     let signed = kind.signed();
@@ -565,7 +565,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }
-                &InstructionInfo::Comparison { kind, left, right } => {
+                InstructionInfo::Comparison { kind, left, right } => {
                     self.append_instr(";Comparison");
 
                     let signed = kind.signed();
@@ -595,7 +595,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
 
                     self.append_instr(&format!("mov [esp+{}], cl", instr_pos));
                 }
-                &InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
+                InstructionInfo::TupleFieldPtr { base, index, tuple_ty } => {
                     let tuple_ty = self.prog.get_type(tuple_ty).unwrap_tuple()
                         .expect("TupleFieldPtr target should have tuple pointer type");
                     let layout = TupleLayout::for_types(self.prog, tuple_ty.fields.iter().copied());
@@ -606,7 +606,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr(&format!("add eax, {}", field_offset));
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                &InstructionInfo::PointerOffSet { base, index, ty } => {
+                InstructionInfo::PointerOffSet { base, index, ty } => {
                     let ty_layout = Layout::for_type(self.prog, ty);
 
                     self.append_instr(";ArrayIndexPtr");
@@ -617,8 +617,8 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_instr("add eax, ebx");
                     self.append_instr(&format!("mov [esp+{}], eax", instr_pos));
                 }
-                &InstructionInfo::Cast { ty: new_ty, kind, value } => {
-                    let new_layout = Layout::for_type(&self.prog, new_ty);
+                InstructionInfo::Cast { ty: new_ty, kind, value } => {
+                    let new_layout = Layout::for_type(self.prog, new_ty);
                     let a = Register::A.with_size(RegisterSize::for_size(new_layout.size).unwrap().unwrap());
 
                     let signed = match kind {
@@ -630,7 +630,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     self.append_value_to_reg(Register::A, value, signed, 0);
                     self.append_instr(&format!("mov [esp+{}], {}", instr_pos, a));
                 }
-                &InstructionInfo::BlackBox { value } => {
+                InstructionInfo::BlackBox { value } => {
                     self.append_value_to_mem(MemRegOffset::stack(instr_pos), value, 0);
                 }
             }
@@ -661,7 +661,7 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let param_size = self.param_size;
 
                 // TODO implement return for larger types
-                if Layout::for_type(&self.prog, self.prog.type_of_value(value)).size != 0 {
+                if Layout::for_type(self.prog, self.prog.type_of_value(value)).size != 0 {
                     self.append_value_to_reg(Register::A, value, None, 0);
                 }
 

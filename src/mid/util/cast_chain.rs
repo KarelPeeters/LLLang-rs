@@ -63,19 +63,13 @@ pub struct Stack {
 }
 
 fn extract_minimal_cast_chain_impl(prog: &Program, value: Value) -> (Stack, Value, usize) {
-    match value {
-        Value::Instr(instr) => {
-            match prog.get_instr(instr) {
-                &InstructionInfo::Cast { ty, kind, value: next } => {
-                    let (mut stack, inner, depth) = extract_minimal_cast_chain_impl(prog, next);
-                    let bits = prog.get_type(ty).unwrap_int().unwrap();
-                    stack.cast(CastOp::new(kind, bits));
-                    return (stack, inner, depth+1);
-                }
-                _ => {}
-            }
+    if let Value::Instr(instr) = value {
+        if let &InstructionInfo::Cast { ty, kind, value: next } = prog.get_instr(instr) {
+            let (mut stack, inner, depth) = extract_minimal_cast_chain_impl(prog, next);
+            let bits = prog.get_type(ty).unwrap_int().unwrap();
+            stack.cast(CastOp::new(kind, bits));
+            return (stack, inner, depth + 1);
         }
-        _ => {}
     }
 
     let bits = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();

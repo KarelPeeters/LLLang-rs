@@ -3,7 +3,7 @@ use static_assertions;
 pub type UStorage = u64;
 pub type IStorage = i64;
 static_assertions::assert_eq_size!(UStorage, IStorage);
-const MAX_BITS: u32 = UStorage::BITS as u32;
+const MAX_BITS: u32 = UStorage::BITS;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BitInt {
@@ -54,7 +54,7 @@ impl BitInt {
     }
 
     pub fn from_bool(value: bool) -> Self {
-        BitInt { bits: 1, value: if value { 1 } else { 0 } }
+        BitInt { bits: 1, value: u64::from(value) }
     }
 
     pub fn bits(&self) -> u32 {
@@ -73,7 +73,7 @@ impl BitInt {
             return 0;
         }
 
-        let bits = self.bits as u32;
+        let bits = self.bits;
         let sign = self.value & (1 << (bits - 1)) != 0;
 
         if sign {

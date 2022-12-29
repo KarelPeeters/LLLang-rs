@@ -300,7 +300,7 @@ impl<'ast> TypeProblem<'ast> {
                 (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
                     let field_idx = target.find_field_index(index)
                         .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
-                    let field_ty = target.fields[field_idx as usize].ty;
+                    let field_ty = target.fields[field_idx].ty;
 
                     let known_ty = self.fully_known(types, field_ty);
                     self.matches.push_back((result, known_ty));

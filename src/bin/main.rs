@@ -1,4 +1,5 @@
 #![deny(unused_must_use)]
+#![allow(clippy::result_large_err)]
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, read_to_string};
@@ -119,7 +120,7 @@ fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::
     let str_before = prog.to_string();
 
     let mut changed = pass(prog);
-    verify(&prog)?;
+    verify(prog)?;
 
     let nodes_after = prog.nodes.total_node_count();
     let str_after = prog.to_string();
@@ -302,7 +303,7 @@ enum SubCommand {
 #[derive(Debug)]
 enum Level {
     LL,
-    ASM,
+    Asm,
 }
 
 fn main() -> CompileResult<()> {
@@ -319,7 +320,7 @@ fn main() -> CompileResult<()> {
     //  hmm, that's not entirely great, maybe add a mode for single-file projects too?
     let level = match path.extension().and_then(|os| os.to_str()) {
         Some("ll") => Level::LL,
-        Some("asm") => Level::ASM,
+        Some("asm") => Level::Asm,
         _ => {
             eprintln!("Expected either .ll or .asm file as input");
             return Ok(());
@@ -328,7 +329,7 @@ fn main() -> CompileResult<()> {
 
     let asm_path = match level {
         Level::LL => compile_ll_to_asm(&path, !opts.no_std, !opts.no_opt)?,
-        Level::ASM => path,
+        Level::Asm => path,
     };
 
     let exe_path = compile_asm_to_exe(&asm_path)?;

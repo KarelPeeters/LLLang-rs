@@ -127,9 +127,9 @@ impl<'a> TypeStore<'a> {
                     TypeInfo::Bool => write!(f, "bool"),
                     &TypeInfo::Int(info) => write!(f, "{}", info),
                     TypeInfo::Pointer(inner) => write!(f, "&{}", self.store.format_type(*inner)),
-                    TypeInfo::Tuple(info) => write_tuple(&self.store, f, &info.fields),
+                    TypeInfo::Tuple(info) => write_tuple(self.store, f, &info.fields),
                     TypeInfo::Function(info) => {
-                        write_tuple(&self.store, f, &info.params)?;
+                        write_tuple(self.store, f, &info.params)?;
                         write!(f, " -> {}", self.store.format_type(info.ret))
                     }
                     TypeInfo::Array(info) => write!(f, "[{}; {}]", self.store.format_type(info.inner), info.length),
@@ -232,7 +232,7 @@ impl<'a> ItemStore<'a> {
 
             ast::TypeKind::Path(path) => self.resolve_path_type(scope_kind, scope, path),
             ast::TypeKind::Ref(inner) => {
-                let inner = self.resolve_type(scope_kind, scope, types, &*inner)?;
+                let inner = self.resolve_type(scope_kind, scope, types, inner)?;
                 Ok(types.define_type(TypeInfo::Pointer(inner)))
             }
             ast::TypeKind::Tuple { fields } => {

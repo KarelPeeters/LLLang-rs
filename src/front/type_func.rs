@@ -101,7 +101,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 if let Some(ty_lit) = ty_lit {
                     // require type specification to match
                     let ty_lit = self.resolve_type(scope, ty_lit)?;
-                    let ty_lit = self.problem.fully_known(&self.types, ty_lit);
+                    let ty_lit = self.problem.fully_known(self.types, ty_lit);
                     self.problem.equal(ty_expr, ty_lit);
                 }
 
@@ -123,8 +123,8 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     match value {
                         ScopedValue::TypeVar(var) => var,
                         ScopedValue::Function(_) | ScopedValue::Const(_) | ScopedValue::Immediate(_) => {
-                            let ty = (self.map_value)(value).ty(&self.types);
-                            self.problem.fully_known(&self.types, ty)
+                            let ty = (self.map_value)(value).ty(self.types);
+                            self.problem.fully_known(self.types, ty)
                         }
                     }
                 } else {
@@ -132,20 +132,20 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 }
             }
             ast::ExpressionKind::Ternary { condition, then_value, else_value } => {
-                let cond_ty = self.visit_expr(&scope, &*condition)?;
+                let cond_ty = self.visit_expr(scope, condition)?;
                 self.problem.equal(cond_ty, self.problem.ty_bool());
 
                 let value_ty = self.problem.unknown(expr_origin);
-                let then_ty = self.visit_expr(&scope, then_value)?;
-                let else_ty = self.visit_expr(&scope, else_value)?;
+                let then_ty = self.visit_expr(scope, then_value)?;
+                let else_ty = self.visit_expr(scope, else_value)?;
                 self.problem.equal(value_ty, then_ty);
                 self.problem.equal(value_ty, else_ty);
 
                 value_ty
             }
             ast::ExpressionKind::Binary { kind, left, right } => {
-                let left_ty = self.visit_expr(&scope, left)?;
-                let right_ty = self.visit_expr(&scope, right)?;
+                let left_ty = self.visit_expr(scope, left)?;
+                let right_ty = self.visit_expr(scope, right)?;
                 self.visit_binary_op(expr_origin, *kind, left_ty, right_ty)?
             }
             ast::ExpressionKind::Unary { kind, inner } => {
@@ -174,8 +174,8 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             ast::ExpressionKind::Logical { kind, left, right } => {
                 let (LogicalOp::And | LogicalOp::Or) = kind;
 
-                let left_ty = self.visit_expr(&scope, left)?;
-                let right_ty = self.visit_expr(&scope, right)?;
+                let left_ty = self.visit_expr(scope, left)?;
+                let right_ty = self.visit_expr(scope, right)?;
 
                 let ty_bool = self.problem.ty_bool();
                 self.problem.equal(ty_bool, left_ty);
@@ -233,7 +233,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     self.problem.ty_void()
                 };
 
-                let ret_ty = self.problem.fully_known(&self.types, self.ret_ty);
+                let ret_ty = self.problem.fully_known(self.types, self.ret_ty);
                 self.problem.equal(ret_ty, value_ty);
 
                 //TODO use "never" type once that exists instead, also for break and continue
@@ -272,11 +272,11 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     let field_index = struct_ty_info.find_field_index(&field_id.string).unwrap();
                     let field_info = &struct_ty_info.fields[field_index];
 
-                    let field_ty = self.problem.fully_known(&self.types, field_info.ty);
+                    let field_ty = self.problem.fully_known(self.types, field_info.ty);
                     self.problem.equal(field_ty, field_value_ty);
                 }
 
-                self.problem.fully_known(&self.types, struct_ty)
+                self.problem.fully_known(self.types, struct_ty)
             }
             ast::ExpressionKind::BlackBox { value } => {
                 self.visit_expr(scope, value)?
@@ -299,7 +299,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     None => self.problem.unknown(decl_origin),
                     Some(ty) => {
                         let ty = self.resolve_type(scope, ty);
-                        self.problem.fully_known(&self.types, ty?)
+                        self.problem.fully_known(self.types, ty?)
                     }
                 };
 
@@ -348,7 +348,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     .map(|ty| self.resolve_type(scope, ty))
                     .transpose()?;
                 let index_ty = match index_ty {
-                    Some(index_ty) => self.problem.fully_known(&self.types, index_ty),
+                    Some(index_ty) => self.problem.fully_known(self.types, index_ty),
                     None => self.problem.unknown(Origin::ForIndex(for_stmt)),
                 };
 
@@ -389,7 +389,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
         for (i, param) in decl.ast.params.iter().enumerate() {
             let ty = decl.func_ty.params[i];
-            let ty_var = self.problem.fully_known(&self.types, ty);
+            let ty_var = self.problem.fully_known(self.types, ty);
 
             scope.maybe_declare(&param.id, ScopedItem::Value(ScopedValue::TypeVar(ty_var)))?;
         }

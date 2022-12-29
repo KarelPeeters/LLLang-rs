@@ -574,7 +574,7 @@ impl<'s> Parser<'s> {
         ParseError::Token {
             ty: token.ty,
             pos: token.span.start,
-            allowed: allowed.iter().copied().collect(),
+            allowed: allowed.to_vec(),
             description,
         }
     }

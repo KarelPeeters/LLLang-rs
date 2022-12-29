@@ -82,11 +82,11 @@ struct EndPoint {
 
 impl EndPoint {
     fn find_target(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Target) {
-        Self::find(prog, start, start_block).to_target()
+        Self::find(prog, start, start_block).into_target()
     }
 
     fn find_terminator(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Terminator) {
-        Self::find(prog, start, start_block).to_terminator()
+        Self::find(prog, start, start_block).into_terminator()
     }
 
     fn find(prog: &Program, start: Target, start_block: Option<Block>) -> Self {
@@ -137,7 +137,7 @@ impl EndPoint {
         }
     }
 
-    fn to_target(self) -> (usize, Target) {
+    fn into_target(self) -> (usize, Target) {
         let count_skipped = if self.terminator.is_some() {
             self.count_skipped - 1
         } else {
@@ -147,7 +147,7 @@ impl EndPoint {
         (count_skipped, self.fallback_target)
     }
 
-    fn to_terminator(self) -> (usize, Terminator) {
+    fn into_terminator(self) -> (usize, Terminator) {
         let terminator = match self.terminator {
             None => Terminator::Jump { target: self.fallback_target },
             Some(terminator) => terminator,

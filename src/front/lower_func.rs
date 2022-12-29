@@ -586,7 +586,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let (_, result_value) = result;
 
             let expect_ty = self.expr_type(expr);
-            let actual_ty = result_value.ty(&self.types);
+            let actual_ty = result_value.ty(self.types);
 
             assert_eq!(
                 expect_ty, actual_ty,
@@ -595,7 +595,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             );
 
             if let Some(actual_ty_ir) = result_value.ty_ir(self.prog) {
-                let expect_ty_ir = self.types.map_type(&mut self.prog, expect_ty);
+                let expect_ty_ir = self.types.map_type(self.prog, expect_ty);
 
                 assert_eq!(
                     expect_ty_ir, actual_ty_ir,
@@ -734,7 +734,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 assert!(!decl.mutable, "everything is mutable for now");
 
                 let (after_value, value) = if let Some(init) = &decl.init {
-                    let (after_value, value) = self.append_expr_loaded(flow, scope, &init)?;
+                    let (after_value, value) = self.append_expr_loaded(flow, scope, init)?;
                     (after_value, Some(value))
                 } else {
                     (flow, None)

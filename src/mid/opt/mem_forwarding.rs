@@ -155,40 +155,37 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
         return alias_from_origin;
     }
 
-    match (ptr_left, ptr_right) {
-        (Value::Instr(instr_left), Value::Instr(instr_right)) => {
-            match (prog.get_instr(instr_left), prog.get_instr(instr_right)) {
-                (
-                    &InstructionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
-                    &InstructionInfo::PointerOffSet { ty: inner_ty_right, base: base_right, index: index_right },
-                ) => {
-                    let base_alias = pointers_alias(prog, base_left, base_right);
-                    if base_alias == Alias::Undef {
-                        return base_alias;
-                    }
-                    if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
-                        return base_alias;
-                    }
-                    // the zero-size type case is already handled by simplify_ptr
+    if let (Value::Instr(instr_left), Value::Instr(instr_right)) = (ptr_left, ptr_right) {
+        match (prog.get_instr(instr_left), prog.get_instr(instr_right)) {
+            (
+                &InstructionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
+                &InstructionInfo::PointerOffSet { ty: inner_ty_right, base: base_right, index: index_right },
+            ) => {
+                let base_alias = pointers_alias(prog, base_left, base_right);
+                if base_alias == Alias::Undef {
+                    return base_alias;
                 }
-
-                (
-                    &InstructionInfo::TupleFieldPtr { base: base_left, index: index_left, tuple_ty: tuple_ty_left },
-                    &InstructionInfo::TupleFieldPtr { base: base_right, index: index_right, tuple_ty: tuple_ty_right },
-                ) => {
-                    let base_alias = pointers_alias(prog, base_left, base_right);
-                    if base_alias == Alias::Undef {
-                        return base_alias;
-                    }
-                    if tuple_ty_left == tuple_ty_right && index_left == index_right {
-                        return base_alias;
-                    }
+                if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
+                    return base_alias;
                 }
-
-                _ => {}
+                // the zero-size type case is already handled by simplify_ptr
             }
+
+            (
+                &InstructionInfo::TupleFieldPtr { base: base_left, index: index_left, tuple_ty: tuple_ty_left },
+                &InstructionInfo::TupleFieldPtr { base: base_right, index: index_right, tuple_ty: tuple_ty_right },
+            ) => {
+                let base_alias = pointers_alias(prog, base_left, base_right);
+                if base_alias == Alias::Undef {
+                    return base_alias;
+                }
+                if tuple_ty_left == tuple_ty_right && index_left == index_right {
+                    return base_alias;
+                }
+            }
+
+            _ => {}
         }
-        _ => {}
     }
 
     Alias::UnknownOrPartial
@@ -198,8 +195,8 @@ fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
     if let Value::Instr(instr) = ptr {
-        match prog.get_instr(instr) {
-            &InstructionInfo::PointerOffSet { ty, base, index } => {
+        match *prog.get_instr(instr) {
+            InstructionInfo::PointerOffSet { ty, base, index } => {
                 if prog.is_zero_sized_type(ty) {
                     return simplify_ptr(prog, base);
                 }
@@ -209,7 +206,7 @@ fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
                     }
                 }
             }
-            &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {
+            InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {
                 // index == 0 is not enough to decay to base pointer, since the layout of tuples is decided by the backend
                 // however, single-element tuples are still guaranteed to have the same layout as the single item inside them
                 let field_count = prog.get_type(tuple_ty).unwrap_tuple().unwrap().fields.len();

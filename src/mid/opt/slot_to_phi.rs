@@ -20,7 +20,6 @@ pub fn slot_to_phi(prog: &mut Program) -> bool {
     replaced_slot_count != 0
 }
 
-
 //TODO this could be replaced by a more efficient data structure
 type PhiMap = HashMap<(Block, StackSlot), Phi>;
 
@@ -106,7 +105,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
     //remove the now unused slots
     prog.get_func_mut(func).slots
-        .retain(|slot| !replaced_slots.contains(&slot));
+        .retain(|slot| !replaced_slots.contains(slot));
 
     replaced_slots.len()
 }

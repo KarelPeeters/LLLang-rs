@@ -393,10 +393,7 @@ impl UseInfo {
 
     pub fn function_only_used_as_call_target(&self, func: Function) -> bool {
         self[func].iter().all(|usage| {
-            match usage {
-                Usage::CallTarget { .. } => true,
-                _ => false,
-            }
+            matches!(usage, Usage::CallTarget { .. })
         })
     }
 
@@ -499,7 +496,7 @@ impl<T: Into<Value>> std::ops::Index<T> for UseInfo {
 
     fn index(&self, index: T) -> &Self::Output {
         let index = index.into();
-        self.value_usages.get(&index).map_or(&[], |v| &v)
+        self.value_usages.get(&index).map_or(&[], |v| v)
     }
 }
 
@@ -507,7 +504,7 @@ impl std::ops::Index<Block> for UseInfo {
     type Output = [BlockUsage];
 
     fn index(&self, index: Block) -> &Self::Output {
-        self.block_usages.get(&index).map_or(&[], |v| &v)
+        self.block_usages.get(&index).map_or(&[], |v| v)
     }
 }
 

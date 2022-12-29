@@ -104,20 +104,20 @@ pub fn verify(prog: &Program) -> Result {
             // check terminator
             let term_pos = DomPosition::InBlock(func, block, BlockPosition::Terminator);
 
-            match terminator {
-                &Terminator::Jump { ref target } => {
+            match *terminator {
+                Terminator::Jump { ref target } => {
                     ctx.check_target(term_pos, target)?
                 }
-                &Terminator::Branch { cond, ref true_target, ref false_target } => {
+                Terminator::Branch { cond, ref true_target, ref false_target } => {
                     ensure_type_match(prog, term_pos, cond, prog.ty_bool())?;
                     ctx.ensure_dominates(cond, term_pos)?;
                     ctx.check_target(term_pos, true_target)?;
                     ctx.check_target(term_pos, false_target)?;
                 }
-                &Terminator::Return { value } => {
+                Terminator::Return { value } => {
                     ensure_type_match(prog, term_pos, value, func_info.func_ty.ret)?;
                 }
-                &Terminator::Unreachable => {}
+                Terminator::Unreachable => {}
             }
         }
     }
@@ -158,7 +158,7 @@ impl<'a> Context<'a> {
                 DomPosition::Global
             }
             Value::Param(_) | Value::Slot(_) | Value::Phi(_) | Value::Instr(_) => {
-                self.declarer.value_declared_pos.get(&value).copied().ok_or_else(|| VerifyError::NonDeclaredValueUsed(value, use_pos))?
+                self.declarer.value_declared_pos.get(&value).copied().ok_or(VerifyError::NonDeclaredValueUsed(value, use_pos))?
             }
         };
 

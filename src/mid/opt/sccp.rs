@@ -4,7 +4,7 @@ use std::num::Wrapping;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, TargetKind, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, Const, Function, Instruction, InstructionInfo, ComparisonOp, Program, Signed, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Function, Instruction, InstructionInfo, Program, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -107,7 +107,7 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                     //visit each instr
                     for &instr in &block_info.instructions {
-                        visit_instr(&prog, &mut map, &mut todo, instr);
+                        visit_instr(prog, &mut map, &mut todo, instr);
                         let pos = InstructionPos { func, block, instr };
 
                         //since it's the first time we check for usage of functions as generic operands
@@ -237,8 +237,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
 fn visit_branch(
     prog: &Program,
-    mut map: &mut LatticeMap,
-    mut todo: &mut VecDeque<Todo>,
+    map: &mut LatticeMap,
+    todo: &mut VecDeque<Todo>,
     func: Function,
     cond: &Value,
     true_target: &Target,
@@ -248,10 +248,10 @@ fn visit_branch(
     let (visit_true, visit_false) = evaluate_branch_condition(prog, cond);
 
     if visit_true {
-        update_target_reachable(prog, &mut map, &mut todo, func, true_target);
+        update_target_reachable(prog, map, todo, func, true_target);
     }
     if visit_false {
-        update_target_reachable(prog, &mut map, &mut todo, func, false_target);
+        update_target_reachable(prog, map, todo, func, false_target);
     }
 }
 

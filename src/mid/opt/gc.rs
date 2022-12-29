@@ -47,7 +47,7 @@ impl Visitor for GcVisitor {
         for &instr in instructions {
             state.add_value(instr);
 
-            for_each_usage_in_instr((), &state.prog.get_instr(instr), |value, _| {
+            for_each_usage_in_instr((), state.prog.get_instr(instr), |value, _| {
                 state.add_value(value);
             });
         }

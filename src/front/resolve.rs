@@ -39,7 +39,7 @@ struct ResolveState<'a> {
 }
 
 /// Collect all declared items into local_scope and populate the maps.
-fn first_pass<'a>(ast: &'a AstProgram) -> Result<(ResolveState<'a>, CstProgram<'a>)> {
+fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
     let mut store = TypeStore::default();
     let common_ph_type = store.new_placeholder();
 
@@ -126,7 +126,7 @@ fn second_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Res
 
         for (name, child) in &module.submodules {
             let child_id = child.content.1;
-            scope.declare_str(&*name, ScopedItem::Module(child_id));
+            scope.declare_str(name, ScopedItem::Module(child_id));
         }
 
         Ok(())
@@ -143,7 +143,7 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
         let scope = &mut state.items.modules[module_id].scope;
         for (name, child) in &module.submodules {
             let child_id = child.content.1;
-            scope.declare_str(&*name, ScopedItem::Module(child_id));
+            scope.declare_str(name, ScopedItem::Module(child_id));
         }
 
         let items = &mut state.items;
@@ -190,7 +190,7 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
                     Item::Struct(struct_ast) => {
                         let fields: Vec<StructFieldInfo> = struct_ast.fields.iter().map(|field| {
                             let ty = items.resolve_type(ScopeKind::Real, module_scope, types, &field.ty)?;
-                            Ok(StructFieldInfo { id: &*field.id.string, ty })
+                            Ok(StructFieldInfo { id: &field.id.string, ty })
                         }).try_collect()?;
 
                         let unique_field_count = fields.iter().map(|field| field.id).unique().count();

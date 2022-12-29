@@ -139,7 +139,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     //create ir function for each cst function
     let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()
         .map(|(cst_func, decl)| {
-            let r = map_function(&mut types, &mut ir_prog, &decl)?;
+            let r = map_function(&mut types, &mut ir_prog, decl)?;
             Ok((cst_func, r))
         }).try_collect()?;
 
@@ -193,7 +193,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
                 } = type_state;
 
                 //solve the problem
-                let solution = problem.solve(&mut *types);
+                let solution = problem.solve(&mut types);
 
                 //actually generate code
                 LowerFuncState {
@@ -267,13 +267,13 @@ pub fn lower_literal<'a>(
 ) -> Result<'a, LRValue> {
     let result = match &expr.kind {
         ast::ExpressionKind::Null => {
-            check_ptr_type(&types, expr, ty)?;
+            check_ptr_type(types, expr, ty)?;
 
             let value_ir = ir_prog.const_null_ptr();
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
         }
         &ast::ExpressionKind::BoolLit { value } => {
-            check_type_match(&types, expr, types.type_bool(), ty)?;
+            check_type_match(types, expr, types.type_bool(), ty)?;
 
             let value_ir = ir_prog.const_bool(value);
             LRValue::Right(TypedValue { ty, ir: value_ir.into() })
@@ -288,10 +288,10 @@ pub fn lower_literal<'a>(
                 }
             };
 
-            let info = check_integer_type(&types, expr, ty)?;
+            let info = check_integer_type(types, expr, ty)?;
 
-            let value_raw = if value.starts_with("0x") {
-                IStorage::from_str_radix(&value[2..], 16)
+            let value_raw = if let Some(digits) = value.strip_prefix("0x") {
+                IStorage::from_str_radix(digits, 16)
             } else {
                 // this handles the "max negative value" edge case for us
                 IStorage::from_str(value)
@@ -311,7 +311,7 @@ pub fn lower_literal<'a>(
         ast::ExpressionKind::StringLit { value } => {
             let ty_byte = types.define_type(TypeInfo::Int(IntTypeInfo::U8));
             let ty_byte_ptr = types.define_type_ptr(ty_byte);
-            check_type_match(&types, expr, ty_byte_ptr, ty)?;
+            check_type_match(types, expr, ty_byte_ptr, ty)?;
 
             let ty_byte_ir = types.map_type(ir_prog, ty_byte);
             let ty_byte_ptr_ir = types.map_type(ir_prog, ty_byte_ptr);

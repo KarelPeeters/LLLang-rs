@@ -108,7 +108,7 @@ impl<K: IndexType, T> Arena<K, T> {
 impl<K: IndexType, T> Index<K> for Arena<K, T> {
     type Output = T;
     fn index(&self, index: K) -> &Self::Output {
-        &self.map.get(&index.idx().i)
+        self.map.get(&index.idx().i)
             .unwrap_or_else(|| panic!("Value {:?} not found", index))
     }
 }
@@ -192,7 +192,7 @@ impl<K: IndexType, T: Eq + Hash + Clone + Debug> ArenaSet<K, T> {
     pub fn lookup(&self, value: &T) -> Option<K> {
         self.map_back.get(value).map(|&i| K::new(Idx::new(i)))
     }
-    
+
     pub fn push(&mut self, value: T) -> K {
         if let Some(&i) = self.map_back.get(&value) {
             K::new(Idx::new(i))
