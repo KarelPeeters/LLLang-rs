@@ -8,6 +8,10 @@ pub enum Lattice {
 }
 
 impl Lattice {
+    pub fn fold(values: impl IntoIterator<Item=Lattice>) -> Lattice {
+        values.into_iter().fold(Lattice::Undef, Lattice::merge)
+    }
+
     pub fn merge(left: Lattice, right: Lattice) -> Lattice {
         match (left, right) {
             (Lattice::Overdef, _) | (_, Lattice::Overdef) =>

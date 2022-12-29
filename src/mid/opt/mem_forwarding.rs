@@ -100,11 +100,10 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
         }
     }
 
-    let mut curr_value = Lattice::Undef;
-
-    for BlockUsage { target_kind } in &use_info[block] {
-        let new_value = match target_kind.source() {
-            // there aren't any preceding stores, depending on the origin the value is undef or overdef
+    // otherwise the value is the merge of the value at the end of each predecessor
+    Lattice::fold(use_info[block].iter().map(|BlockUsage { target_kind }| {
+        match target_kind.source() {
+            // we've reached the start of the function, depending on the origin the value is undef or overdef
             TargetSource::Entry(_) => match pointer_origin(prog, location.ptr) {
                 Origin::Undef => Lattice::Undef,
                 Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
@@ -114,12 +113,8 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
             TargetSource::Block(pos) => {
                 find_value_for_location_at_instr(prog, use_info, location, pos.block, None)
             }
-        };
-
-        curr_value = Lattice::merge(curr_value, new_value);
-    }
-
-    curr_value
+        }
+    }))
 }
 
 fn locations_alias(prog: &Program, left: Location, right: Location) -> Alias {
