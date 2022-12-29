@@ -116,6 +116,7 @@ pub fn verify(prog: &Program) -> Result {
                 }
                 Terminator::Return { value } => {
                     ensure_type_match(prog, term_pos, value, func_info.func_ty.ret)?;
+                    ctx.ensure_dominates(value, term_pos)?;
                 }
                 Terminator::Unreachable => {}
             }
