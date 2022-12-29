@@ -1,7 +1,7 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Function, Program};
-use crate::util::IndexMutTwice;
+use crate::mid::ir::{Block, Function, Program, Value};
+use crate::util::{IndexMutTwice, VecExt};
 
 #[derive(Debug)]
 pub struct DomInfo {
@@ -195,6 +195,49 @@ pub enum DomPosition {
     Global,
     FuncEntry(Function),
     InBlock(Function, Block, BlockPosition),
+}
+
+#[derive(Debug)]
+pub struct NoDefFound;
+
+impl DomPosition {
+    // TODO find a faster way to do this
+    //   maybe the only solution is to keep track of this for each value? that's pretty ugly and brittle...
+    pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, NoDefFound> {
+        let func_info = prog.get_func(func);
+
+        match value {
+            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => {
+                Ok(DomPosition::Global)
+            }
+            Value::Param(param) => {
+                func_info.params.contains(&param).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
+            }
+            Value::Slot(slot) => {
+                func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
+            }
+            Value::Phi(phi) => {
+                prog.try_visit_blocks(func_info.entry.block, |block| {
+                    let block_info = prog.get_block(block);
+                    if block_info.phis.contains(&phi) {
+                        Err(DomPosition::InBlock(func, block, BlockPosition::Entry))
+                    } else {
+                        Ok(())
+                    }
+                }).err().ok_or(NoDefFound)
+            }
+            Value::Instr(instr) => {
+                prog.try_visit_blocks(func_info.entry.block, |block| {
+                    let block_info = prog.get_block(block);
+                    if let Some(index) = block_info.instructions.index_of(&instr) {
+                        Err(DomPosition::InBlock(func, block, BlockPosition::Instruction(index)))
+                    } else {
+                        Ok(())
+                    }
+                }).err().ok_or(NoDefFound)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]

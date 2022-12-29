@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
+use crate::mid::analyse::dom_info::{BlockPosition, DomPosition};
 use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
 
 #[derive(Debug, Copy, Clone)]
@@ -10,8 +11,10 @@ pub struct InstructionPos {
     pub func: Function,
     pub block: Block,
     pub instr: Instruction,
+    pub instr_index: usize,
 }
 
+// TODO is this only ever used for terminators? If so, rename and implement `as_dom_pos`.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct BlockPos {
     pub func: Function,
@@ -152,6 +155,43 @@ pub fn try_for_each_usage_in_instr<P: Copy, E>(
     Ok(())
 }
 
+impl InstructionPos {
+    pub fn as_dom_pos(self) -> DomPosition {
+        DomPosition::InBlock(self.func, self.block, BlockPosition::Instruction(self.instr_index))
+    }
+}
+
+impl Usage {
+    // returns None for
+    pub fn as_dom_pos(self) -> DomPosition {
+        match self {
+            Usage::Main => {
+                DomPosition::Global
+            }
+            Usage::LoadAddr { pos } |
+            Usage::StoreAddr { pos } |
+            Usage::StoreValue { pos } |
+            Usage::CallTarget { pos } |
+            Usage::CallArgument { pos, index: _, } |
+            Usage::BinaryOperandLeft { pos } |
+            Usage::BinaryOperandRight { pos } |
+            Usage::TupleFieldPtrBase { pos } |
+            Usage::ArrayIndexPtrBase { pos } |
+            Usage::ArrayIndexPtrIndex { pos } |
+            Usage::CastValue { pos } |
+            Usage::BlackBoxValue { pos } => {
+                pos.as_dom_pos()
+            }
+            Usage::TargetPhiValue { target_kind, phi_index: _ } => {
+                target_kind.as_dom_pos()
+            }
+            Usage::BranchCond { pos } | Usage::ReturnValue { pos } => {
+                DomPosition::InBlock(pos.func, pos.block, BlockPosition::Terminator)
+            }
+        }
+    }
+}
+
 // TODO use visitor here as well
 impl UseInfo {
     pub fn new(prog: &Program) -> Self {
@@ -193,9 +233,9 @@ impl UseInfo {
                     let block_info = prog.get_block(block);
 
                     //instructions
-                    for &instr in &block_info.instructions {
+                    for (instr_index, &instr) in block_info.instructions.iter().enumerate() {
                         let instr_info = prog.get_instr(instr);
-                        let instr_pos = InstructionPos { func, block, instr };
+                        let instr_pos = InstructionPos { func, block, instr, instr_index };
 
                         for_each_usage_in_instr(instr_pos, instr_info, |value, usage| {
                             info.add_value_usage(value, usage);
@@ -256,12 +296,20 @@ impl UseInfo {
         self.add_block_usage(target.block, BlockUsage { target_kind });
     }
 
-    //TODO figure out a way to make all of this a lot more typesafe
     pub fn replace_value_usages(&self, prog: &mut Program, old: Value, new: Value) -> usize {
+        self.replace_value_usages_if(prog, old, new, |_| true)
+    }
+
+    //TODO figure out a way to make all of this a lot more typesafe
+    pub fn replace_value_usages_if(&self, prog: &mut Program, old: Value, new: Value, mut filter: impl FnMut(Usage) -> bool) -> usize {
         assert_ne!(old, new);
         let count = &mut 0;
 
         for &usage in &self[old] {
+            if !filter(usage) {
+                continue;
+            }
+
             match usage {
                 Usage::Main => {
                     if let Value::Func(new) = new {
@@ -486,6 +534,15 @@ impl TargetKind {
                     Terminator::Branch { false_target, .. } => false_target,
                     _ => panic!("Expected to find Terminator::Branch for TargetKind::BranchFalse")
                 }
+            }
+        }
+    }
+
+    pub fn as_dom_pos(self) -> DomPosition {
+        match self {
+            TargetKind::EntryFrom(func) => DomPosition::FuncEntry(func),
+            TargetKind::JumpFrom(pos) | TargetKind::BranchTrueFrom(pos) | TargetKind::BranchFalseFrom(pos) => {
+                DomPosition::InBlock(pos.func, pos.block, BlockPosition::Terminator)
             }
         }
     }

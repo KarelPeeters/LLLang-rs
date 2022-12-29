@@ -106,9 +106,9 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                     let block_info = prog.get_block(block);
 
                     //visit each instr
-                    for &instr in &block_info.instructions {
+                    for (instr_index, &instr) in block_info.instructions.iter().enumerate() {
                         visit_instr(prog, &mut map, &mut todo, instr);
-                        let pos = InstructionPos { func, block, instr };
+                        let pos = InstructionPos { func, block, instr, instr_index };
 
                         //since it's the first time we check for usage of functions as generic operands
                         for_each_usage_in_instr(pos, prog.get_instr(instr), |value, usage| {
