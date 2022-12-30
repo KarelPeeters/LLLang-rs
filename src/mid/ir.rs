@@ -625,6 +625,14 @@ impl Value {
         matches!(self, Value::Undef(_))
     }
 
+    pub fn is_const_zero(self) -> bool {
+        if let Value::Const(cst) = self {
+            cst.is_zero()
+        } else {
+            false
+        }
+    }
+
     pub fn is_const_like(self) -> bool {
         match self {
             Value::Void => true,

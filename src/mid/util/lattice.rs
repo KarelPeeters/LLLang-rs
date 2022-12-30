@@ -1,4 +1,4 @@
-use crate::mid::ir::{Program, Type, Value};
+use crate::mid::ir::{Const, Program, Type, Value};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Lattice {
@@ -32,6 +32,23 @@ impl Lattice {
             Lattice::Undef => Some(Value::Undef(ty)),
             Lattice::Known(value) => Some(value),
             Lattice::Overdef => None,
+        }
+    }
+
+    pub fn map_known(self, f: impl FnOnce(Value) -> Lattice) -> Lattice {
+        match self {
+            Lattice::Undef => Lattice::Undef,
+            Lattice::Known(value) => f(value),
+            Lattice::Overdef => Lattice::Overdef,
+        }
+    }
+
+    pub fn map_known_const(self, f: impl FnOnce(Const) -> Lattice) -> Lattice {
+        match self {
+            Lattice::Undef => Lattice::Undef,
+            Lattice::Known(Value::Const(cst)) => f(cst),
+            Lattice::Known(_) => Lattice::Overdef,
+            Lattice::Overdef => Lattice::Overdef,
         }
     }
 }

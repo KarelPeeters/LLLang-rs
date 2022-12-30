@@ -296,51 +296,45 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
 
     let result = match instr_info {
         &InstructionInfo::Load { addr, ty: _ } => {
-            match addr {
-                // loading from undef or null ptr returns undef
-                Value::Undef(_) => Lattice::Undef,
-                Value::Const(cst) if cst.is_zero() => Lattice::Undef,
-                _ => Lattice::Overdef,
-            }
+            // loading from undef returns undef
+            // TODO maybe replace with unreachable instead?
+            map.eval(addr).map_known(|value| {
+                // loading from null returns undef
+                if value.is_const_zero() {
+                    Lattice::Undef
+                } else {
+                    Lattice::Overdef
+                }
+            })
         }
         &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
-            match map.eval(base) {
-                Lattice::Undef => Lattice::Undef,
-                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
-            }
+            // just always assume overdef, maybe this will change when we add const pointers
+            map.eval(base).map_known(|_| Lattice::Overdef)
         }
         &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => {
-            match map.eval(base) {
-                Lattice::Undef => Lattice::Undef,
-                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
-            }
+            // just always assume overdef, maybe this will change when we add const pointers
+            map.eval(base).map_known(|_| Lattice::Overdef)
         }
         // this instruction doesn't have a return value, so we can just use anything we want
         InstructionInfo::Store { .. } => Lattice::Undef,
         &InstructionInfo::Call { target, ref args } => {
-            let target = map.eval(target);
+            map.eval(target).map_known(|target| {
+                if let Value::Func(target) = target {
+                    //mark reachable
+                    todo.push_back(Todo::FunctionInit(target));
 
-            match target {
-                Lattice::Undef => Lattice::Undef,
-                Lattice::Known(target) => {
-                    if let Value::Func(target) = target {
-                        //mark reachable
-                        todo.push_back(Todo::FunctionInit(target));
-
-                        //merge in arguments
-                        let target_info = prog.get_func(target);
-                        for (&param, &arg) in zip_eq(&target_info.params, args) {
-                            map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
-                        }
-
-                        //get return
-                        map.eval_func_return(target)
-                    } else {
-                        Lattice::Overdef
+                    //merge in arguments
+                    let target_info = prog.get_func(target);
+                    for (&param, &arg) in zip_eq(&target_info.params, args) {
+                        map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
                     }
+
+                    //get return
+                    map.eval_func_return(target)
+                } else {
+                    Lattice::Overdef
                 }
-                Lattice::Overdef => Lattice::Overdef,
-            }
+            })
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
             // TODO test whether this correct handles all of the edge cases in mul and div
@@ -399,31 +393,27 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
             let old_bits = prog.get_type(prog.type_of_value(value)).unwrap_int().unwrap();
             let new_bits = prog.get_type(ty).unwrap_int().unwrap();
 
-            match map.eval(value) {
-                Lattice::Undef => Lattice::Undef,
-                Lattice::Known(Value::Const(cst)) => {
-                    assert_eq!(cst.value.bits(), old_bits);
+            map.eval(value).map_known_const(|cst| {
+                assert_eq!(cst.value.bits(), old_bits);
 
-                    let result = match kind {
-                        CastKind::IntTruncate => {
-                            // cannot overflow, we just masked
-                            let mask = BitInt::mask(new_bits);
-                            BitInt::from_unsigned(new_bits, cst.value.unsigned() & mask).unwrap()
-                        }
-                        CastKind::IntExtend(Signed::Signed) => {
-                            // cannot overflow, we just sign-extended for a signed value
-                            BitInt::from_signed(new_bits, cst.value.signed()).unwrap()
-                        }
-                        CastKind::IntExtend(Signed::Unsigned) => {
-                            // cannot overflow, we just zero-extended for an unsigned value
-                            BitInt::from_unsigned(new_bits, cst.value.unsigned()).unwrap()
-                        }
-                    };
+                let result = match kind {
+                    CastKind::IntTruncate => {
+                        // cannot overflow, we just masked
+                        let mask = BitInt::mask(new_bits);
+                        BitInt::from_unsigned(new_bits, cst.value.unsigned() & mask).unwrap()
+                    }
+                    CastKind::IntExtend(Signed::Signed) => {
+                        // cannot overflow, we just sign-extended for a signed value
+                        BitInt::from_signed(new_bits, cst.value.signed()).unwrap()
+                    }
+                    CastKind::IntExtend(Signed::Unsigned) => {
+                        // cannot overflow, we just zero-extended for an unsigned value
+                        BitInt::from_unsigned(new_bits, cst.value.unsigned()).unwrap()
+                    }
+                };
 
-                    Lattice::Known(Const::new(ty, result).into())
-                }
-                Lattice::Known(_) | Lattice::Overdef => Lattice::Overdef,
-            }
+                Lattice::Known(Const::new(ty, result).into())
+            })
         }
         &InstructionInfo::BlackBox { .. } => Lattice::Overdef,
     };
