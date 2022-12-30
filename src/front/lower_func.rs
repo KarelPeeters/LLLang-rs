@@ -118,6 +118,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         self.type_solution[*self.expr_type_map.get(&(expr as *const _)).unwrap()]
     }
 
+    fn fixed_debug_name(&self, name: &str) -> String {
+        format!("{}.[{}]", self.func_debug_name, name)
+    }
+
     fn maybe_id_debug_name(&self, id: &ast::MaybeIdentifier) -> String {
         match id {
             ast::MaybeIdentifier::Identifier(id) => format!("{}.{}", self.func_debug_name, id.string),
@@ -139,8 +143,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
-    fn define_slot(&mut self, inner_ty: ir::Type, debug_name: Option<String>) -> ir::StackSlot {
-        let slot = ir::StackSlotInfo { inner_ty, debug_name };
+    fn define_slot(&mut self, inner_ty: ir::Type, debug_name: String) -> ir::StackSlot {
+        let slot = ir::StackSlotInfo { inner_ty, debug_name: Some(debug_name) };
         let slot = self.prog.define_slot(slot);
         self.prog.get_func_mut(self.ir_func).slots.push(slot);
         slot
@@ -316,7 +320,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty = self.expr_type(expr);
                 let ty_ir = self.types.map_type(self.prog, ty);
 
-                let result_slot = self.define_slot(ty_ir, None);
+                let result_slot = self.define_slot(ty_ir, self.fixed_debug_name("ternary"));
                 let (after_cond, cond) =
                     self.append_expr_loaded(flow, scope, condition)?;
 
@@ -412,7 +416,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let ty_bool_ir = self.prog.ty_bool();
                 let ty_bool = self.types.type_bool();
 
-                let slot = self.define_slot(ty_bool_ir, None);
+                let slot = self.define_slot(ty_bool_ir, self.fixed_debug_name("logical"));
 
                 let (after_left, left_value) = self.append_expr_loaded(flow, scope, left)?;
                 assert_eq!(left_value.ty, ty_bool);
@@ -552,7 +556,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 assert_eq!(fields.len(), struct_ty_info.fields.len());
 
                 let struct_ty_ir = self.types.map_type(self.prog, struct_ty);
-                let slot = self.define_slot(struct_ty_ir, None);
+                let slot = self.define_slot(struct_ty_ir, self.fixed_debug_name("struct_lit"));
 
                 let after_stores = fields.iter().try_fold(flow, |flow, (field_id, field_value)| {
                     let field_index = struct_ty_info.find_field_index(&field_id.string).unwrap();
@@ -747,7 +751,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 //define the slot
                 let debug_name = self.maybe_id_debug_name(&decl.id);
-                let slot = self.define_slot(ty_ir, Some(debug_name));
+                let slot = self.define_slot(ty_ir, debug_name);
                 let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: slot.into() });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.maybe_declare(&decl.id, item)?;
@@ -821,7 +825,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //declare slot for index
                 let mut index_scope = scope.nest();
                 let debug_name = self.maybe_id_debug_name(&for_stmt.index);
-                let index_slot: ir::Value = self.define_slot(index_ty_ir, Some(debug_name)).into();
+                let index_slot: ir::Value = self.define_slot(index_ty_ir, debug_name).into();
 
                 //TODO this allows the index to be mutated, which is fine for now, but it should be marked immutable when that is implemented
                 //TODO maybe consider changing the increment to use the index loaded at the beginning so it can't really be mutated after all
@@ -902,7 +906,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
             //allocate a slot for the parameter so its address can be taken
             let debug_name = self.maybe_id_debug_name(&param.id);
-            let slot = self.define_slot(ty_ir, Some(debug_name));
+            let slot = self.define_slot(ty_ir, debug_name);
 
             //immediately copy the param into the slot
             self.append_store(start.block, slot.into(), ir_param.into());
