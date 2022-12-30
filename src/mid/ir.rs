@@ -918,7 +918,7 @@ impl Display for Program {
         writeln!(f, "  main: {:?}", self.main)?;
 
         for (func, func_info) in &self.nodes.funcs {
-            writeln!(f, "  {:?}: {} {{", func, self.format_type(func_info.ty))?;
+            writeln!(f, "\n  {:?}: {} {{", func, self.format_type(func_info.ty))?;
 
             if let Some(global_name) = &func_info.global_name {
                 writeln!(f, "    global_name: {}", global_name)?;
