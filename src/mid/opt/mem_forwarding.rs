@@ -1,11 +1,19 @@
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+
 use crate::mid::analyse::use_info::{BlockUsage, TargetSource, UseInfo};
-use crate::mid::ir::{Block, Global, Immediate, InstructionInfo, Program, Scoped, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Global, Immediate, InstructionInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
 use crate::mid::util::lattice::Lattice;
 
+/// Optimize load/store instructions:
+/// * replace loads with previously stored values
+/// * remove dead stores
 pub fn mem_forwarding(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
-    let mut replaced = 0;
+    let mut loads_replaced = 0;
+    let mut stores_removed = 0;
 
+    // replace loads
     for block in use_info.blocks() {
         let instrs = prog.get_block(block).instructions.clone();
 
@@ -16,18 +24,56 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
                 let lattice = find_value_for_location_at_instr(prog, &use_info, location, block, Some(index));
 
                 if let Some(value) = lattice.as_value_of_type(prog, load_ty) {
-                    replaced += 1;
+                    loads_replaced += 1;
                     use_info.replace_value_usages(prog, instr.into(), value);
                 }
             }
         }
     }
 
-    println!("mem_forwarding replaced {} values", replaced);
-    replaced > 0
+    // remove dead stores
+    // (in a separate pass because this can invalidate use_info)
+    let mut cache = LivenessCache::default();
+    for block in use_info.blocks() {
+        // TODO abstract this index/remove/increment mess somewhere
+        //  it's like retain except we don't have ownership
+        let mut instr_index = 0;
+
+        loop {
+            let block_info = prog.get_block(block);
+            if instr_index >= block_info.instructions.len() {
+                break;
+            }
+
+            let instr = block_info.instructions[instr_index];
+            let remove = if let &InstructionInfo::Store { addr, ty, value: _ } = prog.get_instr(instr) {
+                let location = Location { ptr: addr, ty };
+
+                let liveness = compute_liveness(prog, block, instr_index + 1, location, &mut cache);
+
+                match liveness {
+                    Liveness::Dead => true,
+                    Liveness::MaybeLive => false,
+                }
+            } else {
+                false
+            };
+
+            if remove {
+                prog.get_block_mut(block).instructions.remove(instr_index);
+                stores_removed += 1;
+                // don't increment index
+            } else {
+                instr_index += 1;
+            }
+        }
+    }
+
+    println!("mem_forwarding replaced {} loads and removed {} stores", loads_replaced, stores_removed);
+    loads_replaced > 0 || stores_removed > 0
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct Location {
     ptr: Value,
     ty: Type,
@@ -63,6 +109,125 @@ enum Origin {
     Unknown,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Liveness {
+    Dead,
+    MaybeLive,
+}
+
+impl Liveness {
+    // TODO implement general "lattice" or "merge" trait with top(), bottom(), merge() => fold, ...
+    fn merge(left: Liveness, right: Liveness) -> Liveness {
+        match (left, right) {
+            (Liveness::MaybeLive, _) | (_, Liveness::MaybeLive) => Liveness::MaybeLive,
+            (Liveness::Dead, Liveness::Dead) => Liveness::Dead,
+        }
+    }
+}
+
+type LivenessCache = HashMap<(Block, Location), Liveness>;
+
+fn compute_liveness(prog: &Program, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+    // the values in the cache apply to the start of the block
+    if start == 0 {
+        match cache.entry((block, loc)) {
+            // we've found the answer in the cache already, great!
+            Entry::Occupied(entry) => return *entry.get(),
+            // otherwise temporarily assume the current block is dead
+            Entry::Vacant(entry) => entry.insert(Liveness::Dead),
+        };
+    }
+
+    // check the rest of the block and its successors
+    let liveness = compute_liveness_inner(prog, block, start, loc, cache);
+
+    // put the true liveness into the cache
+    if start == 0 {
+        let prev = cache.insert((block, loc), liveness);
+        assert_eq!(prev, Some(Liveness::Dead));
+    }
+
+    liveness
+}
+
+/// The same as [compute_liveness] except we don't manage the cache here.
+fn compute_liveness_inner(prog: &Program, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+    // check the following instructions
+    if let Some(liveness) = compute_liveness_by_instructions(prog, block, start, loc) {
+        return liveness;
+    }
+
+    // fallthrough to the successors
+    match &prog.get_block(block).terminator {
+        Terminator::Jump { target } => {
+            compute_liveness(prog, target.block, 0, loc, cache)
+        }
+        Terminator::Branch { cond: _, true_target, false_target } => {
+            Liveness::merge(
+                compute_liveness(prog, true_target.block, 0, loc, cache),
+                compute_liveness(prog, false_target.block, 0, loc, cache),
+            )
+        }
+        Terminator::Return { value: _ } => {
+            let origin = pointer_origin(prog, loc.ptr);
+            match origin {
+                // function-internal, so cannot be observed after return
+                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Liveness::Dead,
+                // maybe external, so can potentially be observed
+                // TODO maybe we can do something better with undef here?
+                Origin::Undef | Origin::Unknown | Origin::FuncExternal => Liveness::MaybeLive,
+            }
+        }
+        // no successor, so dead
+        Terminator::Unreachable => Liveness::Dead,
+    }
+}
+
+// TODO ideally this would use some common "instruction side effect" infrastructure
+fn compute_liveness_by_instructions(prog: &Program, block: Block, start: usize, loc: Location) -> Option<Liveness> {
+    let block_info = prog.get_block(block);
+    for &instr in &block_info.instructions[start..] {
+        match *prog.get_instr(instr) {
+            // (maybe) aliasing load => alive
+            InstructionInfo::Load { addr, ty } => {
+                let load_loc = Location { ptr: addr, ty };
+                match locations_alias(prog, loc, load_loc) {
+                    // could alias, we have to assume live
+                    Alias::Exactly | Alias::UnknownOrPartial => return Some(Liveness::MaybeLive),
+                    // can't alias, keep going
+                    Alias::Undef | Alias::No => {}
+                }
+            }
+            // (exactly) aliasing store => dead
+            InstructionInfo::Store { addr, ty, value: _ } => {
+                let store_loc = Location { ptr: addr, ty };
+                match locations_alias(prog, loc, store_loc) {
+                    // value is overwritten, we know the previous one is dead
+                    // TODO a "covering" alias is enough already, it doesn't have to be exact
+                    Alias::Exactly => return Some(Liveness::Dead),
+                    // may not be overwritten, keep going
+                    // TODO maybe we can do something better with undef here?
+                    Alias::Undef | Alias::UnknownOrPartial | Alias::No => {}
+                }
+            }
+
+            // these could have side effects, we have to assume live
+            // TODO we can do better for calls
+            InstructionInfo::Call { .. } => return Some(Liveness::MaybeLive),
+            InstructionInfo::BlackBox { .. } => return Some(Liveness::MaybeLive),
+
+            // no memory reads
+            InstructionInfo::Arithmetic { .. } => {}
+            InstructionInfo::Comparison { .. } => {}
+            InstructionInfo::TupleFieldPtr { .. } => {}
+            InstructionInfo::PointerOffSet { .. } => {}
+            InstructionInfo::Cast { .. } => {}
+        }
+    }
+
+    None
+}
+
 fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location: Location, block: Block, index: Option<usize>) -> Lattice {
     let block_info = prog.get_block(block);
     let index = index.unwrap_or(block_info.instructions.len());
@@ -83,20 +248,21 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
                     Alias::No => {}
                 }
             }
-            // call could have side effects, we have to give up
-            // TODO can we do better here?
+
+            // could have side effects, we have to give up
+            // TODO we can do better for calls:
             //   * side effect free functions
             //   * if we don't leak a slot to external or to this call the function can't store to it
             InstructionInfo::Call { .. } => return Lattice::Overdef,
+            InstructionInfo::BlackBox { .. } => return Lattice::Overdef,
 
-            // no memory interactions
+            // no memory writes
             InstructionInfo::Load { .. } => {}
             InstructionInfo::Arithmetic { .. } => {}
             InstructionInfo::Comparison { .. } => {}
             InstructionInfo::TupleFieldPtr { .. } => {}
             InstructionInfo::PointerOffSet { .. } => {}
             InstructionInfo::Cast { .. } => {}
-            InstructionInfo::BlackBox { .. } => {}
         }
     }
 
@@ -158,7 +324,7 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
             ) => {
                 let base_alias = pointers_alias(prog, base_left, base_right);
                 if base_alias == Alias::Undef {
-                    return base_alias;
+                    return Alias::Undef;
                 }
                 if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
                     return base_alias;
@@ -172,7 +338,7 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
             ) => {
                 let base_alias = pointers_alias(prog, base_left, base_right);
                 if base_alias == Alias::Undef {
-                    return base_alias;
+                    return Alias::Undef;
                 }
                 if tuple_ty_left == tuple_ty_right && index_left == index_right {
                     return base_alias;

@@ -29,6 +29,7 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
             let ty_instr = instr_info.ty(prog);
 
             match instr_info {
+                // TODO replace load/store with undef addr with unreachable terminator
                 &InstructionInfo::Load { addr: _, ty } => {
                     if ty == ty_void {
                         replace(prog, instr.into(), Value::void());
