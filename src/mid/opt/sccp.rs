@@ -246,7 +246,7 @@ fn visit_branch(
     false_target: &Target,
 ) {
     let cond = map.eval(*cond);
-    let (visit_true, visit_false) = evaluate_branch_condition(prog, cond);
+    let (visit_true, visit_false) = evaluate_branch_condition(cond);
 
     if visit_true {
         update_target_reachable(prog, map, todo, func, true_target);
@@ -257,7 +257,7 @@ fn visit_branch(
 }
 
 ///Returns a tuple `(true_reachable, false_reachable)` for a branch on the given condition
-fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
+fn evaluate_branch_condition(cond: Lattice) -> (bool, bool) {
     match cond {
         Lattice::Undef => {
             //undefined behaviour, don't mark anything
@@ -266,8 +266,7 @@ fn evaluate_branch_condition(prog: &Program, cond: Lattice) -> (bool, bool) {
         Lattice::Known(cst) => {
             if let Value::Const(cst) = cst {
                 //if this is an actual boolean const we can fully evaluate it
-                assert_eq!(prog.ty_bool(), cst.ty);
-                let cst = cst.value.unwrap_bool();
+                let cst = cst.value.as_bool().unwrap();
                 (cst, !cst)
             } else {
                 //otherwise consider this overdefined

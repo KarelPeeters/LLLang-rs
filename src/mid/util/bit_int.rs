@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Display, Formatter};
+
 use static_assertions;
 
 pub type UStorage = u64;
@@ -5,7 +7,7 @@ pub type IStorage = i64;
 static_assertions::assert_eq_size!(UStorage, IStorage);
 const MAX_BITS: u32 = UStorage::BITS;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BitInt {
     bits: u32,
     value: UStorage,
@@ -88,9 +90,12 @@ impl BitInt {
         self.value == 0
     }
 
-    pub fn unwrap_bool(self) -> bool {
-        assert_eq!(self.bits, 1);
-        self.value != 0
+    pub fn as_bool(self) -> Option<bool> {
+        if self.bits == 1 {
+            Some(self.value != 0)
+        } else {
+            None
+        }
     }
 
     pub fn mask(bits: u32) -> UStorage {
@@ -99,6 +104,30 @@ impl BitInt {
         } else {
             (1 << bits) - 1
         }
+    }
+
+    pub fn display_value(self) -> impl Display {
+        struct Wrapper(BitInt);
+
+        impl Display for Wrapper {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                if let Some(value) = self.0.as_bool() {
+                    write!(f, "{}", value)
+                } else if self.0.signed() >= 0 {
+                    write!(f, "{}u{}", self.0.unsigned(), self.0.bits())
+                } else {
+                    write!(f, "{}u{}, {}i{}", self.0.unsigned(), self.0.bits(), self.0.signed(), self.0.bits())
+                }
+            }
+        }
+
+        Wrapper(self)
+    }
+}
+
+impl Debug for BitInt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BitInt({})", self.display_value())
     }
 }
 
@@ -173,5 +202,13 @@ mod tests {
         let neg_one = BitInt::from_signed(4, -1).unwrap();
         assert_eq_bin(neg_one.signed(), -1);
         assert_eq_bin(neg_one.unsigned(), 0b1111);
+    }
+
+    #[test]
+    fn bool_values() {
+        assert_eq!(BitInt::from_bool(false).unsigned(), 0);
+        assert_eq!(BitInt::from_bool(false).signed(), 0);
+        assert_eq!(BitInt::from_bool(true).unsigned(), 1);
+        assert_eq!(BitInt::from_bool(true).signed(), -1);
     }
 }

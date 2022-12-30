@@ -658,10 +658,18 @@ pub type PtrStorageType = u32;
 
 pub const PTR_SIZE_BITS: u32 = PtrStorageType::BITS;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Constructor)]
+// TODO think about how ptr-typed consts are supposed to work
+//   if we decide to keep those separate, remove this struct and rename Value:::Const to ::IntConst
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Constructor)]
 pub struct Const {
     pub ty: Type,
     pub value: BitInt,
+}
+
+impl Debug for Const {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.display_value())
+    }
 }
 
 impl Const {
@@ -669,8 +677,8 @@ impl Const {
         self.value.is_zero()
     }
 
-    pub fn unwrap_bool(self) -> bool {
-        self.value.unwrap_bool()
+    pub fn as_bool(self) -> Option<bool> {
+        self.value.as_bool()
     }
 }
 
