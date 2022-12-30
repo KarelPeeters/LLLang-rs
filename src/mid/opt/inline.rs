@@ -11,10 +11,28 @@ const TINY_FUNCTION_INSTRUCTION_LIMIT: usize = 16;
 pub fn inline(prog: &mut Program) -> bool {
     let mut changes = 0;
 
-    let use_info = UseInfo::new(prog);
+    // TODO find a more efficient way to do this, find all inlinable calls and then process all of them at once
+    loop {
+        let use_info = UseInfo::new(prog);
+        let inlined_calls = find_inlined_calls(prog, &use_info);
+        for &inlined_call in inlined_calls.iter().take(1) {
+            run_inline_call(prog, &use_info, inlined_call);
+            changes += 1;
+        }
+
+        if inlined_calls.is_empty() {
+            break;
+        }
+    }
+
+    println!("inlined {} calls", changes);
+
+    changes > 0
+}
+
+fn find_inlined_calls(prog: &Program, use_info: &UseInfo) -> Vec<InlinedCall> {
     let mut inlined_calls = vec![];
 
-    // determine which inline actions to take
     for func in prog.nodes.funcs.keys() {
         let usages = &use_info[func];
 
@@ -36,16 +54,7 @@ pub fn inline(prog: &mut Program) -> bool {
         }
     }
 
-    // actually do the inlining
-    // TODO actually do all of them, not just the first one
-    for &inlined_call in inlined_calls.iter().take(1) {
-        run_inline_call(prog, &use_info, inlined_call);
-        changes += 1;
-    }
-
-    println!("inlined {} calls", changes);
-
-    changes > 0
+    inlined_calls
 }
 
 #[derive(Debug, Copy, Clone)]
