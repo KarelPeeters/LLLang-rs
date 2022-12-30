@@ -627,7 +627,7 @@ macro_rules! impl_nested_from {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
     Immediate(Immediate),
     Global(Global),
@@ -665,6 +665,17 @@ impl_nested_from!(Value::Scoped(Parameter));
 impl_nested_from!(Value::Scoped(StackSlot));
 impl_nested_from!(Value::Scoped(Phi));
 impl_nested_from!(Value::Scoped(Instruction));
+
+impl Debug for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // don't print the additional wrapper types
+        match self {
+            Value::Immediate(value) => value.fmt(f),
+            Value::Global(value) => value.fmt(f),
+            Value::Scoped(value) => value.fmt(f),
+        }
+    }
+}
 
 impl Value {
     pub fn void() -> Self {
