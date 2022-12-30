@@ -74,7 +74,7 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
                 let store_location = Location { ptr: store_ptr, ty: store_ty };
                 match locations_alias(prog, location, store_location) {
                     // propagate undef
-                    Alias::Undef => return Lattice::Overdef,
+                    Alias::Undef => return Lattice::Undef,
                     // we know the exact value last stored to the pointer!
                     Alias::Exactly => return Lattice::Known(value),
                     // we have to give up
