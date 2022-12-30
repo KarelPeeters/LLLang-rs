@@ -14,14 +14,15 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
     let mut stores_removed = 0;
 
     // replace loads
+    let mut lattice_cache = LatticeCache::default();
     for block in use_info.blocks() {
         let instrs = prog.get_block(block).instructions.clone();
 
         for (index, &instr) in instrs.iter().enumerate() {
             let instr_info = prog.get_instr(instr);
             if let &InstructionInfo::Load { addr, ty: load_ty } = instr_info {
-                let location = Location { ptr: addr, ty: load_ty };
-                let lattice = find_value_for_location_at_instr(prog, &use_info, location, block, Some(index));
+                let loc = Location { ptr: addr, ty: load_ty };
+                let lattice = find_value_for_location_at_instr(prog, &use_info, loc, block, Some(index), &mut lattice_cache);
 
                 if let Some(value) = lattice.as_value_of_type(prog, load_ty) {
                     loads_replaced += 1;
@@ -33,7 +34,7 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
 
     // remove dead stores
     // (in a separate pass because this can invalidate use_info)
-    let mut cache = LivenessCache::default();
+    let mut liveness_cache = LivenessCache::default();
     for block in use_info.blocks() {
         // TODO abstract this index/remove/increment mess somewhere
         //  it's like retain except we don't have ownership
@@ -47,10 +48,8 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
 
             let instr = block_info.instructions[instr_index];
             let remove = if let &InstructionInfo::Store { addr, ty, value: _ } = prog.get_instr(instr) {
-                let location = Location { ptr: addr, ty };
-
-                let liveness = compute_liveness(prog, block, instr_index + 1, location, &mut cache);
-
+                let loc = Location { ptr: addr, ty };
+                let liveness = compute_liveness(prog, block, instr_index + 1, loc, &mut liveness_cache);
                 match liveness {
                     Liveness::Dead => true,
                     Liveness::MaybeLive => false,
@@ -125,6 +124,8 @@ impl Liveness {
     }
 }
 
+/// The liveness cache stores the liveness for each location at the start of the given block.
+/// This can also include a temporary "dead" assumption to break loops.
 type LivenessCache = HashMap<(Block, Location), Liveness>;
 
 fn compute_liveness(prog: &Program, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
@@ -228,7 +229,44 @@ fn compute_liveness_by_instructions(prog: &Program, block: Block, start: usize, 
     None
 }
 
-fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location: Location, block: Block, index: Option<usize>) -> Lattice {
+/// The lattice cache stores the lattice value for each location at the end of the given block.
+/// This can also include a temporary "undef" assumption to break loops.
+type LatticeCache = HashMap<(Block, Location), Lattice>;
+
+fn find_value_for_location_at_instr(
+    prog: &Program,
+    use_info: &UseInfo,
+    loc: Location,
+    block: Block,
+    index: Option<usize>,
+    cache: &mut LatticeCache,
+) -> Lattice {
+    if index.is_none() {
+        match cache.entry((block, loc)) {
+            Entry::Occupied(entry) => return *entry.get(),
+            Entry::Vacant(entry) => entry.insert(Lattice::Undef),
+        };
+    }
+
+    let lattice = find_value_for_location_at_instr_inner(prog, use_info, loc, block, index, cache);
+
+    if index.is_none() {
+        let prev = cache.insert((block, loc), lattice);
+        assert_eq!(prev, Some(Lattice::Undef));
+    }
+
+    lattice
+}
+
+/// The same as [find_value_for_location_at_instr] except we don't manage the cache here.
+fn find_value_for_location_at_instr_inner(
+    prog: &Program,
+    use_info: &UseInfo,
+    loc: Location,
+    block: Block,
+    index: Option<usize>,
+    cache: &mut LatticeCache,
+) -> Lattice {
     let block_info = prog.get_block(block);
     let index = index.unwrap_or(block_info.instructions.len());
 
@@ -236,8 +274,8 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
     for &instr in block_info.instructions[0..index].iter().rev() {
         match prog.get_instr(instr) {
             &InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
-                let store_location = Location { ptr: store_ptr, ty: store_ty };
-                match locations_alias(prog, location, store_location) {
+                let store_loc = Location { ptr: store_ptr, ty: store_ty };
+                match locations_alias(prog, loc, store_loc) {
                     // propagate undef
                     Alias::Undef => return Lattice::Undef,
                     // we know the exact value last stored to the pointer!
@@ -270,14 +308,14 @@ fn find_value_for_location_at_instr(prog: &Program, use_info: &UseInfo, location
     Lattice::fold(use_info[block].iter().map(|BlockUsage { target_kind }| {
         match target_kind.source() {
             // we've reached the start of the function, depending on the origin the value is undef or overdef
-            TargetSource::Entry(_) => match pointer_origin(prog, location.ptr) {
+            TargetSource::Entry(_) => match pointer_origin(prog, loc.ptr) {
                 Origin::Undef => Lattice::Undef,
                 Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
                 Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
             },
             // continue searching along the preceding block
             TargetSource::Block(pos) => {
-                find_value_for_location_at_instr(prog, use_info, location, pos.block, None)
+                find_value_for_location_at_instr(prog, use_info, loc, pos.block, None, cache)
             }
         }
     }))
