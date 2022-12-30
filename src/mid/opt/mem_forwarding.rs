@@ -350,7 +350,7 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
     }
 
     let alias_from_origin = origins_alias(pointer_origin(prog, ptr_left), pointer_origin(prog, ptr_right));
-    if let Alias::No | Alias::Exactly = alias_from_origin {
+    if let Alias::No = alias_from_origin {
         return alias_from_origin;
     }
 
