@@ -62,9 +62,9 @@ impl LatticeMap {
         *self.func_returns.get(&func).unwrap_or(&Lattice::Undef)
     }
 
-    fn merge_func_return(&mut self, todo: &mut VecDeque<Todo>, func: Function, lattice: Lattice) {
+    fn merge_func_return(&mut self, todo: &mut VecDeque<Todo>, func: Function, new: Lattice) {
         let prev = self.eval_func_return(func);
-        let next = Lattice::merge(prev, lattice);
+        let next = Lattice::merge(prev, new);
         self.func_returns.insert(func, next);
 
         if prev != next {
@@ -317,21 +317,29 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         }
         // this instruction doesn't have a return value, so we can just use anything we want
         InstructionInfo::Store { .. } => Lattice::Undef,
-        InstructionInfo::Call { target, args } => {
-            if let Value::Func(target) = *target {
-                //mark reachable
-                todo.push_back(Todo::FunctionInit(target));
+        &InstructionInfo::Call { target, ref args } => {
+            let target = map.eval(target);
 
-                //merge in arguments
-                let target_info = prog.get_func(target);
-                for (&param, &arg) in zip_eq(&target_info.params, args) {
-                    map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
+            match target {
+                Lattice::Undef => Lattice::Undef,
+                Lattice::Known(target) => {
+                    if let Value::Func(target) = target {
+                        //mark reachable
+                        todo.push_back(Todo::FunctionInit(target));
+
+                        //merge in arguments
+                        let target_info = prog.get_func(target);
+                        for (&param, &arg) in zip_eq(&target_info.params, args) {
+                            map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
+                        }
+
+                        //get return
+                        map.eval_func_return(target)
+                    } else {
+                        Lattice::Overdef
+                    }
                 }
-
-                //get return
-                map.eval_func_return(target)
-            } else {
-                Lattice::Overdef
+                Lattice::Overdef => Lattice::Overdef,
             }
         }
         &InstructionInfo::Arithmetic { kind, left, right } => {
