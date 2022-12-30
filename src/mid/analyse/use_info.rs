@@ -4,7 +4,7 @@ use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
 use crate::mid::analyse::dom_info::{BlockPosition, DomPosition};
-use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
+use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Value};
 
 #[derive(Debug, Copy, Clone)]
 pub struct InstructionPos {
@@ -201,7 +201,7 @@ impl UseInfo {
             block_usages: Default::default(),
         };
 
-        info.add_value_usage(Value::Func(prog.main), Usage::Main);
+        info.add_value_usage(prog.main.into(), Usage::Main);
 
         let mut todo_funcs = VecDeque::new();
         let mut todo_blocks = VecDeque::new();
@@ -241,7 +241,7 @@ impl UseInfo {
                             info.add_value_usage(value, usage);
 
                             //if the usage is a function visit it too
-                            if let Value::Func(func) = value {
+                            if let Some(func) = value.as_func() {
                                 todo_funcs.push_back(func);
                             }
                         });
@@ -275,8 +275,8 @@ impl UseInfo {
     }
 
     fn add_value_usage(&mut self, value: Value, usage: Usage) {
-        //we don't care about const
-        if let Value::Const(_) = value { return; }
+        //we don't care about identity-less values
+        if let Value::Immediate(_) = value { return; }
 
         self.value_usages.entry(value).or_default().push(usage);
     }
@@ -312,7 +312,7 @@ impl UseInfo {
 
             match usage {
                 Usage::Main => {
-                    if let Value::Func(new) = new {
+                    if let Some(new) = new.as_func() {
                         prog.main = new;
                         *count += 1;
                     } else {
@@ -460,7 +460,7 @@ impl UseInfo {
     pub fn instructions(&self) -> impl Iterator<Item=Instruction> + '_ {
         self.values().filter_map(|value| {
             match value {
-                Value::Instr(instr) => Some(instr),
+                Value::Scoped(Scoped::Instr(instr)) => Some(instr),
                 _ => None,
             }
         })

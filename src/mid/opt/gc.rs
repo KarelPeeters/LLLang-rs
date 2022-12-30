@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::for_each_usage_in_instr;
-use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Program, Target, Value};
+use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Global, Program, Target, Value};
 use crate::mid::util::visit::{VisitedResult, Visitor, VisitState};
 
 struct GcVisitor;
@@ -16,7 +16,7 @@ impl GcVisitor {
 impl Visitor for GcVisitor {
     fn visit_value(&mut self, state: &mut VisitState, value: Value) {
         match value {
-            Value::Func(func) => {
+            Value::Global(Global::Func(func)) => {
                 let FunctionInfo {
                     entry, params, slots,
                     ty: _, func_ty: _, global_name: _, debug_name: _
@@ -30,8 +30,7 @@ impl Visitor for GcVisitor {
                     state.add_value(slot);
                 }
             }
-            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Param(_) | Value::Slot(_) |
-            Value::Instr(_) | Value::Extern(_) | Value::Data(_) | Value::Phi(_) => {
+            Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => {
                 // no additional tracking here
             }
         }
@@ -69,14 +68,14 @@ pub fn gc(prog: &mut Program) -> bool {
 
     let before_count = prog.nodes.total_node_count();
 
-    prog.nodes.funcs.retain(|n, _| visited.visited_values.contains(&Value::Func(n)));
-    prog.nodes.params.retain(|n, _| visited.visited_values.contains(&Value::Param(n)));
-    prog.nodes.slots.retain(|n, _| visited.visited_values.contains(&Value::Slot(n)));
+    prog.nodes.funcs.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.params.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.slots.retain(|n, _| visited.visited_values.contains(&n.into()));
     prog.nodes.blocks.retain(|n, _| visited.visited_blocks.contains(&n));
-    prog.nodes.phis.retain(|n, _| visited.visited_values.contains(&Value::Phi(n)));
-    prog.nodes.instrs.retain(|n, _| visited.visited_values.contains(&Value::Instr(n)));
-    prog.nodes.exts.retain(|n, _| visited.visited_values.contains(&Value::Extern(n)));
-    prog.nodes.datas.retain(|n, _| visited.visited_values.contains(&Value::Data(n)));
+    prog.nodes.phis.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.instrs.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.exts.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.datas.retain(|n, _| visited.visited_values.contains(&n.into()));
 
     let after_count = prog.nodes.total_node_count();
 

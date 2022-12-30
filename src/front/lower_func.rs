@@ -211,7 +211,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         let ty_ptr = self.types.define_type_ptr(ty);
         let ty_ptr_ir = self.types.map_type(self.prog, ty_ptr);
 
-        LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Undef(ty_ptr_ir) })
+        LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::undef(ty_ptr_ir) })
     }
 
     fn append_int_cast(&mut self, block: ir::Block, info_before: IntTypeInfo, info_after: IntTypeInfo, value_before: ir::Value) -> ir::Value {
@@ -363,7 +363,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                     let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
                     let instr = ir::InstructionInfo::PointerOffSet { base: value_left.ir, ty: inner_ty_ir, index: offset_ir };
-                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                    self.append_instr(after_right.block, instr).into()
                 } else {
                     //basic binary operation
                     assert_eq!(value_left.ty, value_right.ty);
@@ -373,7 +373,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         _ => panic!(),
                     };
                     let instr = binary_op_to_instr(*kind, arg_ty, value_left.ir, value_right.ir);
-                    ir::Value::Instr(self.append_instr(after_right.block, instr))
+                    self.append_instr(after_right.block, instr).into()
                 };
 
                 (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: result }))
@@ -454,7 +454,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 };
                 let call = self.append_instr(after_args.block, call);
 
-                (after_args, LRValue::Right(TypedValue { ty: ret_ty, ir: ir::Value::Instr(call) }))
+                (after_args, LRValue::Right(TypedValue { ty: ret_ty, ir: call.into() }))
             }
             ast::ExpressionKind::DotIndex { target, index } => {
                 //TODO currently we only allow LValue(&Struct),
@@ -500,7 +500,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 };
                 let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
 
-                (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(struct_sub_ptr) }))
+                (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: struct_sub_ptr.into() }))
             }
             ast::ExpressionKind::ArrayIndex { target, index } => {
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
@@ -517,7 +517,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 };
                 let array_index_ptr = self.append_instr(after_index.block, array_index_ptr);
 
-                (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: ir::Value::Instr(array_index_ptr) }))
+                (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: array_index_ptr.into() }))
             }
             ast::ExpressionKind::Cast { value, ty: _ } => {
                 let (after_value, value_before) = self.append_expr_loaded(flow, scope, value)?;
@@ -533,7 +533,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 } else {
                     //check that function return type is indeed void
                     let ty_void = self.types.type_void();
-                    (flow, TypedValue { ty: ty_void, ir: ir::Value::Void })
+                    (flow, TypedValue { ty: ty_void, ir: ir::Value::void() })
                 };
 
                 let ret = ir::Terminator::Return { value: value.ir };
@@ -748,7 +748,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //define the slot
                 let debug_name = self.maybe_id_debug_name(&decl.id);
                 let slot = self.define_slot(ty_ir, Some(debug_name));
-                let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
+                let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: slot.into() });
                 let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
                 scope.maybe_declare(&decl.id, item)?;
 
@@ -843,7 +843,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     };
                     let cond = s.append_instr(cond_start.block, cond);
 
-                    Ok((cond_start, ir::Value::Instr(cond)))
+                    Ok((cond_start, cond.into()))
                 };
 
                 //body; index = index + 1
@@ -907,7 +907,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             //immediately copy the param into the slot
             self.append_store(start.block, slot.into(), ir_param.into());
 
-            let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::Slot(slot) });
+            let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: slot.into() });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
             scope.maybe_declare(&param.id, item)?;
         }
@@ -919,7 +919,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         if end.reachable {
             if self.ret_ty == self.types.type_void() {
                 //automatically insert return
-                let ret = ir::Terminator::Return { value: ir::Value::Void };
+                let ret = ir::Terminator::Return { value: ir::Value::void() };
                 self.prog.get_block_mut(end.block).terminator = ret;
             } else {
                 return Err(Error::MissingReturn(&decl.ast.id));

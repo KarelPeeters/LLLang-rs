@@ -155,10 +155,8 @@ impl<'a> Context<'a> {
 
     fn ensure_dominates(&self, value: Value, use_pos: DomPosition) -> Result {
         let def_pos = match value {
-            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => {
-                DomPosition::Global
-            }
-            Value::Param(_) | Value::Slot(_) | Value::Phi(_) | Value::Instr(_) => {
+            Value::Global(_) | Value::Immediate(_) => DomPosition::Global,
+            Value::Scoped(_) => {
                 self.declarer.value_declared_pos.get(&value).copied().ok_or(VerifyError::NonDeclaredValueUsed(value, use_pos))?
             }
         };

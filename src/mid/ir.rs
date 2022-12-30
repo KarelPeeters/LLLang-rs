@@ -162,16 +162,28 @@ impl Program {
 
     pub fn type_of_value(&self, value: Value) -> Type {
         match value {
-            Value::Void => self.ty_void,
-            Value::Undef(ty) => ty,
-            Value::Const(cst) => cst.ty,
-            Value::Func(func) => self.get_func(func).ty,
-            Value::Param(param) => self.get_param(param).ty,
-            Value::Slot(_) => self.ty_ptr,
-            Value::Phi(phi) => self.get_phi(phi).ty,
-            Value::Instr(instr) => self.get_instr(instr).ty(self),
-            Value::Extern(ext) => self.get_ext(ext).ty,
-            Value::Data(data) => self.get_data(data).ty,
+            Value::Immediate(value) => {
+                match value {
+                    Immediate::Void => self.ty_void(),
+                    Immediate::Undef(ty) => ty,
+                    Immediate::Const(cst) => cst.ty,
+                }
+            }
+            Value::Global(value) => {
+                match value {
+                    Global::Func(func) => self.get_func(func).ty,
+                    Global::Extern(ext) => self.get_ext(ext).ty,
+                    Global::Data(data) => self.get_data(data).ty,
+                }
+            }
+            Value::Scoped(value) => {
+                match value {
+                    Scoped::Param(param) => self.get_param(param).ty,
+                    Scoped::Slot(_) => self.ty_ptr,
+                    Scoped::Phi(phi) => self.get_phi(phi).ty,
+                    Scoped::Instr(instr) => self.get_instr(instr).ty(self),
+                }
+            }
         }
     }
 
@@ -605,47 +617,86 @@ impl Terminator {
     }
 }
 
+macro_rules! impl_nested_from {
+    ($outer:ident::$variant:ident($inner:ty)) => {
+        impl From<$inner> for $outer {
+            fn from(value: $inner) -> Self {
+                <$outer>::$variant(value.into())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
+    Immediate(Immediate),
+    Global(Global),
+    Scoped(Scoped),
+}
+
+// TODO find a better name for these identity-less, immediate, instant, on-demand values
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
+pub enum Immediate {
     Void,
     Undef(Type),
     Const(Const),
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
+pub enum Global {
     Func(Function),
-    Param(Parameter),
-    Slot(StackSlot),
-    Phi(Phi),
-    Instr(Instruction),
     Extern(Extern),
     Data(Data),
 }
 
-//TODO should this be represented in the type system instead?
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
+pub enum Scoped {
+    Param(Parameter),
+    Slot(StackSlot),
+    Phi(Phi),
+    Instr(Instruction),
+}
+
+impl_nested_from!(Value::Global(Function));
+impl_nested_from!(Value::Global(Extern));
+impl_nested_from!(Value::Global(Data));
+impl_nested_from!(Value::Immediate(Const));
+impl_nested_from!(Value::Scoped(Parameter));
+impl_nested_from!(Value::Scoped(StackSlot));
+impl_nested_from!(Value::Scoped(Phi));
+impl_nested_from!(Value::Scoped(Instruction));
+
 impl Value {
+    pub fn void() -> Self {
+        Value::Immediate(Immediate::Void)
+    }
+
+    pub fn undef(ty: Type) -> Self {
+        Value::Immediate(Immediate::Undef(ty))
+    }
+
+    pub fn as_global(self) -> Option<Global> {
+        option_match!(self, Value::Global(global) => global)
+    }
+
+    pub fn as_const(self) -> Option<Const> {
+        option_match!(self, Value::Immediate(Immediate::Const(cst)) => cst)
+    }
+
+    pub fn as_func(self) -> Option<Function> {
+        option_match!(self, Value::Global(Global::Func(func)) => func)
+    }
+
+    pub fn as_instr(self) -> Option<Instruction> {
+        option_match!(self, Value::Scoped(Scoped::Instr(instr)) => instr)
+    }
+
     pub fn is_undef(self) -> bool {
-        matches!(self, Value::Undef(_))
+        matches!(self, Value::Immediate(Immediate::Undef(_)))
     }
 
     pub fn is_const_zero(self) -> bool {
-        if let Value::Const(cst) = self {
-            cst.is_zero()
-        } else {
-            false
-        }
-    }
-
-    pub fn is_const_like(self) -> bool {
-        match self {
-            Value::Void => true,
-            Value::Undef(_) => false,
-            Value::Const(_) => true,
-            Value::Func(_) => true,
-            Value::Param(_) => false,
-            Value::Slot(_) => false,
-            Value::Phi(_) => false,
-            Value::Instr(_) => false,
-            Value::Extern(_) => true,
-            Value::Data(_) => true,
-        }
+        self.as_const().map_or(false, |cst| cst.is_zero())
     }
 }
 
@@ -816,26 +867,32 @@ impl Program {
                 let ty = self.prog.format_type(self.prog.type_of_value(self.value));
 
                 match self.value {
-                    Value::Void =>
-                        write!(f, "Void"),
-                    Value::Undef(_ty) =>
-                        write!(f, "Undef(: {})", ty),
-                    Value::Const(cst) =>
-                        write!(f, "Const({:?}: {})", cst.value, ty),
-                    Value::Func(func) =>
-                        write!(f, "Func({:?}: {})", func.0, ty),
-                    Value::Param(param) =>
-                        write!(f, "Param({:?}: {})", param.0, ty),
-                    Value::Slot(slot) =>
-                        write!(f, "Slot({:?}: {})", slot.0, ty),
-                    Value::Phi(phi) =>
-                        write!(f, "Phi({:?}: {})", phi.0, ty),
-                    Value::Instr(instr) =>
-                        write!(f, "Instr({:?}: {})", instr.0, ty),
-                    Value::Extern(ext) =>
-                        write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
-                    Value::Data(data) =>
-                        write!(f, "Data({:?}: {})", data.0, ty),
+                    Value::Immediate(value) => match value {
+                        Immediate::Void =>
+                            write!(f, "Void"),
+                        Immediate::Undef(_ty) =>
+                            write!(f, "Undef(: {})", ty),
+                        Immediate::Const(cst) =>
+                            write!(f, "Const({:?}: {})", cst.value, ty),
+                    }
+                    Value::Global(value) => match value {
+                        Global::Func(func) =>
+                            write!(f, "Func({:?}: {})", func.0, ty),
+                        Global::Extern(ext) =>
+                            write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
+                        Global::Data(data) =>
+                            write!(f, "Data({:?}: {})", data.0, ty),
+                    }
+                    Value::Scoped(value) => match value {
+                        Scoped::Param(param) =>
+                            write!(f, "Param({:?}: {})", param.0, ty),
+                        Scoped::Slot(slot) =>
+                            write!(f, "Slot({:?}: {})", slot.0, ty),
+                        Scoped::Phi(phi) =>
+                            write!(f, "Phi({:?}: {})", phi.0, ty),
+                        Scoped::Instr(instr) =>
+                            write!(f, "Instr({:?}: {})", instr.0, ty),
+                    }
                 }
             }
         }

@@ -14,7 +14,7 @@ fn slot_used_in_phi() {
     let block_info = BlockInfo {
         phis: vec![phi],
         instructions: vec![],
-        terminator: Terminator::Return { value: Value::Void },
+        terminator: Terminator::Return { value: Value::void() },
     };
     let block = prog.define_block(block_info);
 
@@ -35,7 +35,7 @@ fn slot_used_in_phi() {
     });
     let main_block = prog.get_block_mut(prog.get_func(prog.main).entry.block);
     main_block.instructions.push(call);
-    main_block.terminator = Terminator::Return { value: Value::Void };
+    main_block.terminator = Terminator::Return { value: Value::void() };
 
     println!("{}", prog);
 

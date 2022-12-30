@@ -5,7 +5,7 @@ use indexmap::map::IndexMap;
 use itertools::Itertools;
 
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Data, Extern, Function, FunctionInfo, Instruction, InstructionInfo, Phi, Program, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Data, Extern, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Phi, Program, Scoped, StackSlot, Target, Terminator, Value};
 use crate::mid::ir::Signed;
 use crate::util::zip_eq;
 
@@ -282,12 +282,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
         let layout = Layout::for_type(self.prog, ty);
 
         match value {
-            Value::Void | Value::Undef(_) => {
+            Value::Immediate(Immediate::Void | Immediate::Undef(_)) => {
                 //do nothing, just a comment for clarity
                 let str = format!("; {} = {}", target, self.prog.format_value(value));
                 self.append_instr(&str)
             }
-            Value::Const(cst) => {
+            Value::Immediate(Immediate::Const(cst)) => {
                 if cst.value.bits() != 1 {
                     assert_eq!(cst.value.bits(), 8 * layout.size as u32);
                 }
@@ -307,12 +307,12 @@ impl AsmFuncBuilder<'_, '_, '_> {
                     _ => panic!("only constants with power of two size <= 4 supported for now"),
                 }
             }
-            Value::Func(func) => {
+            Value::Global(Global::Func(func)) => {
                 assert_eq!(layout.size, 4);
                 let func_number = self.parent.func_number(func);
                 self.append_instr(&format!("mov {}, dword func_{}", target, func_number));
             }
-            Value::Param(param) => {
+            Value::Scoped(Scoped::Param(param)) => {
                 let param_index = self.prog.get_func(self.func).params.iter()
                     .position(|&x| x == param)
                     .expect("param does not belong to this function");
@@ -321,26 +321,26 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let real_stack_pos = stack_delta + stack_pos + self.param_offset;
                 self.append_mem_copy(target, MemRegOffset::stack(real_stack_pos), layout.size);
             }
-            Value::Slot(slot) => {
+            Value::Scoped(Scoped::Slot(slot)) => {
                 let stack_pos = self.local_layout.offsets[self.slot_stack_indices[&slot]];
                 self.append_instr(&format!("lea eax, [esp+{}]", stack_delta + stack_pos));
                 self.append_instr(&format!("mov {}, eax", target));
             }
-            Value::Phi(phi) => {
+            Value::Scoped(Scoped::Phi(phi)) => {
                 let stack_pos = self.local_layout.offsets[self.phi_stack_indices[&phi].post];
                 self.append_mem_copy(target, MemRegOffset::stack(stack_delta + stack_pos), layout.size);
             }
-            Value::Instr(instr) => {
+            Value::Scoped(Scoped::Instr(instr)) => {
                 let stack_pos = self.local_layout.offsets[self.instr_stack_indices[&instr]];
                 self.append_mem_copy(target, MemRegOffset::stack(stack_delta + stack_pos), layout.size);
             }
-            Value::Extern(ext) => {
+            Value::Global(Global::Extern(ext)) => {
                 assert_eq!(layout.size, 4);
                 let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, dword {}", target, name));
                 self.parent.used_externs.insert(ext);
             }
-            Value::Data(data) => {
+            Value::Global(Global::Data(data)) => {
                 assert_eq!(layout.size, 4);
                 let data_number = self.parent.data_number(data);
                 self.append_instr(&format!("mov {}, dword data_{}", target, data_number));
@@ -365,20 +365,20 @@ impl AsmFuncBuilder<'_, '_, '_> {
         let target = target.with_size(register_size);
 
         match value {
-            Value::Void | Value::Undef(_) => {
+            Value::Immediate(Immediate::Void | Immediate::Undef(_)) => {
                 //do nothing, just a comment for clarity
                 let str = format!("; {} = {}", target, self.prog.format_value(value));
                 self.append_instr(&str)
             }
-            Value::Const(cst) => {
+            Value::Immediate(Immediate::Const(cst)) => {
                 self.append_instr(&format!("mov {}, {}", target, cst.value.unsigned()))
             }
-            Value::Func(func) => {
+            Value::Global(Global::Func(func)) => {
                 assert_eq!(layout.size, 4);
                 let func_number = self.parent.func_number(func);
                 self.append_instr(&format!("mov {}, func_{}", target, func_number));
             }
-            Value::Param(param) => {
+            Value::Scoped(Scoped::Param(param)) => {
                 let param_index = self.prog.get_func(self.func).params.iter()
                     .position(|&x| x == param)
                     .expect("param does not belong to this function");
@@ -387,25 +387,25 @@ impl AsmFuncBuilder<'_, '_, '_> {
                 let real_stack_pos = stack_delta + stack_pos + self.param_offset;
                 self.append_instr(&format!("mov {}, [esp+{}]", target, real_stack_pos));
             }
-            Value::Slot(slot) => {
+            Value::Scoped(Scoped::Slot(slot)) => {
                 let stack_pos = self.local_layout.offsets[self.slot_stack_indices[&slot]];
                 self.append_instr(&format!("lea {}, [esp+{}]", target, stack_delta + stack_pos));
             }
-            Value::Phi(phi) => {
+            Value::Scoped(Scoped::Phi(phi)) => {
                 let stack_pos = self.local_layout.offsets[self.phi_stack_indices[&phi].post];
                 self.append_instr(&format!("mov {}, [esp+{}]", target, stack_delta + stack_pos));
             }
-            Value::Instr(instr) => {
+            Value::Scoped(Scoped::Instr(instr)) => {
                 let stack_pos = self.local_layout.offsets[self.instr_stack_indices[&instr]];
                 self.append_instr(&format!("mov {}, [esp+{}]", target, stack_delta + stack_pos));
             }
-            Value::Extern(ext) => {
+            Value::Global(Global::Extern(ext)) => {
                 assert_eq!(layout.size, 4);
                 let name = &self.prog.get_ext(ext).name;
                 self.append_instr(&format!("mov {}, {}", target, name));
                 self.parent.used_externs.insert(ext);
             }
-            Value::Data(data) => {
+            Value::Global(Global::Data(data)) => {
                 assert_eq!(layout.size, 4);
                 let data_number = self.parent.data_number(data);
                 self.append_instr(&format!("mov {}, dword data_{}", target, data_number));

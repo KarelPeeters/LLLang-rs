@@ -2,7 +2,7 @@ use itertools::{Itertools, zip};
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Program, Value};
+use crate::mid::ir::{Immediate, Program, Value};
 use crate::mid::util::lattice::Lattice;
 
 // TODO merge this with SCCP somehow (and make it more general, for all values not just phis)
@@ -59,8 +59,7 @@ pub fn phi_combine(prog: &mut Program) -> bool {
 
 fn value_to_lattice(value: Value) -> Lattice {
     match value {
-        Value::Void | Value::Undef(_) => Lattice::Undef,
-        Value::Const(_) | Value::Func(_) | Value::Param(_) | Value::Slot(_) |
-        Value::Phi(_) | Value::Instr(_) | Value::Extern(_) | Value::Data(_) => Lattice::Known(value),
+        Value::Immediate(Immediate::Void | Immediate::Undef(_)) => Lattice::Undef,
+        Value::Immediate(Immediate::Const(_)) | Value::Global(_) | Value::Scoped(_) => Lattice::Known(value),
     }
 }

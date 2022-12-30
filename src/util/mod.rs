@@ -54,6 +54,16 @@ macro_rules! unwrap_match {
     };
 }
 
+#[allow(unused_macros)]
+macro_rules! option_match {
+    ($value: expr, $($pattern: pat)|+ => $result: expr) => {
+        match $value {
+            $($pattern)|+ => Some($result),
+            _ => None,
+        }
+    };
+}
+
 pub trait VecExt {
     type T;
     fn index_of(&self, value: &Self::T) -> Option<usize>;

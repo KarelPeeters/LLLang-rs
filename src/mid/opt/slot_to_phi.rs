@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::use_info::{Usage, UseInfo};
-use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, Scoped, StackSlot, Type, Value};
 
 ///Replace slots and the associated loads and stores with phi values where possible
 pub fn slot_to_phi(prog: &mut Program) -> bool {
@@ -64,7 +64,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
         //TODO what is this for? does this ever make sense? fix this when rewriting slot_to_phi
         //push entry undef values
         let ty = prog.get_slot(slot).inner_ty;
-        prog.get_func_mut(func).entry.phi_values.push(Value::Undef(ty));
+        prog.get_func_mut(func).entry.phi_values.push(Value::undef(ty));
 
         let slot_usages = &use_info[slot];
 
@@ -75,20 +75,20 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
                     //some assertions
                     let instr_info = prog.get_instr(pos.instr);
                     let addr = unwrap_match!(instr_info, InstructionInfo::Load { addr, .. } => *addr);
-                    assert_eq!(Value::Slot(slot), addr);
+                    assert_eq!(addr, slot.into());
 
                     //build value corresponding to this load
                     let load_index = prog.get_block(pos.block).instructions.iter()
                         .position(|&instr| instr == pos.instr).unwrap();
 
                     let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
-                    use_info.replace_value_usages(prog, Value::Instr(pos.instr), value);
+                    use_info.replace_value_usages(prog, pos.instr.into(), value);
                 }
                 Usage::StoreAddr { pos } => {
                     //some assertions
                     let instr_info = prog.get_instr(pos.instr);
                     let addr = unwrap_match!(instr_info, InstructionInfo::Store { addr, .. } => *addr);
-                    assert_eq!(Value::Slot(slot), addr);
+                    assert_eq!(addr, slot.into());
 
                     //nothing to actually do here, we're only replacing loads
                 }
@@ -137,10 +137,10 @@ fn get_value_for_slot(
     //find a matching store in the current block
     for &instr in prog.get_block(block).instructions[0..instr_pos].iter().rev() {
         if let &InstructionInfo::Store { addr, value, ty: _ } = prog.get_instr(instr) {
-            if addr == Value::Slot(slot) {
+            if addr == slot.into() {
                 //if the stored value is a load that will be also replaced by this pass we need to keep recursing
-                if let Value::Instr(value_instr) = value {
-                    if let &InstructionInfo::Load { addr: Value::Slot(value_slot), ty: _ } = prog.get_instr(value_instr) {
+                if let Value::Scoped(Scoped::Instr(value_instr)) = value {
+                    if let &InstructionInfo::Load { addr: Value::Scoped(Scoped::Slot(value_slot)), ty: _ } = prog.get_instr(value_instr) {
                         if replaced_slots.contains(&value_slot) {
                             //find the block that contains the load
                             let block = *dom_info.blocks.iter().find(|&&block| {
@@ -161,13 +161,13 @@ fn get_value_for_slot(
         }
     }
 
-    //if there is no predecessor the value is just undefined
     if block == entry {
-        return Value::Undef(ty);
+        // if there is no predecessor the value is just undefined
+        Value::undef(ty)
+    } else {
+        // otherwise return the corresponding phi value
+        (*phi_map.get(&(block, slot)).unwrap()).into()
     }
-
-    //return the corresponding phi value
-    Value::Phi(*phi_map.get(&(block, slot)).unwrap())
 }
 
 fn remove_item<T: PartialEq>(vec: &mut Vec<T>, item: &T) -> Option<T> {

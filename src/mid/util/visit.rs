@@ -38,11 +38,10 @@ impl<'a> VisitState<'a> {
         let value = value.into();
 
         match value {
-            Value::Void | Value::Undef(_) | Value::Const(_) => {
+            Value::Immediate(_) => {
                 // we don't track identity-less values
             }
-            Value::Func(_) | Value::Param(_) | Value::Slot(_) |
-            Value::Phi(_) | Value::Instr(_) | Value::Extern(_) | Value::Data(_) => {
+            Value::Global(_) | Value::Scoped(_) => {
                 // track everything else
                 if self.visited_values.insert(value) {
                     self.todo_values.push_back(value);

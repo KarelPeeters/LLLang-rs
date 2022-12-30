@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, ParameterInfo, PhiInfo, Program, StackSlotInfo, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, ParameterInfo, PhiInfo, Program, Scoped, StackSlotInfo, Value};
 use crate::util::zip_eq;
 
 impl Program {
@@ -30,7 +30,7 @@ impl Program {
                 let new_param = self.define_param(ParameterInfo { ty });
 
                 new_params.push(new_param);
-                assert!(map_param.insert(old_param, Value::Param(new_param)).is_none());
+                assert!(map_param.insert(old_param, new_param.into()).is_none());
             }
         };
 
@@ -83,13 +83,14 @@ impl Program {
             map_block_map.get(&block).copied().unwrap()
         };
 
+        // TODO maybe merge all of the value maps?
         let map_value = |value: Value| {
             match value {
-                Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => value,
-                Value::Param(param) => map_param.get(&param).copied().unwrap(),
-                Value::Slot(slot) => map_slot.get(&slot).copied().unwrap().into(),
-                Value::Phi(phi) => map_phi.get(&phi).copied().unwrap().into(),
-                Value::Instr(instr) => map_instr.get(&instr).copied().unwrap().into(),
+                Value::Immediate(_) | Value::Global(_) => value,
+                Value::Scoped(Scoped::Param(param)) => map_param.get(&param).copied().unwrap(),
+                Value::Scoped(Scoped::Slot(slot)) => map_slot.get(&slot).copied().unwrap().into(),
+                Value::Scoped(Scoped::Phi(phi)) => map_phi.get(&phi).copied().unwrap().into(),
+                Value::Scoped(Scoped::Instr(instr)) => map_instr.get(&instr).copied().unwrap().into(),
             }
         };
         for &new_instr in map_instr.values() {

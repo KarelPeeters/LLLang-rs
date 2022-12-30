@@ -237,7 +237,7 @@ fn map_function<'a>(
                 name: decl.ast.id.string.clone(),
                 ty: ir_ty,
             };
-            Ok((None, ir::Value::Extern(prog.define_ext(ext))))
+            Ok((None, prog.define_ext(ext).into()))
         }
         (ext, true) => {
             let mut func_ir = ir::FunctionInfo::new(ty_func_ir, prog);
@@ -248,7 +248,7 @@ fn map_function<'a>(
             }
 
             let func_ir = prog.define_func(func_ir);
-            Ok((Some(func_ir), ir::Value::Func(func_ir)))
+            Ok((Some(func_ir), func_ir.into()))
         }
     }?;
 

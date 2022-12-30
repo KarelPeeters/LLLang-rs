@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use itertools::Itertools;
 
-use crate::mid::ir::{Block, BlockInfo, Program, Target, Terminator, Value};
+use crate::mid::ir::{Block, BlockInfo, Immediate, Program, Target, Terminator, Value};
 
 //TODO combine this with block_threading in a single pass?
 pub fn flow_simplify(prog: &mut Program) -> bool {
@@ -37,12 +37,12 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
             }
             Terminator::Branch { cond, true_target, false_target } => {
                 match &cond {
-                    Value::Undef(_) => {
+                    Value::Immediate(Immediate::Undef(_)) => {
                         // undefined condition, this is undefined behavior
                         count_branch_removed += 1;
                         Terminator::Unreachable
                     }
-                    Value::Const(cst) => {
+                    Value::Immediate(Immediate::Const(cst)) => {
                         // const condition, remove the branch and replace with final terminator
                         let target = if cst.as_bool().unwrap() { true_target } else { false_target };
                         count_branch_removed += 1;

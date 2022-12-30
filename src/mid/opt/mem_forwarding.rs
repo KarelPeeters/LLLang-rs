@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::{BlockUsage, TargetSource, UseInfo};
-use crate::mid::ir::{Block, InstructionInfo, Program, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Global, Immediate, InstructionInfo, Program, Scoped, StackSlot, Type, Value};
 use crate::mid::util::lattice::Lattice;
 
 pub fn mem_forwarding(prog: &mut Program) -> bool {
@@ -150,7 +150,7 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
         return alias_from_origin;
     }
 
-    if let (Value::Instr(instr_left), Value::Instr(instr_right)) = (ptr_left, ptr_right) {
+    if let (Some(instr_left), Some(instr_right)) = (ptr_left.as_instr(), ptr_right.as_instr()) {
         match (prog.get_instr(instr_left), prog.get_instr(instr_right)) {
             (
                 &InstructionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
@@ -189,13 +189,13 @@ fn pointers_alias(prog: &Program, ptr_left: Value, ptr_right: Value) -> Alias {
 fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
-    if let Value::Instr(instr) = ptr {
+    if let Some(instr) = ptr.as_instr() {
         match *prog.get_instr(instr) {
             InstructionInfo::PointerOffSet { ty, base, index } => {
                 if prog.is_zero_sized_type(ty) {
                     return simplify_ptr(prog, base);
                 }
-                if let Value::Const(cst) = index {
+                if let Some(cst) = index.as_const() {
                     if cst.is_zero() {
                         return simplify_ptr(prog, base);
                     }
@@ -220,21 +220,29 @@ fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
 //  specifically this would be useful for things like:
 //    * phis
 //    * load/store forwarding, which is what we're doing here in the first place!)
+// TODO ideally incorporate this into SCCP?
 fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
     match ptr {
-        Value::Void | Value::Func(_) => unreachable!("Value cannot be pointer type: {:?}", ptr),
-        Value::Undef(_) => Origin::Undef,
-        Value::Const(_) => Origin::FuncExternal,
-        Value::Param(_) => Origin::FuncExternal,
-        Value::Slot(slot) => Origin::FuncStackSlot(slot),
-        Value::Phi(_) => Origin::Unknown,
-        Value::Instr(instr) => {
-            match prog.get_instr(instr) {
+        Value::Immediate(value) => match value {
+            Immediate::Void => unreachable!("Void cannot have pointer type: {:?}", ptr),
+            Immediate::Undef(_) => Origin::Undef,
+            Immediate::Const(_) => Origin::FuncExternal,
+        },
+        Value::Global(value) => match value {
+            Global::Func(_) => unreachable!("Function cannot have pointer type: {:?}", ptr),
+            Global::Extern(_) => Origin::FuncExternal,
+            Global::Data(_) => Origin::FuncExternal,
+        },
+        Value::Scoped(value) => match value {
+            Scoped::Param(_) => Origin::FuncExternal,
+            Scoped::Slot(slot) => Origin::FuncStackSlot(slot),
+            Scoped::Phi(_) => Origin::Unknown,
+            Scoped::Instr(instr) => match prog.get_instr(instr) {
                 InstructionInfo::Load { .. } => Origin::Unknown,
                 InstructionInfo::Store { .. } | InstructionInfo::Arithmetic { .. } | InstructionInfo::Comparison { .. } =>
-                    unreachable!("Instruction cannot return pointer type: {:?}", instr),
+                    unreachable!("This instruction cannot return pointer type: {:?}", instr),
                 InstructionInfo::Call { .. } => Origin::Unknown,
                 &InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, base),
                 &InstructionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, base),
@@ -242,9 +250,7 @@ fn pointer_origin(prog: &Program, ptr: Value) -> Origin {
                 InstructionInfo::Cast { .. } => Origin::Unknown,
                 InstructionInfo::BlackBox { .. } => Origin::Unknown,
             }
-        }
-        Value::Extern(_) => Origin::FuncExternal,
-        Value::Data(_) => Origin::FuncExternal,
+        },
     }
 }
 

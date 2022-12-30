@@ -31,7 +31,7 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
             match instr_info {
                 &InstructionInfo::Load { addr: _, ty } => {
                     if ty == ty_void {
-                        replace(prog, instr.into(), Value::Void);
+                        replace(prog, instr.into(), Value::void());
                     }
                 }
                 InstructionInfo::Store { .. } => {}

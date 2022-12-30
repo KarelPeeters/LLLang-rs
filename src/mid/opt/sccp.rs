@@ -4,7 +4,7 @@ use std::num::Wrapping;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::use_info::{for_each_usage_in_instr, InstructionPos, TargetKind, Usage, UseInfo};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Function, Instruction, InstructionInfo, Program, Signed, Target, Terminator, Type, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Function, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -26,21 +26,37 @@ struct LatticeMap {
     values: IndexMap<Value, Lattice>,
 }
 
+fn value_can_be_tracked(value: Value) -> bool {
+    matches!(value, Value::Scoped(Scoped::Param(_) | Scoped::Phi(_) | Scoped::Instr(_)))
+}
+
+fn value_allowed_as_known(value: Value) -> bool {
+    matches!(value, Value::Global(_) | Value::Immediate(Immediate::Const(_)))
+}
+
 impl LatticeMap {
     fn eval(&self, value: Value) -> Lattice {
         match value {
-            Value::Void | Value::Undef(_) =>
-                Lattice::Undef,
-            Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) =>
-                Lattice::Known(value),
-            Value::Param(_) | Value::Phi(_) | Value::Instr(_) =>
-                *self.values.get(&value).unwrap_or(&Lattice::Undef),
-            Value::Slot(_) => Lattice::Overdef,
+            Value::Immediate(Immediate::Void) | Value::Immediate(Immediate::Undef(_)) => Lattice::Undef,
+
+            Value::Immediate(Immediate::Const(_)) => Lattice::Known(value),
+            Value::Global(_) => Lattice::Known(value),
+
+            Value::Scoped(scoped) => {
+                match scoped {
+                    Scoped::Param(_) | Scoped::Phi(_) | Scoped::Instr(_) => {
+                        assert!(value_can_be_tracked(value));
+                        *self.values.get(&value).unwrap_or(&Lattice::Undef)
+                    }
+                    // TODO should we track slots as known?
+                    Scoped::Slot(_) => Lattice::Overdef,
+                }
+            }
         }
     }
 
     fn merge_value(&mut self, prog: &Program, todo: &mut VecDeque<Todo>, value: Value, new: Lattice) {
-        assert!(matches!(value, Value::Param(_) | Value::Phi(_) | Value::Instr(_)));
+        assert!(value_can_be_tracked(value));
 
         // any void value can be treated as undef, this is a good central place to do it
         let new = if prog.ty_void() == prog.type_of_value(value) {
@@ -51,6 +67,8 @@ impl LatticeMap {
 
         let prev = self.eval(value);
         let next = Lattice::merge(prev, new);
+
+        // TODO if next is undef remove or just don't insert instead
         self.values.insert(value, next);
 
         if prev != next {
@@ -112,11 +130,11 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
 
                         //since it's the first time we check for usage of functions as generic operands
                         for_each_usage_in_instr(pos, prog.get_instr(instr), |value, usage| {
-                            if let Value::Func(func) = value {
+                            if let Some(func) = value.as_func() {
                                 if !matches!(usage, Usage::CallTarget {..}) {
                                     // mark function parameters as overdefined
                                     for &param in &prog.get_func(func).params {
-                                        map.values.insert(Value::Param(param), Lattice::Overdef);
+                                        map.values.insert(param.into(), Lattice::Overdef);
                                     }
                                 }
                             }
@@ -175,17 +193,17 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                                 let phi = prog.get_block(target.block).phis[phi_index];
                                 let new_value = map.eval(target.phi_values[phi_index]);
 
-                                map.merge_value(prog, &mut todo, Value::Phi(phi), new_value)
+                                map.merge_value(prog, &mut todo, phi.into(), new_value)
                             }
                         }
                         Usage::CallArgument { pos, index } => {
                             if map.reachable(pos.instr) {
                                 match prog.get_instr(pos.instr) {
                                     InstructionInfo::Call { target, args } => {
-                                        if let &Value::Func(target) = target {
+                                        if let Some(target) = target.as_func() {
                                             //merge in argument
                                             let param = prog.get_func(target).params[index];
-                                            map.merge_value(prog, &mut todo, Value::Param(param), map.eval(args[index]));
+                                            map.merge_value(prog, &mut todo, param.into(), map.eval(args[index]));
                                         } else {
                                             //nothing to do here
                                         }
@@ -224,8 +242,8 @@ fn compute_lattice_map(prog: &mut Program, use_info: &UseInfo) -> LatticeMap {
                 for &usage in &use_info[func] {
                     if let Usage::CallTarget { pos } = usage {
                         if map.reachable(pos.instr) {
-                            map.merge_value(prog, &mut todo, Value::Instr(pos.instr), return_lattice);
-                            todo.push_back(Todo::ValueUsers(Value::Instr(pos.instr)))
+                            map.merge_value(prog, &mut todo, pos.instr.into(), return_lattice);
+                            todo.push_back(Todo::ValueUsers(pos.instr.into()))
                         }
                     }
                 }
@@ -263,11 +281,10 @@ fn evaluate_branch_condition(cond: Lattice) -> (bool, bool) {
             //undefined behaviour, don't mark anything
             (false, false)
         }
-        Lattice::Known(cst) => {
-            if let Value::Const(cst) = cst {
+        Lattice::Known(cond) => {
+            if let Some(cond) = cond.as_const().and_then(|cst| cst.as_bool()) {
                 //if this is an actual boolean const we can fully evaluate it
-                let cst = cst.value.as_bool().unwrap();
-                (cst, !cst)
+                (cond, !cond)
             } else {
                 //otherwise consider this overdefined
                 (true, true)
@@ -287,7 +304,7 @@ fn update_target_reachable(prog: &Program, map: &mut LatticeMap, todo: &mut VecD
     //merge phi values
     let target_block_info = prog.get_block(target.block);
     for (&phi, &phi_value) in zip_eq(&target_block_info.phis, &target.phi_values) {
-        map.merge_value(prog, todo, Value::Phi(phi), map.eval(phi_value));
+        map.merge_value(prog, todo, phi.into(), map.eval(phi_value));
     }
 }
 
@@ -319,14 +336,14 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         InstructionInfo::Store { .. } => Lattice::Undef,
         &InstructionInfo::Call { target, ref args } => {
             map.eval(target).map_known(|target| {
-                if let Value::Func(target) = target {
+                if let Some(target) = target.as_func() {
                     //mark reachable
                     todo.push_back(Todo::FunctionInit(target));
 
                     //merge in arguments
                     let target_info = prog.get_func(target);
                     for (&param, &arg) in zip_eq(&target_info.params, args) {
-                        map.merge_value(prog, todo, Value::Param(param), map.eval(arg))
+                        map.merge_value(prog, todo, param.into(), map.eval(arg))
                     }
 
                     //get return
@@ -418,7 +435,7 @@ fn visit_instr(prog: &Program, map: &mut LatticeMap, todo: &mut VecDeque<Todo>, 
         &InstructionInfo::BlackBox { .. } => Lattice::Overdef,
     };
 
-    map.merge_value(prog, todo, Value::Instr(instr), result)
+    map.merge_value(prog, todo, instr.into(), result)
 }
 
 fn eval_binary(
@@ -430,13 +447,13 @@ fn eval_binary(
     match (map.eval(left), map.eval(right)) {
         (Lattice::Undef, _) | (_, Lattice::Undef) => Lattice::Undef,
 
-        (Lattice::Known(Value::Const(left)), Lattice::Known(Value::Const(right))) => {
+        (Lattice::Known(Value::Immediate(Immediate::Const(left))), Lattice::Known(Value::Immediate(Immediate::Const(right)))) => {
             assert_eq!(left.ty, right.ty);
             assert_eq!(left.value.bits(), right.value.bits());
             let ty = left.ty;
 
             let result = handle_const(ty, left.value, right.value);
-            Lattice::Known(Value::Const(result))
+            Lattice::Known(result.into())
         }
 
         //TODO sometimes this can be inferred as well, eg "0 * x" or "x == x"
@@ -448,9 +465,9 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
     let mut count = 0;
 
     for (&value, &lattice_value) in &lattice_map.values {
-        assert!(matches!(value, Value::Phi(_) | Value::Instr(_) | Value::Param(_)));
+        assert!(value_can_be_tracked(value));
         if let Lattice::Known(cst) = lattice_value {
-            assert!(cst.is_const_like());
+            assert!(value_allowed_as_known(cst));
         }
 
         let ty = prog.type_of_value(value);

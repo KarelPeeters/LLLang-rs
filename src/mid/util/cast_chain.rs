@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use derive_more::Constructor;
 
-use crate::mid::ir::{CastKind, InstructionInfo, Program, ProgramTypes, Signed, TypeInfo, Value};
+use crate::mid::ir::{CastKind, InstructionInfo, Program, ProgramTypes, Scoped, Signed, TypeInfo, Value};
 
 #[derive(Debug, Copy, Clone, Constructor, Eq, PartialEq)]
 pub struct CastOp {
@@ -63,7 +63,7 @@ pub struct Stack {
 }
 
 fn extract_minimal_cast_chain_impl(prog: &Program, value: Value) -> (Stack, Value, usize) {
-    if let Value::Instr(instr) = value {
+    if let Value::Scoped(Scoped::Instr(instr)) = value {
         if let &InstructionInfo::Cast { ty, kind, value: next } = prog.get_instr(instr) {
             let (mut stack, inner, depth) = extract_minimal_cast_chain_impl(prog, next);
             let bits = prog.get_type(ty).unwrap_int().unwrap();

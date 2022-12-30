@@ -5,7 +5,7 @@ use derive_more::Constructor;
 use itertools::Itertools;
 
 use crate::mid::analyse::use_info::{BlockUsage, for_each_usage_in_instr, Usage, UseInfo};
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Instruction, InstructionInfo, Program, Terminator, TypeInfo, Value};
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, TypeInfo, Value};
 use crate::mid::util::visit::{Visitor, VisitState};
 use crate::util::VecExt;
 
@@ -47,12 +47,12 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         match value {
-            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Extern(_) | Value::Data(_) | Value::Slot(_) => {
+            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) | Value::Scoped(Scoped::Slot(_)) => {
                 // no additional handling (beyond maybe marking them as used, which already happens in add_value)
                 //   this also works for slots!
-                // TODO maybe only consider slots alive if they are actually loaded from?
+                // TODO maybe only consider slots alive if they are actually loaded from or stored to?
             }
-            Value::Func(func) => {
+            Value::Global(Global::Func(func)) => {
                 let FunctionInfo {
                     entry, params, slots,
                     ty: _, func_ty: _, global_name: _, debug_name: _
@@ -65,7 +65,7 @@ impl Visitor for DceVisitor<'_> {
 
                 state.add_block(entry.block);
             }
-            Value::Param(param) => {
+            Value::Scoped(Scoped::Param(param)) => {
                 // find func and index of this param
                 // TODO this is slow and ugly
                 let (func, index) = prog.nodes.funcs.iter().find_map(|(func, func_info)| {
@@ -83,7 +83,7 @@ impl Visitor for DceVisitor<'_> {
                     }
                 }
             }
-            Value::Phi(phi) => {
+            Value::Scoped(Scoped::Phi(phi)) => {
                 // find block and index of this phi
                 // TODO this is slow and ugly
                 let (block, index) = prog.nodes.blocks.iter().find_map(|(block, block_info)| {
@@ -96,7 +96,7 @@ impl Visitor for DceVisitor<'_> {
                     state.add_value(target_kind.get_target(prog).phi_values[index]);
                 }
             }
-            Value::Instr(instr) => {
+            Value::Scoped(Scoped::Instr(instr)) => {
                 // mark operands as used
                 for_each_usage_in_instr((), prog.get_instr(instr), |operand, _usage| {
                     state.add_value(operand);
@@ -204,7 +204,7 @@ fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive_values: &Has
             let keep = alive_values.contains(&instr.into());
             if keep {
                 // potentially remove dead call args
-                if let InstructionInfo::Call { target: Value::Func(target), args } = &mut prog_instrs[instr] {
+                if let InstructionInfo::Call { target: Value::Global(Global::Func(target)), args } = &mut prog_instrs[instr] {
                     if let Some(arg_mask) = param_masks.get(target) {
                         removed.args += retain_mask(args, arg_mask);
                     }

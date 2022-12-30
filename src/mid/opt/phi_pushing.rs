@@ -1,7 +1,7 @@
 use itertools::Itertools;
 
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Program, Target, Terminator, Value};
+use crate::mid::ir::{Program, Scoped, Target, Terminator, Value};
 use crate::util::VecExt;
 
 pub fn phi_pushing(prog: &mut Program) -> bool {
@@ -33,7 +33,7 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
         // add undef phi values to other uses of the target block
         for usage in &use_info[target_block] {
             usage.target_kind.get_target_mut(prog)
-                .phi_values.extend(old_phi_types.iter().map(|&ty| Value::Undef(ty)));
+                .phi_values.extend(old_phi_types.iter().map(|&ty| Value::undef(ty)));
         }
 
         // add old phi values to the target phi values
@@ -50,7 +50,7 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
 
             // insert replaced phi values at the start of the block
             let mut new_pred_phi_values = target_phi_values.iter().map(|&value| {
-                if let Value::Phi(phi) = value {
+                if let Value::Scoped(Scoped::Phi(phi)) = value {
                     if let Some(index) = old_phis.index_of(&phi) {
                         return old_pred_phi_values[index];
                     }

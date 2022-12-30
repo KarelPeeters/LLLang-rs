@@ -1,6 +1,6 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Function, Program, Value};
+use crate::mid::ir::{Block, Function, Program, Scoped, Value};
 use crate::util::{IndexMutTwice, VecExt};
 
 #[derive(Debug)]
@@ -207,34 +207,38 @@ impl DomPosition {
         let func_info = prog.get_func(func);
 
         match value {
-            Value::Void | Value::Undef(_) | Value::Const(_) | Value::Func(_) | Value::Extern(_) | Value::Data(_) => {
+            Value::Global(_) | Value::Immediate(_) => {
                 Ok(DomPosition::Global)
             }
-            Value::Param(param) => {
-                func_info.params.contains(&param).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-            }
-            Value::Slot(slot) => {
-                func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-            }
-            Value::Phi(phi) => {
-                prog.try_visit_blocks(func_info.entry.block, |block| {
-                    let block_info = prog.get_block(block);
-                    if block_info.phis.contains(&phi) {
-                        Err(DomPosition::InBlock(func, block, BlockPosition::Entry))
-                    } else {
-                        Ok(())
+            Value::Scoped(value) => {
+                match value {
+                    Scoped::Param(param) => {
+                        func_info.params.contains(&param).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
                     }
-                }).err().ok_or(NoDefFound)
-            }
-            Value::Instr(instr) => {
-                prog.try_visit_blocks(func_info.entry.block, |block| {
-                    let block_info = prog.get_block(block);
-                    if let Some(index) = block_info.instructions.index_of(&instr) {
-                        Err(DomPosition::InBlock(func, block, BlockPosition::Instruction(index)))
-                    } else {
-                        Ok(())
+                    Scoped::Slot(slot) => {
+                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
                     }
-                }).err().ok_or(NoDefFound)
+                    Scoped::Phi(phi) => {
+                        prog.try_visit_blocks(func_info.entry.block, |block| {
+                            let block_info = prog.get_block(block);
+                            if block_info.phis.contains(&phi) {
+                                Err(DomPosition::InBlock(func, block, BlockPosition::Entry))
+                            } else {
+                                Ok(())
+                            }
+                        }).err().ok_or(NoDefFound)
+                    }
+                    Scoped::Instr(instr) => {
+                        prog.try_visit_blocks(func_info.entry.block, |block| {
+                            let block_info = prog.get_block(block);
+                            if let Some(index) = block_info.instructions.index_of(&instr) {
+                                Err(DomPosition::InBlock(func, block, BlockPosition::Instruction(index)))
+                            } else {
+                                Ok(())
+                            }
+                        }).err().ok_or(NoDefFound)
+                    }
+                }
             }
         }
     }
