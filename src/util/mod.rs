@@ -20,6 +20,7 @@ impl<T> IndexMutTwice<T> for [T] {
     }
 }
 
+#[allow(dead_code)]
 pub fn zip_eq<L: ExactSizeIterator, R: ExactSizeIterator>(
     left: impl IntoIterator<IntoIter=L>,
     right: impl IntoIterator<IntoIter=R>,
