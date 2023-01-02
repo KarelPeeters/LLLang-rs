@@ -9,6 +9,7 @@ use crate::mid::util::lattice::Lattice;
 // TODO it's kind of sad that we can't replace things with non-dominating values, could we maybe change the IR semantics
 //   to consider non-visited values as undef? -> that loses a lot of verify constraints, is that good or bad?
 // TODO otherwise add the "is_strict_dom" check to other passes that replace values
+// TODO can it happen that we accidentally replace a phi with another to-be-replaced phi?
 /// Replace phi values that can only have a single value with that value.
 pub fn phi_combine(prog: &mut Program) -> bool {
     let mut replaced_phis = 0;
@@ -23,19 +24,32 @@ pub fn phi_combine(prog: &mut Program) -> bool {
             let block_info = prog.get_block(block);
 
             // combine phi values of all targets that jump to this block
-            let mut phi_values = vec![Lattice::Undef; block_info.phis.len()];
+            let mut phi_lattice = vec![Lattice::Undef; block_info.phis.len()];
+            let mut phi_lowest_match = vec![(!block_info.phis.is_empty()).then_some(0); block_info.phis.len()];
+
             for usage in &use_info[block] {
                 let target = usage.target_kind.get_target(prog);
-                assert_eq!(phi_values.len(), target.phi_values.len());
+                let phi_args = &target.phi_values;
+                assert_eq!(phi_lattice.len(), phi_args.len());
 
-                for (curr, &new) in zip(&mut phi_values, &target.phi_values) {
-                    *curr = Lattice::merge(*curr, value_to_lattice(new));
+                for i in 0..phi_lattice.len() {
+                    phi_lattice[i] = Lattice::merge(phi_lattice[i], value_to_lattice(phi_args[i]));
+
+                    if let Some(prev_match) = phi_lowest_match[i] {
+                        if phi_args[i] != phi_args[prev_match] {
+                            // TODO jump over to next item that used to match prev_match
+                            // TODO think if this is actually enough or whether we need real sets of matches
+                            phi_lowest_match[i] = phi_lowest_match[prev_match+1..i].iter()
+                                .find_position(|&&other| other == Some(prev_match))
+                                .map(|(j, _)| prev_match + j)
+                        }
+                    }
                 }
             }
 
             // try to replace the phis with their values
             let phis = block_info.phis.clone();
-            for (&phi, &phi_value) in zip(&phis, &phi_values) {
+            for (&phi, &phi_value) in zip(&phis, &phi_lattice) {
                 if let Some(value) = phi_value.as_value_of_type(prog, prog.get_phi(phi).ty) {
                     // TODO maybe store and look up the def position in use_info instead?
                     let def_pos = DomPosition::find_def_slow(prog, func, value).unwrap();
@@ -49,6 +63,8 @@ pub fn phi_combine(prog: &mut Program) -> bool {
                         replaced_phis += 1;
                     }
                 }
+
+                // TODO replace with other matching phi if any
             }
         }
     }
