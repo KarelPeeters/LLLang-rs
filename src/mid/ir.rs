@@ -9,7 +9,7 @@ use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
-    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
+    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $single:ident, $mul:ident],)*) => {
         $(
         new_index_type!(pub $node);
         )*
@@ -34,13 +34,13 @@ macro_rules! gen_node_and_program_accessors {
             }
 
             #[allow(dead_code)]
-            pub fn $get(&self, node: $node) -> &$info {
-                &self.nodes.$mul[node]
+            pub fn $get(&self, $single: $node) -> &$info {
+                &self.nodes.$mul[$single]
             }
 
             #[allow(dead_code)]
-            pub fn $get_mut(&mut self, node: $node) -> &mut $info {
-                &mut self.nodes.$mul[node]
+            pub fn $get_mut(&mut self, $single: $node) -> &mut $info {
+                &mut self.nodes.$mul[$single]
             }
         )*
         }
@@ -48,15 +48,16 @@ macro_rules! gen_node_and_program_accessors {
 }
 
 // TODO should expressions be stored as a deduplicating set as well?
+// TODO find a better name for expression, eg. "PureInstruction"
 gen_node_and_program_accessors![
-    [Function, FunctionInfo, define_func, get_func, get_func_mut, funcs],
-    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slots],
-    [Block, BlockInfo, define_block, get_block, get_block_mut, blocks],
-    [Parameter, ParameterInfo, define_param, get_param, get_param_mut, params],
-    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instrs],
-    [Expression, ExpressionInfo, define_expr, get_expr, get_expr_mut, exprs],
-    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, exts],
-    [Data, DataInfo, define_data, get_data, get_data_mut, datas],
+    [Function, FunctionInfo, define_func, get_func, get_func_mut, func, funcs],
+    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slot, slots],
+    [Block, BlockInfo, define_block, get_block, get_block_mut, block, blocks],
+    [Parameter, ParameterInfo, define_param, get_param, get_param_mut, param, params],
+    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instr, instrs],
+    [Expression, ExpressionInfo, define_expr, get_expr, get_expr_mut, expr, exprs],
+    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, ext, exts],
+    [Data, DataInfo, define_data, get_data, get_data_mut, data, datas],
 ];
 
 new_index_type!(pub Type);
@@ -170,10 +171,11 @@ impl Program {
                 match value {
                     Scoped::Param(param) => self.get_param(param).ty,
                     Scoped::Slot(_) => self.ty_ptr,
-                    Scoped::Expr(expr) => self.get_expr(expr).ty(self),
+
                     Scoped::Instr(instr) => self.get_instr(instr).ty(self),
                 }
             }
+            Value::Expr(expr) => self.get_expr(expr).ty(self),
         }
     }
 
@@ -635,6 +637,7 @@ pub enum Value {
     Immediate(Immediate),
     Global(Global),
     Scoped(Scoped),
+    Expr(Expression),
 }
 
 // TODO find a better name for these identity-less, immediate, instant, on-demand values
@@ -657,7 +660,6 @@ pub enum Scoped {
     Slot(StackSlot),
     Param(Parameter),
     Instr(Instruction),
-    Expr(Expression),
 }
 
 impl_nested_from!(Value::Immediate(Const));
@@ -667,7 +669,6 @@ impl_nested_from!(Value::Global(Data));
 impl_nested_from!(Value::Scoped(Parameter));
 impl_nested_from!(Value::Scoped(StackSlot));
 impl_nested_from!(Value::Scoped(Instruction));
-impl_nested_from!(Value::Scoped(Expression));
 
 impl Debug for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -676,6 +677,7 @@ impl Debug for Value {
             Value::Immediate(value) => value.fmt(f),
             Value::Global(value) => value.fmt(f),
             Value::Scoped(value) => value.fmt(f),
+            Value::Expr(value) => value.fmt(f),
         }
     }
 }
@@ -857,9 +859,9 @@ impl Program {
                             write!(f, "Slot({:?}: {})", slot.0, ty),
                         Scoped::Instr(instr) =>
                             write!(f, "Instr({:?}: {})", instr.0, ty),
-                        Scoped::Expr(expr) =>
-                            write!(f, "Expr({:?}: {})", expr.0, ty),
                     }
+                    Value::Expr(expr) =>
+                        write!(f, "Expr({:?} : {})", expr.0, ty)
                 }
             }
         }

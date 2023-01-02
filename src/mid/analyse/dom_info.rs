@@ -5,24 +5,29 @@ use crate::util::{IndexMutTwice, VecExt};
 
 #[derive(Debug)]
 pub struct DomInfo {
-    // TODO make these private with getters at some point
-    pub func: Function,
-    pub blocks: Vec<Block>,
+    func: Function,
+    blocks: Vec<Block>,
     successors: Vec<FixedBitSet>,
     dominates: Vec<FixedBitSet>,
     frontier: Vec<FixedBitSet>,
     parent: Vec<Option<usize>>,
 }
 
+#[derive(Debug)]
+enum Never {}
+
 impl DomInfo {
     //TODO this whole construction is a disaster, replace it with a better algorithm
     // also don't store all of this redundant state
     pub fn new(prog: &Program, func: Function) -> Self {
         let func_info = prog.get_func(func);
-        let entry_block = func_info.entry.block;
+        let entry_block = func_info.entry;
 
         let mut blocks = Vec::new();
-        prog.visit_blocks(prog.get_func(func).entry.block, |block| blocks.push(block));
+        prog.try_visit_blocks(entry_block, |block| {
+            blocks.push(block);
+            Ok::<(), Never>(())
+        }).unwrap();
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());
@@ -188,13 +193,21 @@ impl DomInfo {
             }
         }
     }
+
+    pub fn func(&self) -> Function {
+        self.func
+    }
+
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum DomPosition {
     Global,
     FuncEntry(Function),
-    InBlock(Function, Block, BlockPosition),
+    InBlock(Function, Block, InBlockPos),
 }
 
 #[derive(Debug)]
@@ -213,26 +226,23 @@ impl DomPosition {
             Value::Scoped(value) => {
                 match value {
                     Scoped::Param(param) => {
-                        func_info.params.contains(&param).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-                    }
-                    Scoped::Slot(slot) => {
-                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-                    }
-                    Scoped::Phi(phi) => {
-                        prog.try_visit_blocks(func_info.entry.block, |block| {
+                        prog.try_visit_blocks(func_info.entry, |block| {
                             let block_info = prog.get_block(block);
-                            if block_info.phis.contains(&phi) {
-                                Err(DomPosition::InBlock(func, block, BlockPosition::Entry))
+                            if block_info.params.contains(&param) {
+                                Err(DomPosition::InBlock(func, block, InBlockPos::Entry))
                             } else {
                                 Ok(())
                             }
                         }).err().ok_or(NoDefFound)
                     }
+                    Scoped::Slot(slot) => {
+                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
+                    }
                     Scoped::Instr(instr) => {
-                        prog.try_visit_blocks(func_info.entry.block, |block| {
+                        prog.try_visit_blocks(func_info.entry, |block| {
                             let block_info = prog.get_block(block);
                             if let Some(index) = block_info.instructions.index_of(&instr) {
-                                Err(DomPosition::InBlock(func, block, BlockPosition::Instruction(index)))
+                                Err(DomPosition::InBlock(func, block, InBlockPos::Instruction(index)))
                             } else {
                                 Ok(())
                             }
@@ -240,12 +250,15 @@ impl DomPosition {
                     }
                 }
             }
+            Value::Expr(_) => {
+                todo!("find_def_slow for expression")
+            }
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub enum BlockPosition {
+pub enum InBlockPos {
     // Ord is derived correctly, the top element is the lowest one
     Entry,
     Instruction(usize),

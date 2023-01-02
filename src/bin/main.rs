@@ -16,6 +16,7 @@ use lllang::{front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
+use lllang::mid::util::verify::{verify, VerifyError};
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -24,7 +25,7 @@ enum CompileError {
     InvalidFileName(OsString),
     DuplicateModule(String),
     Parse(ParseError),
-    // Verify(VerifyError),
+    Verify(VerifyError),
     Assemble,
     Link,
 }
@@ -196,7 +197,7 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
 //     Ok(())
 // }
 
-fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool, _optimize: bool) -> CompileResult<PathBuf> {
     println!("----Parse------");
     let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
@@ -223,8 +224,9 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
 
      write_ir(&ir_program)?;
 
-    todo!("verify, optimize, backend")
-//     verify(&ir_program)?;
+    verify(&ir_program)?;
+
+    todo!("optimize, backend")
 //     run_gc(&mut ir_program)?;
 //     write_ir(&ir_program)?;
 //     verify(&ir_program)?;
