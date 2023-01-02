@@ -76,6 +76,7 @@ pub enum Error<'a> {
     //main
     NoMainModule,
     NoMainFunction,
+    DuplicateMainFunction,
     MainWrongItem,
     MainFunctionWrongType {
         expected: TypeString,
@@ -98,6 +99,7 @@ pub enum Error<'a> {
         path: &'a ast::Path,
     },
     DuplicateStructFields(&'a ast::Identifier),
+    DuplicateExternSymbol(&'a ast::Identifier),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

@@ -47,6 +47,7 @@ macro_rules! gen_node_and_program_accessors {
     }
 }
 
+// TODO should expressions be stored as a deduplicating set as well?
 gen_node_and_program_accessors![
     [Function, FunctionInfo, define_func, get_func, get_func_mut, funcs],
     [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slots],
@@ -628,6 +629,7 @@ macro_rules! impl_nested_from {
     }
 }
 
+// TODO considering using .value() instead of the current .into() which is more vague
 #[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
     Immediate(Immediate),

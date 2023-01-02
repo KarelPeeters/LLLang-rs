@@ -1,12 +1,21 @@
 #![deny(unused_must_use)]
 #![allow(clippy::result_large_err)]
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fs::{File, read_to_string};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Clap;
 use derive_more::From;
+use itertools::Itertools;
+use walkdir::{DirEntry, WalkDir};
+
+use lllang::{front, mid};
+use lllang::front::ast;
+use lllang::front::parser::ParseError;
+use lllang::front::pos::FileId;
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -14,7 +23,7 @@ enum CompileError {
     Walk(walkdir::Error),
     InvalidFileName(OsString),
     DuplicateModule(String),
-    // Parse(ParseError),
+    Parse(ParseError),
     // Verify(VerifyError),
     Assemble,
     Link,
@@ -34,76 +43,76 @@ impl<T> IoError for Result<T, std::io::Error> {
     }
 }
 
-// fn parse_and_add_module_if_ll(
-//     prog: &mut front::Program<Option<ast::ModuleContent>>,
-//     file_count: &mut usize,
-//     entry: DirEntry,
-//     skip_path_components: usize,
-// ) -> CompileResult<()> {
-//     let path = entry.path();
-//
-//     //check that this is a .ll file
-//     if !entry.metadata()?.is_file() || path.extension() != Some(OsStr::new("ll")) {
-//         return Ok(());
-//     }
-//
-//     //convert the file path to a proper module path
-//     let clean_path = path.with_extension("");
-//     let path_vec: Vec<_> = clean_path.components().skip(skip_path_components)
-//         .map(|c| {
-//             let s = c.as_os_str();
-//             s.to_str()
-//                 .map(|s| s.to_string())
-//                 .ok_or_else(|| CompileError::InvalidFileName(s.to_os_string()))
-//         })
-//         .try_collect()?;
-//
-//     //find the module
-//     let module_name = path_vec.last().unwrap().clone();
-//     let module = prog.find_or_create_module(path_vec);
-//
-//     //if this module already has content that means it's declared twice
-//     if module.content.is_some() {
-//         return Err(CompileError::DuplicateModule(module_name));
-//     }
-//
-//     //increment the file id
-//     let id = FileId(*file_count);
-//     *file_count += 1;
-//
-//     println!("{:?}: {:?}", id, path);
-//
-//     //load and parse the source code
-//     let src = read_to_string(path).with_context(|| format!("Reading module {:?}", path))?;
-//     let module_ast = front::parser::parse_module(id, &src)?;
-//
-//     module.content = Some(module_ast);
-//     Ok(())
-// }
+fn parse_and_add_module_if_ll(
+    prog: &mut front::Program<Option<ast::ModuleContent>>,
+    file_count: &mut usize,
+    entry: DirEntry,
+    skip_path_components: usize,
+) -> CompileResult<()> {
+    let path = entry.path();
 
-// /// Parse the main file and all of the lib files into a single program
-// fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<Option<ast::ModuleContent>>> {
-//     let mut prog = front::Program::default();
-//     let mut file_count: usize = 0;
-//
-//     //add stdlib files
-//     if include_std {
-//         //TODO this is brittle, ship the lib files with the exe instead
-//         for file in WalkDir::new("lib") {
-//             parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, 1)?;
-//         }
-//     }
-//
-//     //add project files
-//     let parent = ll_path.parent().expect("input file should be in folder");
-//     let parent_component_count = parent.components().count();
-//
-//     for file in WalkDir::new(parent) {
-//         parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, parent_component_count)?;
-//     }
-//
-//     Ok(prog)
-// }
+    //check that this is a .ll file
+    if !entry.metadata()?.is_file() || path.extension() != Some(OsStr::new("ll")) {
+        return Ok(());
+    }
+
+    //convert the file path to a proper module path
+    let clean_path = path.with_extension("");
+    let path_vec: Vec<_> = clean_path.components().skip(skip_path_components)
+        .map(|c| {
+            let s = c.as_os_str();
+            s.to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| CompileError::InvalidFileName(s.to_os_string()))
+        })
+        .try_collect()?;
+
+    //find the module
+    let module_name = path_vec.last().unwrap().clone();
+    let module = prog.find_or_create_module(path_vec);
+
+    //if this module already has content that means it's declared twice
+    if module.content.is_some() {
+        return Err(CompileError::DuplicateModule(module_name));
+    }
+
+    //increment the file id
+    let id = FileId(*file_count);
+    *file_count += 1;
+
+    println!("{:?}: {:?}", id, path);
+
+    //load and parse the source code
+    let src = read_to_string(path).with_context(|| format!("Reading module {:?}", path))?;
+    let module_ast = front::parser::parse_module(id, &src)?;
+
+    module.content = Some(module_ast);
+    Ok(())
+}
+
+/// Parse the main file and all of the lib files into a single program
+fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<Option<ast::ModuleContent>>> {
+    let mut prog = front::Program::default();
+    let mut file_count: usize = 0;
+
+    //add stdlib files
+    if include_std {
+        //TODO this is brittle, ship the lib files with the exe instead
+        for file in WalkDir::new("lib") {
+            parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, 1)?;
+        }
+    }
+
+    //add project files
+    let parent = ll_path.parent().expect("input file should be in folder");
+    let parent_component_count = parent.components().count();
+
+    for file in WalkDir::new(parent) {
+        parse_and_add_module_if_ll(&mut prog, &mut file_count, file?, parent_component_count)?;
+    }
+
+    Ok(prog)
+}
 
 // fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
 //     let nodes_before = prog.nodes.total_node_count();
@@ -187,32 +196,34 @@ impl<T> IoError for Result<T, std::io::Error> {
 //     Ok(())
 // }
 
-// fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
-//     println!("----Parse------");
-//     let ast_program = parse_all(ll_path, include_std)?;
-//     let ast_file = ll_path.with_extension("ast");
-//     File::create(&ast_file).with_context(|| format!("Creating ast file {:?}", ast_file))?
-//         .write_fmt(format_args!("{:#?}", ast_program)).with_context(|| "Writing to ast file")?;
-//
-//     println!("----Collect----");
-//     let resolved = front::resolve::resolve(&ast_program)
-//         .expect("failed to collect"); //TODO ? instead of panic here
-//     let cst_file = ll_path.with_extension("cst");
-//     File::create(&cst_file).with_context(|| format!("Creating cst file {:?}", cst_file))?
-//         .write_fmt(format_args!("{:#?}", resolved)).with_context(|| "Writing to cst file")?;
-//
-//     println!("----Lower------");
-//     let mut ir_program = front::lower::lower(resolved)
-//         .expect("failed to lower"); //TODO ? instead of panic here
-//
-//     let ir_file = ll_path.with_extension("ir");
-//     let write_ir = |ir_program: &mid::ir::Program| -> CompileResult<()> {
-//         File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
-//             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
-//         Ok(())
-//     };
-//
-//     write_ir(&ir_program)?;
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
+    println!("----Parse------");
+    let ast_program = parse_all(ll_path, include_std)?;
+    let ast_file = ll_path.with_extension("ast");
+    File::create(&ast_file).with_context(|| format!("Creating ast file {:?}", ast_file))?
+        .write_fmt(format_args!("{:#?}", ast_program)).with_context(|| "Writing to ast file")?;
+
+    println!("----Collect----");
+    let resolved = front::resolve::resolve(&ast_program)
+        .expect("failed to collect"); //TODO ? instead of panic here
+    let cst_file = ll_path.with_extension("cst");
+    File::create(&cst_file).with_context(|| format!("Creating cst file {:?}", cst_file))?
+        .write_fmt(format_args!("{:#?}", resolved)).with_context(|| "Writing to cst file")?;
+
+    println!("----Lower------");
+    let ir_program = front::lower::lower(resolved)
+        .expect("failed to lower"); //TODO ? instead of panic here
+
+     let ir_file = ll_path.with_extension("ir");
+     let write_ir = |ir_program: &mid::ir::Program| -> CompileResult<()> {
+         File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
+             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
+         Ok(())
+     };
+
+     write_ir(&ir_program)?;
+
+    todo!("verify, optimize, backend")
 //     verify(&ir_program)?;
 //     run_gc(&mut ir_program)?;
 //     write_ir(&ir_program)?;
@@ -239,7 +250,7 @@ impl<T> IoError for Result<T, std::io::Error> {
 //         .write_all(asm.as_bytes()).with_context(|| "Writing to ASM file")?;
 //
 //     Ok(asm_file)
-// }
+}
 
 fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {
     println!("----Assemble---");
@@ -331,7 +342,7 @@ fn main() -> CompileResult<()> {
     };
 
     let asm_path = match level {
-        Level::LL => todo!(), //compile_ll_to_asm(&path, !opts.no_std, !opts.no_opt)?,
+        Level::LL => compile_ll_to_asm(&path, !opts.no_std, !opts.no_opt)?,
         Level::Asm => path,
     };
 

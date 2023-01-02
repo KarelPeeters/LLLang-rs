@@ -4,18 +4,18 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 
 pub mod pos;
-// pub mod ast;
-// pub mod cst;
+pub mod ast;
+pub mod cst;
 
-// pub mod error;
-// pub mod scope;
-// pub mod type_solver;
+pub mod error;
+pub mod scope;
+pub mod type_solver;
 
-// pub mod parser;
-// pub mod resolve;
-// pub mod lower;
-// pub mod type_func;
-// pub mod lower_func;
+pub mod parser;
+pub mod resolve;
+pub mod lower;
+pub mod type_func;
+pub mod lower_func;
 
 
 #[derive(Debug, Default)]

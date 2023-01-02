@@ -151,7 +151,11 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
         }).try_collect()?;
 
     //set main function
-    ir_prog.main = all_funcs.get(&prog.main_func).unwrap().0.ok_or(Error::MainFunctionMustHaveBody)?;
+    let main_func = all_funcs.get(&prog.main_func).unwrap().0.ok_or(Error::MainFunctionMustHaveBody)?;
+    let prev = ir_prog.root_functions.insert("main".to_owned(), main_func);
+    if prev.is_some() {
+        return Err(Error::DuplicateMainFunction);
+    }
 
     //mapping from cst values to ir values
     let map_value = &|value: ScopedValue| -> LRValue {
@@ -241,13 +245,16 @@ fn map_function<'a>(
         }
         (ext, true) => {
             let mut func_ir = ir::FunctionInfo::new(ty_func_ir, prog);
-
             func_ir.debug_name = Some(decl.ast.id.string.clone());
+            let func_ir = prog.define_func(func_ir);
+
             if ext {
-                func_ir.global_name = Some(decl.ast.id.string.clone())
+                let prev = prog.root_functions.insert(decl.ast.id.string.clone(), func_ir);
+                if prev.is_some() {
+                    return Err(Error::DuplicateExternSymbol(&decl.ast.id));
+                }
             }
 
-            let func_ir = prog.define_func(func_ir);
             Ok((Some(func_ir), func_ir.into()))
         }
     }?;
