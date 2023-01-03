@@ -41,12 +41,18 @@ impl<'a> VisitState<'a> {
             Value::Immediate(_) => {
                 // we don't track identity-less values
             }
-            Value::Global(_) | Value::Scoped(_) => {
+            Value::Global(_) | Value::Scoped(_) | Value::Expr(_) => {
                 // track everything else
                 if self.visited_values.insert(value) {
                     self.todo_values.push_back(value);
                 }
             }
+        }
+    }
+
+    pub fn add_values<I: Into<Value>>(&mut self, values: impl IntoIterator<Item=I>) {
+        for value in values.into_iter() {
+            self.add_value(value.into());
         }
     }
 
@@ -57,7 +63,7 @@ impl<'a> VisitState<'a> {
     }
 
     pub fn run(mut self, mut visitor: impl Visitor) -> VisitedResult {
-        while !self.todo_blocks.is_empty() || !self.todo_values.is_empty() {
+        loop {
             if let Some(block) = self.todo_blocks.pop_front() {
                 visitor.visit_block(&mut self, block);
                 continue;
@@ -67,10 +73,11 @@ impl<'a> VisitState<'a> {
                 visitor.visit_value(&mut self, value);
                 continue;
             }
-        }
 
-        assert!(self.todo_blocks.is_empty());
-        assert!(self.todo_values.is_empty());
+            assert!(self.todo_blocks.is_empty());
+            assert!(self.todo_values.is_empty());
+            break;
+        }
 
         VisitedResult {
             visited_blocks: self.visited_blocks,

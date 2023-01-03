@@ -115,89 +115,77 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
     Ok(prog)
 }
 
-// fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
-//     let nodes_before = prog.nodes.total_node_count();
-//     let str_before = prog.to_string();
-//
-//     let mut changed = pass(prog);
-//     verify(prog)?;
-//
-//     let nodes_after = prog.nodes.total_node_count();
-//     let str_after = prog.to_string();
-//
-//     if nodes_before != nodes_after {
-//         if !changed {
-//             eprintln!(
-//                 "WARNING: The number of nodes changed from {} to {}, but the pass reported no change",
-//                 nodes_before, nodes_after
-//             );
-//         }
-//         changed = true;
-//     }
-//
-//     let str_changed = str_before != str_after;
-//     if changed != str_changed {
-//         eprintln!(
-//             "WARNING: The pass reported changed={} but the strings show changed={}",
-//             changed, str_changed,
-//         );
-//         changed = str_changed;
-//     }
-//
-//     Ok(changed)
-// }
+fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
+    let nodes_before = prog.nodes.total_node_count();
+    let str_before = prog.to_string();
+    let mut changed = pass(prog);
+    verify(prog)?;
+    let nodes_after = prog.nodes.total_node_count();
+    let str_after = prog.to_string();
+    if nodes_before != nodes_after {
+        if !changed {
+            eprintln!(
+                "WARNING: The number of nodes changed from {} to {}, but the pass reported no change",
+                nodes_before, nodes_after
+            );
+        }
+        changed = true;
+    }
+    let str_changed = str_before != str_after;
+    if changed != str_changed {
+        eprintln!(
+            "WARNING: The pass reported changed={} but the strings show changed={}",
+            changed, str_changed,
+        );
+        changed = str_changed;
+    }
+    Ok(changed)
+}
 
-// fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
-//     let changed = run_single_pass(prog, mid::opt::gc::gc)?;
-//     // TODO maybe only do this in debug mode
-//     assert!(!run_single_pass(prog, mid::opt::gc::gc)?, "GC has to be idempotent");
-//     Ok(changed)
-// }
+fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
+    let changed = run_single_pass(prog, mid::opt::gc::gc)?;
+    // TODO maybe only do this in debug mode
+    assert!(!run_single_pass(prog, mid::opt::gc::gc)?, "GC has to be idempotent");
+    Ok(changed)
+}
 
-// fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
-//     let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
-//         mid::opt::slot_to_phi::slot_to_phi,
-//         mid::opt::inline::inline,
-//         mid::opt::sccp::sccp,
-//         mid::opt::instr_simplify::instr_simplify,
-//         mid::opt::phi_combine::phi_combine,
-//         mid::opt::dce::dce,
-//         mid::opt::flow_simplify::flow_simplify,
-//         mid::opt::block_threading::block_threading,
-//         mid::opt::phi_pushing::phi_pushing,
-//         mid::opt::mem_forwarding::mem_forwarding,
-//     ];
-//
-//     run_gc(prog)?;
-//     let mut prog_before = prog.clone();
-//
-//     loop {
-//         let mut changed = false;
-//
-//         for pass in passes {
-//             let result = run_single_pass(prog, pass);
-//
-//             if result.is_err() {
-//                 File::create(path_before).with_context(|| "creating before file")?
-//                     .write_fmt(format_args!("{}", prog_before)).with_context(|| "writing before file")?;
-//                 File::create(path_after).with_context(|| "creating after file")?
-//                     .write_fmt(format_args!("{}", prog)).with_context(|| "writing after file")?;
-//             }
-//
-//             if result? {
-//                 run_gc(prog)?;
-//                 changed |= true;
-//                 prog_before = prog.clone();
-//             }
-//         }
-//
-//         if !changed { break; }
-//     }
-//
-//     Ok(())
-// }
+fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
+    let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
+        // mid::opt::slot_to_phi::slot_to_phi,
+        // mid::opt::inline::inline,
+        // mid::opt::sccp::sccp,
+        // mid::opt::instr_simplify::instr_simplify,
+        // mid::opt::phi_combine::phi_combine,
+        // mid::opt::dce::dce,
+        // mid::opt::flow_simplify::flow_simplify,
+        // mid::opt::block_threading::block_threading,
+        // mid::opt::phi_pushing::phi_pushing,
+        // mid::opt::mem_forwarding::mem_forwarding,
+    ];
+    run_gc(prog)?;
+    let mut prog_before = prog.clone();
+    loop {
+        let mut changed = false;
+        for pass in passes {
+            let result = run_single_pass(prog, pass);
+            if result.is_err() {
+                File::create(path_before).with_context(|| "creating before file")?
+                    .write_fmt(format_args!("{}", prog_before)).with_context(|| "writing before file")?;
+                File::create(path_after).with_context(|| "creating after file")?
+                    .write_fmt(format_args!("{}", prog)).with_context(|| "writing after file")?;
+            }
+            if result? {
+                run_gc(prog)?;
+                changed |= true;
+                prog_before = prog.clone();
+            }
+        }
+        if !changed { break; }
+    }
+    Ok(())
+}
 
-fn compile_ll_to_asm(ll_path: &Path, include_std: bool, _optimize: bool) -> CompileResult<PathBuf> {
+fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
     println!("----Parse------");
     let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
@@ -212,39 +200,37 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, _optimize: bool) -> Comp
         .write_fmt(format_args!("{:#?}", resolved)).with_context(|| "Writing to cst file")?;
 
     println!("----Lower------");
-    let ir_program = front::lower::lower(resolved)
+    let mut ir_program = front::lower::lower(resolved)
         .expect("failed to lower"); //TODO ? instead of panic here
 
-     let ir_file = ll_path.with_extension("ir");
-     let write_ir = |ir_program: &mid::ir::Program| -> CompileResult<()> {
-         File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
-             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
-         Ok(())
-     };
+    let ir_file = ll_path.with_extension("ir");
+    let write_ir = |ir_program: &mid::ir::Program| -> CompileResult<()> {
+        File::create(&ir_file).with_context(|| format!("Creating IR file {:?}", ir_file))?
+            .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR file")?;
+        Ok(())
+    };
 
-     write_ir(&ir_program)?;
-
+    write_ir(&ir_program)?;
+    verify(&ir_program)?;
+    run_gc(&mut ir_program)?;
+    write_ir(&ir_program)?;
     verify(&ir_program)?;
 
-    todo!("optimize, backend")
-//     run_gc(&mut ir_program)?;
-//     write_ir(&ir_program)?;
-//     verify(&ir_program)?;
-//
-//     println!("----Optimize---");
-//     let ir_opt_file = ll_path.with_extension("ir_opt");
-//     let ir_opt_before_file = ll_path.with_extension("ir_opt_before");
-//     let ir_opt_after_file = ll_path.with_extension("ir_opt_after");
-//     if optimize {
-//         run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
-//         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
-//             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
-//     } else {
-//         //clear file
-//         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
-//     }
-//     verify(&ir_program)?;
-//
+    println!("----Optimize---");
+    let ir_opt_file = ll_path.with_extension("ir_opt");
+    let ir_opt_before_file = ll_path.with_extension("ir_opt_before");
+    let ir_opt_after_file = ll_path.with_extension("ir_opt_after");
+    if optimize {
+        run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
+        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
+            .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
+    } else {
+        //clear file
+        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
+    }
+    verify(&ir_program)?;
+
+    todo!("backend")
 //     println!("----Backend----");
 //     let asm = back::x86_asm::lower(&ir_program);
 //     let asm_file = ll_path.with_extension("asm");

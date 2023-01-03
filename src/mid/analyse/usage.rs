@@ -16,10 +16,6 @@ pub enum Usage {
         pos: BlockPos,
         usage: TermOperand,
     },
-    TargetBlockArg {
-        usage: TargetPos,
-        index: usize,
-    },
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -50,18 +46,19 @@ pub enum ExprOperand {
 pub enum TermOperand {
     BranchCond,
     ReturnValue,
+    TargetArg {
+        kind: TargetKind,
+        index: usize,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum BlockUsage {
     FuncEntry(Function),
-    Target(TargetPos),
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct TargetPos {
-    pub pos: BlockPos,
-    pub kind: TargetKind,
+    Target {
+        pos: BlockPos,
+        kind: TargetKind,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -69,6 +66,24 @@ pub enum TargetKind {
     Jump,
     BranchTrue,
     BranchFalse,
+}
+
+impl TargetKind {
+    pub fn get_target(self, term: &Terminator) -> &Target {
+        match self {
+            TargetKind::Jump => unwrap_match!(term, Terminator::Jump { target } => target),
+            TargetKind::BranchTrue => unwrap_match!(term, Terminator::Branch { true_target, .. } => true_target),
+            TargetKind::BranchFalse => unwrap_match!(term, Terminator::Branch { false_target, .. } => false_target),
+        }
+    }
+
+    pub fn get_target_mut(self, term: &mut Terminator) -> &mut Target {
+        match self {
+            TargetKind::Jump => unwrap_match!(term, Terminator::Jump { target } => target),
+            TargetKind::BranchTrue => unwrap_match!(term, Terminator::Branch { true_target, .. } => true_target),
+            TargetKind::BranchFalse => unwrap_match!(term, Terminator::Branch { false_target, .. } => false_target),
+        }
+    }
 }
 
 // TODO is this only ever used for terminators? If so, rename and implement `as_dom_pos`.
@@ -152,6 +167,54 @@ pub fn try_for_each_usage_in_expr<E>(
     Ok(())
 }
 
+pub enum TermUsage {
+    Value(Value, TermOperand),
+    Block(Block, TargetKind),
+}
+
+pub fn for_each_usage_in_term(
+    term: &Terminator,
+    mut f: impl FnMut(TermUsage),
+) {
+    try_for_each_usage_in_term::<()>(
+        term,
+        |usage| {
+            f(usage);
+            Ok(())
+        },
+    ).unwrap();
+}
+
+pub fn try_for_each_usage_in_term<E>(
+    terminator: &Terminator,
+    mut f: impl FnMut(TermUsage) -> Result<(), E>,
+) -> Result<(), E> {
+    fn visit_target<E>(f: &mut impl FnMut(TermUsage) -> Result<(), E>, target: &Target, kind: TargetKind) -> Result<(), E> {
+        let &Target { block, ref args } = target;
+        f(TermUsage::Block(block, kind))?;
+        for (index, &value) in args.iter().enumerate() {
+            f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
+        }
+        Ok(())
+    }
+
+    match *terminator {
+        Terminator::Jump { ref target } => {
+            visit_target(&mut f, target, TargetKind::Jump)?;
+        }
+        Terminator::Branch { cond, ref true_target, ref false_target } => {
+            f(TermUsage::Value(cond, TermOperand::BranchCond))?;
+            visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
+            visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
+        }
+        Terminator::Return { value } => {
+            f(TermUsage::Value(value, TermOperand::ReturnValue))?;
+        }
+        Terminator::Unreachable => {}
+    }
+    Ok(())
+}
+
 /// Visit all non-expression values used as part of the expression tree starting from `expr`.
 pub fn try_for_each_expr_leaf_value<E, F: FnMut(Value) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
     // inner function to deal with getting an "&mut F" without a recursive type
@@ -174,7 +237,6 @@ impl Usage {
             Usage::InstrOperand { pos, usage: _ } => Ok(pos.as_dom_pos()),
             Usage::ExprOperand { expr, usage: _ } => Err(expr),
             Usage::TermOperand { pos, usage: _ } => Ok(pos.as_dom_pos(InBlockPos::Terminator)),
-            Usage::TargetBlockArg { usage: target, index: _ } => Ok(target.as_dom_pos()),
         }
     }
 }
@@ -183,42 +245,11 @@ impl BlockUsage {
     pub fn get_field(self, prog: &mut Program) -> &mut Block {
         match self {
             BlockUsage::FuncEntry(func) => &mut prog.get_func_mut(func).entry,
-            BlockUsage::Target(target) => &mut target.get_target_mut(prog).block
+            BlockUsage::Target { pos, kind } => {
+                let term = &mut prog.get_block_mut(pos.block).terminator;
+                &mut kind.get_target_mut(term).block
+            }
         }
-    }
-}
-
-impl TargetPos {
-    pub fn get_target(self, prog: &Program) -> &Target {
-        match self.kind {
-            TargetKind::Jump =>
-                unwrap_match!(&prog.get_block(self.pos.block).terminator, Terminator::Jump { target } => target),
-            TargetKind::BranchTrue =>
-                unwrap_match!(&prog.get_block(self.pos.block).terminator, Terminator::Branch { true_target, .. } => true_target),
-            TargetKind::BranchFalse =>
-                unwrap_match!(&prog.get_block(self.pos.block).terminator, Terminator::Branch { false_target, .. } => false_target),
-        }
-    }
-
-    pub fn get_target_mut(self, prog: &mut Program) -> &mut Target {
-        match self.kind {
-            TargetKind::Jump => unwrap_match!(
-                &mut prog.get_block_mut(self.pos.block).terminator,
-                Terminator::Jump { target } => target
-            ),
-            TargetKind::BranchTrue => unwrap_match!(
-                &mut prog.get_block_mut(self.pos.block).terminator,
-                Terminator::Branch { true_target, .. } => true_target
-            ),
-            TargetKind::BranchFalse => unwrap_match!(
-                &mut prog.get_block_mut(self.pos.block).terminator,
-                Terminator::Branch { false_target, .. } => false_target
-            ),
-        }
-    }
-
-    pub fn as_dom_pos(self) -> DomPosition {
-        self.pos.as_dom_pos(InBlockPos::Terminator)
     }
 }
 

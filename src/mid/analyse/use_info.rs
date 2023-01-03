@@ -4,9 +4,8 @@ use std::fmt::Debug;
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
-use crate::mid::analyse::usage;
-use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TargetKind, TargetPos, TermOperand, Usage};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Value};
+use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, for_each_usage_in_expr, for_each_usage_in_instr, for_each_usage_in_term, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Value};
 
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
 // eg. slot_to_phi only cares about slots
@@ -174,14 +173,6 @@ impl<'a> State<'a> {
         self.info.block_usages.entry(block).or_default().push(usage);
     }
 
-    fn add_target_usages(&mut self, target: &Target, pos: BlockPos, kind: TargetKind) {
-        let usage = TargetPos { pos, kind };
-        for (index, &value) in target.args.iter().enumerate() {
-            self.add_value_usage(value, Usage::TargetBlockArg { usage, index })
-        }
-        self.add_block_usage(target.block, BlockUsage::Target(usage));
-    }
-
     fn visit_func(&mut self, func: Function) {
         let prog = self.prog;
 
@@ -214,30 +205,25 @@ impl<'a> State<'a> {
                 let instr_info = prog.get_instr(instr);
                 let instr_pos = InstructionPos { func, block, instr, instr_index };
 
-                usage::for_each_usage_in_instr(instr_info, |value, usage| {
+                for_each_usage_in_instr(instr_info, |value, usage| {
                     self.add_value_usage(value, Usage::InstrOperand { pos: instr_pos, usage });
                     self.todo_value(value);
                 });
             }
 
             //terminator
-            match block_info.terminator {
-                Terminator::Jump { ref target } => {
-                    self.add_target_usages(target, block_pos, TargetKind::Jump);
-                    self.todo_blocks.push_back(BlockPos { func, block: target.block });
-                }
-                Terminator::Branch { cond, ref true_target, ref false_target } => {
-                    self.add_value_usage(cond, Usage::TermOperand { pos: block_pos, usage: TermOperand::BranchCond });
-                    self.add_target_usages(true_target, block_pos, TargetKind::BranchTrue);
-                    self.todo_blocks.push_back(BlockPos { func, block: true_target.block });
-                    self.add_target_usages(false_target, block_pos, TargetKind::BranchFalse);
-                    self.todo_blocks.push_back(BlockPos { func, block: false_target.block });
-                }
-                Terminator::Return { value } => {
-                    self.add_value_usage(value, Usage::TermOperand { pos: block_pos, usage: TermOperand::ReturnValue });
-                }
-                Terminator::Unreachable => {}
-            }
+            for_each_usage_in_term(
+                &block_info.terminator,
+                |usage| match usage {
+                    TermUsage::Value(value, usage) => {
+                        self.add_value_usage(value, Usage::TermOperand { pos: block_pos, usage })
+                    },
+                    TermUsage::Block(succ, kind) => {
+                        self.todo_blocks.push_back(BlockPos { func, block: succ });
+                        self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
+                    }
+                },
+            );
         }
     }
 
@@ -245,14 +231,14 @@ impl<'a> State<'a> {
         let prog = self.prog;
         let expr_info = prog.get_expr(expr);
 
-        usage::for_each_usage_in_expr(expr_info, |value, usage| {
+        for_each_usage_in_expr(expr_info, |value, usage| {
             self.add_value_usage(value, Usage::ExprOperand { expr, usage });
             self.todo_value(value);
         });
     }
 }
 
-pub fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
+fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
     macro_rules! repl_unwrap {
         ($item:expr, $($pattern:pat)|+ => $result: expr) => {
             {
@@ -312,11 +298,9 @@ pub fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(term, Terminator::Branch { cond, .. } => cond),
                 TermOperand::ReturnValue =>
                     repl_unwrap!(term, Terminator::Return { value } => value),
+                TermOperand::TargetArg { kind, index } =>
+                    repl(&mut kind.get_target_mut(term).args[index], old, new),
             }
-        }
-        Usage::TargetBlockArg { usage, index } => {
-            let target = usage.get_target_mut(prog);
-            repl(&mut target.args[index], old, new)
         }
     }
 }
