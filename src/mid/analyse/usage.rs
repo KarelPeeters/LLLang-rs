@@ -87,6 +87,7 @@ impl TargetKind {
 }
 
 // TODO is this only ever used for terminators? If so, rename and implement `as_dom_pos`.
+// TODO move all of these pos structs to some common module
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct BlockPos {
     pub func: Function,

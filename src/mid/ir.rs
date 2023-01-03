@@ -677,7 +677,7 @@ impl Debug for Value {
             Value::Immediate(value) => value.fmt(f),
             Value::Global(value) => value.fmt(f),
             Value::Scoped(value) => value.fmt(f),
-            Value::Expr(value) => value.fmt(f),
+            Value::Expr(value) => write!(f, "Expr({:?})", value),
         }
     }
 }
