@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use crate::mid::analyse::dom_info::DomInfo;
-use crate::mid::analyse::use_info::{Usage, UseInfo};
-use crate::mid::ir::{Block, Function, InstructionInfo, Phi, PhiInfo, Program, Scoped, StackSlot, Type, Value};
+use crate::mid::analyse::usage::{InstrOperand, Usage};
+use crate::mid::analyse::use_info::UseInfo;
+use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Type, Value};
 
-///Replace slots and the associated loads and stores with phi values where possible
-pub fn slot_to_phi(prog: &mut Program) -> bool {
+///Replace slots and the associated loads and stores with block parameters where possible.
+pub fn slot_to_param(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
     let funcs: Vec<Function> = prog.nodes.funcs.iter().map(|(func, _)| func).collect();
 
@@ -13,65 +14,62 @@ pub fn slot_to_phi(prog: &mut Program) -> bool {
 
     //this pass applies to each function separately
     for func in funcs {
-        replaced_slot_count += slot_to_phi_fun(prog, &use_info, func);
+        replaced_slot_count += slot_to_param_func(prog, &use_info, func);
     }
 
-    println!("slot_to_phi removed {:?} slots", replaced_slot_count);
+    println!("slot_to_param removed {:?} slots", replaced_slot_count);
     replaced_slot_count != 0
 }
 
 //TODO this could be replaced by a more efficient data structure
-type PhiMap = HashMap<(Block, StackSlot), Phi>;
+type ParamMap = HashMap<(Block, StackSlot), Parameter>;
 
 //TODO this is a complete bruteforce implementation
 //  there are lots of way to improve this, but this works for now
-fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> usize {
+fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) -> usize {
     let func_info = prog.get_func(func);
     let dom_info = DomInfo::new(prog, func);
-    let entry_block = func_info.entry.block;
+    let entry_block = func_info.entry;
 
-    //figure out the slots we can replace
+    // figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
         let inner_ty = prog.get_slot(slot).inner_ty;
         use_info[slot].iter().all(|usage| is_load_or_store_addr_with_type(prog, usage, inner_ty))
     }).collect();
 
-    //create all phis
-    let mut phi_map: PhiMap = HashMap::new();
+    // create all block params
+    let mut param_map: ParamMap = HashMap::new();
     for &slot in &replaced_slots {
         let ty = prog.get_slot(slot).inner_ty;
 
-        for &block in &dom_info.blocks {
-            let phi = prog.define_phi(PhiInfo { ty });
+        for &block in dom_info.blocks() {
+            if block == entry_block {
+                continue;
+            }
 
-            prog.get_block_mut(block).phis.push(phi);
-            phi_map.insert((block, slot), phi);
+            let param = prog.define_param(ParameterInfo { ty });
+
+            prog.get_block_mut(block).params.push(param);
+            param_map.insert((block, slot), param);
         }
     }
 
-    //fill in phi operands
     for &slot in &replaced_slots {
-        //fill in phi operands
-        for &block in &dom_info.blocks {
+        //fill in block args
+        for &block in dom_info.blocks() {
             let block_instr_count = prog.get_block(block).instructions.len();
-            let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, block, block_instr_count);
+            let value = get_value_for_slot(prog, &dom_info, &param_map, entry_block, &replaced_slots, slot, block, block_instr_count);
 
             prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
-                target.phi_values.push(value)
+                target.args.push(value)
             });
         }
 
-        //TODO what is this for? does this ever make sense? fix this when rewriting slot_to_phi
-        //push entry undef values
-        let ty = prog.get_slot(slot).inner_ty;
-        prog.get_func_mut(func).entry.phi_values.push(Value::undef(ty));
-
-        let slot_usages = &use_info[slot];
-
         //replace loads
-        for &usage in slot_usages {
-            match usage {
-                Usage::LoadAddr { pos } => {
+        let slot_usages = &use_info[slot];
+        for usage in slot_usages {
+            match *usage {
+                Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr } => {
                     //some assertions
                     let instr_info = prog.get_instr(pos.instr);
                     let addr = unwrap_match!(instr_info, InstructionInfo::Load { addr, .. } => *addr);
@@ -81,10 +79,10 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
                     let load_index = prog.get_block(pos.block).instructions.iter()
                         .position(|&instr| instr == pos.instr).unwrap();
 
-                    let value = get_value_for_slot(prog, &dom_info, &phi_map, entry_block, &replaced_slots, slot, pos.block, load_index);
+                    let value = get_value_for_slot(prog, &dom_info, &param_map, entry_block, &replaced_slots, slot, pos.block, load_index);
                     use_info.replace_value_usages(prog, pos.instr.into(), value);
                 }
-                Usage::StoreAddr { pos } => {
+                Usage::InstrOperand { pos, usage: InstrOperand::StoreAddr } => {
                     //some assertions
                     let instr_info = prog.get_instr(pos.instr);
                     let addr = unwrap_match!(instr_info, InstructionInfo::Store { addr, .. } => *addr);
@@ -97,8 +95,8 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
         }
 
         //remove loads & stores
-        for &usage in slot_usages {
-            let pos = unwrap_match!(usage, Usage::LoadAddr { pos } | Usage::StoreAddr { pos } => pos);
+        for usage in slot_usages {
+            let pos = unwrap_match!(*usage, Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => pos);
             remove_item(&mut prog.get_block_mut(pos.block).instructions, &pos.instr).unwrap();
         }
     }
@@ -112,7 +110,7 @@ fn slot_to_phi_fun(prog: &mut Program, use_info: &UseInfo, func: Function) -> us
 
 fn is_load_or_store_addr_with_type(prog: &Program, usage: &Usage, expected_ty: Type) -> bool {
     let pos = match usage {
-        Usage::LoadAddr { pos } | Usage::StoreAddr { pos } => pos,
+        Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => pos,
         _ => return false,
     };
     let instr = prog.get_instr(pos.instr);
@@ -121,11 +119,11 @@ fn is_load_or_store_addr_with_type(prog: &Program, usage: &Usage, expected_ty: T
 }
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of
-/// a slot at a given program position, inserting phi nodes along the way.
+/// a slot at a given program position, inserting block params nodes along the way.
 fn get_value_for_slot(
     prog: &mut Program,
     dom_info: &DomInfo,
-    phi_map: &PhiMap,
+    param_map: &ParamMap,
     entry: Block,
     replaced_slots: &Vec<StackSlot>,
     slot: StackSlot,
@@ -143,7 +141,7 @@ fn get_value_for_slot(
                     if let &InstructionInfo::Load { addr: Value::Scoped(Scoped::Slot(value_slot)), ty: _ } = prog.get_instr(value_instr) {
                         if replaced_slots.contains(&value_slot) {
                             //find the block that contains the load
-                            let block = *dom_info.blocks.iter().find(|&&block| {
+                            let block = *dom_info.blocks().iter().find(|&&block| {
                                 prog.get_block(block).instructions.contains(&value_instr)
                             }).unwrap();
 
@@ -151,7 +149,7 @@ fn get_value_for_slot(
                             let value_index = prog.get_block(block).instructions.iter()
                                 .position(|&i| i == value_instr).unwrap();
 
-                            return get_value_for_slot(prog, dom_info, phi_map, entry, replaced_slots, value_slot, block, value_index);
+                            return get_value_for_slot(prog, dom_info, param_map, entry, replaced_slots, value_slot, block, value_index);
                         }
                     }
                 }
@@ -165,8 +163,8 @@ fn get_value_for_slot(
         // if there is no predecessor the value is just undefined
         Value::undef(ty)
     } else {
-        // otherwise return the corresponding phi value
-        (*phi_map.get(&(block, slot)).unwrap()).into()
+        // otherwise return the corresponding block param
+        (*param_map.get(&(block, slot)).unwrap()).into()
     }
 }
 

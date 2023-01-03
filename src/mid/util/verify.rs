@@ -4,7 +4,7 @@ use std::iter::zip;
 use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{for_each_usage_in_expr, try_for_each_expr_leaf_value, try_for_each_usage_in_instr};
+use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_leaf_value, try_for_each_usage_in_instr, Usage};
 use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
 
 #[derive(Debug)]
@@ -12,8 +12,9 @@ pub enum VerifyError {
     ValueDeclaredTwice(Value, DomPosition, DomPosition),
     BlockDeclaredTwice(Block, Function, Function),
 
-    NonDeclaredValueUsed(Value, DomPosition),
-    NonDominatingValueUsed(Scoped, DomPosition, DomPosition),
+    NonDeclaredValueUsed(Scoped, Usage, Option<Expression>),
+
+    NonDominatingValueUsed(Scoped, DomPosition, Usage, Option<Expression>),
 
     WrongDeclParamCount(Function, TypeString, usize),
     WrongBlockArgCount(DomPosition, Block),
@@ -25,6 +26,8 @@ pub enum VerifyError {
 
     WrongCallParamCount(DomPosition, TypeString, usize),
     TupleIndexOutOfBounds(Expression, TypeString, u32, u32),
+
+    EntryBlockUsedAsTarget(DomPosition, Block),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -51,12 +54,13 @@ pub fn verify(prog: &Program) -> Result {
         // TODO this way of visiting blocks means we never verify unreachable blocks. Is that okay?
         prog.try_visit_blocks(func_info.entry, |block| {
             let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
+            let block_pos = BlockPos { func, block };
 
             declarer.declare_block(func, block)?;
-            declarer.declare_all(params, DomPosition::InBlock(func, block, InBlockPos::Entry))?;
+            declarer.declare_all(params, block_pos.as_dom_pos(InBlockPos::Entry))?;
 
             for (instr_index, &instr) in instructions.iter().enumerate() {
-                declarer.declare(instr, DomPosition::InBlock(func, block, InBlockPos::Instruction(instr_index)))?;
+                declarer.declare(instr, block_pos.as_dom_pos(InBlockPos::Instruction(instr_index)))?;
             }
 
             Ok(())
@@ -93,36 +97,38 @@ pub fn verify(prog: &Program) -> Result {
 
         for &block in dom_info.blocks() {
             let BlockInfo { params: _, instructions, terminator } = prog.get_block(block);
+            let block_pos = BlockPos { func, block };
 
+            // check instructions
             for (instr_index, &instr) in instructions.iter().enumerate() {
                 let instr_info = prog.get_instr(instr);
-                let instr_pos = DomPosition::InBlock(func, block, InBlockPos::Instruction(instr_index));
+                let instr_pos = InstructionPos { func, block, instr, instr_index };
 
                 // check instruction types
-                check_instr_types(prog, instr, instr_pos)?;
+                check_instr_types(prog, instr, instr_pos.as_dom_pos())?;
 
                 // check instr arg domination
-                try_for_each_usage_in_instr(instr_info, |value, _| {
-                    ctx.check_value_at(value, instr_pos)
+                try_for_each_usage_in_instr(instr_info, |value, usage| {
+                    let usage = Usage::InstrOperand { pos: instr_pos, usage, };
+                    ctx.check_value_usage(value, usage)
                 })?;
             }
 
             // check terminator
-            let term_pos = DomPosition::InBlock(func, block, InBlockPos::Terminator);
-
+            let term_pos = block_pos.as_dom_pos(InBlockPos::Terminator);
             match *terminator {
                 Terminator::Jump { ref target } => {
-                    ctx.check_target(term_pos, target)?
+                    ctx.check_target(block_pos, target, TargetKind::Jump)?
                 }
                 Terminator::Branch { cond, ref true_target, ref false_target } => {
                     ensure_type_match(prog, term_pos, cond, prog.ty_bool())?;
-                    ctx.check_value_at(cond, term_pos)?;
-                    ctx.check_target(term_pos, true_target)?;
-                    ctx.check_target(term_pos, false_target)?;
+                    ctx.check_value_usage(cond, Usage::TermOperand { pos: block_pos, usage: TermOperand::BranchCond })?;
+                    ctx.check_target(block_pos, true_target, TargetKind::BranchTrue)?;
+                    ctx.check_target(block_pos, false_target, TargetKind::BranchFalse)?;
                 }
                 Terminator::Return { value } => {
                     ensure_type_match(prog, term_pos, value, func_info.func_ty.ret)?;
-                    ctx.check_value_at(value, term_pos)?;
+                    ctx.check_value_usage(value, Usage::TermOperand { pos: block_pos, usage: TermOperand::ReturnValue })?;
                 }
                 Terminator::Unreachable => {}
             }
@@ -157,8 +163,16 @@ struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    fn check_target(&mut self, pos: DomPosition, target: &Target) -> Result {
+    fn check_target(&mut self, block_pos: BlockPos, target: &Target, kind: TargetKind) -> Result {
         let prog = self.prog;
+        let pos = block_pos.as_dom_pos(InBlockPos::Terminator);
+
+        // check target block != entry
+        // TODO do we really want that? it seems artificially limiting
+        //   but it's pretty much necessary to get phi construction to work at all
+        if target.block == self.prog.get_func(self.dom_info.func()).entry {
+            return Err(VerifyError::EntryBlockUsedAsTarget(pos, target.block));
+        }
 
         // check phi type match
         let target_block_info = prog.get_block(target.block);
@@ -170,31 +184,43 @@ impl<'a> Context<'a> {
         }
 
         // check phi domination
-        for &value in &target.args {
-            self.check_value_at(value, pos)?;
+        for (index, &value) in target.args.iter().enumerate() {
+            let usage = Usage::TermOperand { pos: block_pos, usage: TermOperand::TargetArg { kind, index } };
+            self.check_value_usage(value, usage)?;
         }
         Ok(())
     }
 
-    fn check_value_at(&mut self, value: Value, use_pos: DomPosition) -> Result {
+    fn check_value_usage(&mut self, value: Value, usage: Usage) -> Result {
+        self.check_value_usage_impl(value, usage, None)
+    }
+
+    fn check_value_usage_impl(&mut self, value: Value, usage: Usage, root: Option<Expression>) -> Result {
         match value {
             Value::Global(_) | Value::Immediate(_) => Ok(()),
 
             Value::Scoped(value) => {
-                let def_pos = self.declarer.value_declared_pos.get(&value).copied()
-                    .ok_or(VerifyError::NonDeclaredValueUsed(value.into(), use_pos))?;
+                // safe to unwrap, we know value is not an expression
+                let use_pos = usage.as_dom_pos().unwrap();
+
+                let def_pos = match self.declarer.value_declared_pos.get(&value) {
+                    Some(&def_pos) => def_pos,
+                    None => return Err(VerifyError::NonDeclaredValueUsed(value, usage, root)),
+                };
+
                 if self.dom_info.pos_is_strict_dominator(def_pos, use_pos) {
                     Ok(())
-                } else {
-                    Err(VerifyError::NonDominatingValueUsed(value, def_pos, use_pos))
+                }  else {
+                    Err(VerifyError::NonDominatingValueUsed(value, def_pos, usage, root))
                 }
             }
 
             Value::Expr(expr) => {
+                assert!(root.is_none());
                 self.expressions.insert(expr);
-                try_for_each_expr_leaf_value(self.prog, expr, |value| {
-                    assert!(!matches!(value, Value::Expr(_)));
-                    self.check_value_at(value, use_pos)
+                try_for_each_expr_leaf_value(self.prog, expr, |inner| {
+                    assert!(!matches!(inner, Value::Expr(_)));
+                    self.check_value_usage_impl(inner, usage.clone(), Some(expr))
                 })
             }
         }

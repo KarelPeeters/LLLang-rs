@@ -112,7 +112,7 @@ fn build_use_info(prog: &Program) -> UseInfo {
     let mut state = State::new(prog);
 
     for (name, &func) in &prog.root_functions {
-        state.add_value_usage(func.into(), Usage::RootFunction(name.to_owned()));
+        state.add_usage(func.into(), Usage::RootFunction(name.to_owned()));
         state.todo_funcs.push_back(func);
     }
 
@@ -154,19 +154,19 @@ impl<'a> State<'a> {
         }
     }
 
-    fn todo_value(&mut self, value: Value) {
+    fn add_usage(&mut self, value: Value, usage: Usage) {
+        //we don't care about identity-less values
+        if let Value::Immediate(_) = value { return; }
+
+        // add usage
+        self.info.value_usages.entry(value).or_default().push(usage);
+
+        // potentially add to relevant queue
         match value {
             Value::Global(Global::Func(func)) => self.todo_funcs.push_back(func),
             Value::Expr(expr) => self.todo_exprs.push_back(expr),
             Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => {}
         }
-    }
-
-    fn add_value_usage(&mut self, value: Value, usage: Usage) {
-        //we don't care about identity-less values
-        if let Value::Immediate(_) = value { return; }
-
-        self.info.value_usages.entry(value).or_default().push(usage);
     }
 
     fn add_block_usage(&mut self, block: Block, usage: BlockUsage) {
@@ -206,8 +206,7 @@ impl<'a> State<'a> {
                 let instr_pos = InstructionPos { func, block, instr, instr_index };
 
                 for_each_usage_in_instr(instr_info, |value, usage| {
-                    self.add_value_usage(value, Usage::InstrOperand { pos: instr_pos, usage });
-                    self.todo_value(value);
+                    self.add_usage(value, Usage::InstrOperand { pos: instr_pos, usage });
                 });
             }
 
@@ -216,7 +215,7 @@ impl<'a> State<'a> {
                 &block_info.terminator,
                 |usage| match usage {
                     TermUsage::Value(value, usage) => {
-                        self.add_value_usage(value, Usage::TermOperand { pos: block_pos, usage })
+                        self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
                     },
                     TermUsage::Block(succ, kind) => {
                         self.todo_blocks.push_back(BlockPos { func, block: succ });
@@ -232,8 +231,7 @@ impl<'a> State<'a> {
         let expr_info = prog.get_expr(expr);
 
         for_each_usage_in_expr(expr_info, |value, usage| {
-            self.add_value_usage(value, Usage::ExprOperand { expr, usage });
-            self.todo_value(value);
+            self.add_usage(value, Usage::ExprOperand { expr, usage });
         });
     }
 }
