@@ -10,9 +10,7 @@ use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
-// TODO clean up void handling, just don't track at all
 // TODO track slots as known values, view them as "const pointers"
-// TODO find proper names for "visit", "visit_new", "visit_reachable" etc
 
 /// Try to prove values are constant and replace them
 pub fn sccp(prog: &mut Program) -> bool {
@@ -496,11 +494,9 @@ impl<'a> State<'a> {
     fn merge_value(&mut self, value: Value, new: Lattice) {
         let prog = self.prog;
 
-        // any void value can be treated as undef, this is a good central place to do it
-        let new = if prog.ty_void() == prog.type_of_value(value) {
-            Lattice::Undef
-        } else {
-            new
+        // don't bother with void values
+        if prog.ty_void() == prog.type_of_value(value) {
+            return;
         };
 
         let prev = self.eval_lookup(value);
