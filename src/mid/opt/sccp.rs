@@ -10,8 +10,6 @@ use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
-// TODO track slots as known values, view them as "const pointers"
-
 /// Try to prove values are constant and replace them
 pub fn sccp(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
@@ -81,7 +79,7 @@ fn value_can_be_tracked(value: Value) -> bool {
 }
 
 fn value_allowed_as_known(value: Value) -> bool {
-    matches!(value, Value::Global(_) | Value::Immediate(Immediate::Const(_)))
+    matches!(value, Value::Global(_) | Value::Immediate(Immediate::Const(_)) | Value::Scoped(Scoped::Slot(_)))
 }
 
 impl<'a> State<'a> {
@@ -474,7 +472,7 @@ impl<'a> State<'a> {
             Value::Scoped(scoped) => {
                 match scoped {
                     Scoped::Param(_) | Scoped::Instr(_) => self.eval_lookup(value),
-                    Scoped::Slot(_) => Lattice::Overdef,
+                    Scoped::Slot(_) => Lattice::Known(value),
                 }
             }
 
