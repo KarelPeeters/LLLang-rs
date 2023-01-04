@@ -109,7 +109,7 @@ pub fn verify(prog: &Program) -> Result {
 
                 // check instr arg domination
                 try_for_each_usage_in_instr(instr_info, |value, usage| {
-                    let usage = Usage::InstrOperand { pos: instr_pos, usage, };
+                    let usage = Usage::InstrOperand { pos: instr_pos, usage };
                     ctx.check_value_usage(value, usage)
                 })?;
             }
@@ -122,13 +122,15 @@ pub fn verify(prog: &Program) -> Result {
                 }
                 Terminator::Branch { cond, ref true_target, ref false_target } => {
                     ensure_type_match(prog, term_pos, cond, prog.ty_bool())?;
-                    ctx.check_value_usage(cond, Usage::TermOperand { pos: block_pos, usage: TermOperand::BranchCond })?;
+                    let cond_usage = Usage::TermOperand { pos: block_pos, usage: TermOperand::BranchCond };
+                    ctx.check_value_usage(cond, cond_usage)?;
                     ctx.check_target(block_pos, true_target, TargetKind::BranchTrue)?;
                     ctx.check_target(block_pos, false_target, TargetKind::BranchFalse)?;
                 }
                 Terminator::Return { value } => {
                     ensure_type_match(prog, term_pos, value, func_info.func_ty.ret)?;
-                    ctx.check_value_usage(value, Usage::TermOperand { pos: block_pos, usage: TermOperand::ReturnValue })?;
+                    let return_usage = Usage::TermOperand { pos: block_pos, usage: TermOperand::ReturnValue };
+                    ctx.check_value_usage(value, return_usage)?;
                 }
                 Terminator::Unreachable => {}
             }
@@ -210,7 +212,7 @@ impl<'a> Context<'a> {
 
                 if self.dom_info.pos_is_strict_dominator(def_pos, use_pos) {
                     Ok(())
-                }  else {
+                } else {
                     Err(VerifyError::NonDominatingValueUsed(value, def_pos, usage, root))
                 }
             }
@@ -218,7 +220,7 @@ impl<'a> Context<'a> {
             Value::Expr(expr) => {
                 assert!(root.is_none());
                 self.expressions.insert(expr);
-                try_for_each_expr_leaf_value(self.prog, expr, |inner| {
+                try_for_each_expr_leaf_value(self.prog, expr, |inner, _| {
                     assert!(!matches!(inner, Value::Expr(_)));
                     self.check_value_usage_impl(inner, usage.clone(), Some(expr))
                 })

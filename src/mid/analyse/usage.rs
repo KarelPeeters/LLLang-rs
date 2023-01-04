@@ -217,12 +217,12 @@ pub fn try_for_each_usage_in_term<E>(
 }
 
 /// Visit all non-expression values used as part of the expression tree starting from `expr`.
-pub fn try_for_each_expr_leaf_value<E, F: FnMut(Value) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
+pub fn try_for_each_expr_leaf_value<E, F: FnMut(Value, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
     // inner function to deal with getting an "&mut F" without a recursive type
-    fn inner_impl<E, F: FnMut(Value) -> Result<(), E>>(prog: &Program, expr: Expression, f: &mut F) -> Result<(), E> {
-        try_for_each_usage_in_expr(prog.get_expr(expr), |value, _| {
+    fn inner_impl<E, F: FnMut(Value, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, f: &mut F) -> Result<(), E> {
+        try_for_each_usage_in_expr(prog.get_expr(expr), |value, usage| {
             match value {
-                Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => f(value),
+                Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => f(value, usage),
                 Value::Expr(inner) => inner_impl(prog, inner, f),
             }
         })
