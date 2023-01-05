@@ -9,9 +9,12 @@ use crate::back::vcode::{InstInfo, VConst, VInstruction, VMem, VopRC, VopRCM, VS
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
+use crate::mid::normalize::split_critical_edges::split_critical_edges;
 use crate::util::{Never, NeverExt};
 
 pub fn lower_new(prog: &mut Program) -> String {
+    split_critical_edges(prog);
+
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
 
@@ -50,7 +53,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             let inst_range = InstRange::forward(Inst::new(range_start), Inst::new(range_end));
 
             let mut succs = vec![];
-            terminator.for_each_successor(|succ| succs.push(symbols.map_block(block).1));
+            terminator.for_each_successor(|succ| succs.push(symbols.map_block(succ).1));
             let preds = use_info[block].iter().filter_map(|usage| {
                 match usage {
                     BlockUsage::FuncEntry(_) => None,
