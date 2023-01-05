@@ -234,7 +234,7 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     }
     verify(&ir_program)?;
 
-    lower_new(&ir_program);
+    lower_new(&mut ir_program);
 
     todo!("backend")
 //     println!("----Backend----");

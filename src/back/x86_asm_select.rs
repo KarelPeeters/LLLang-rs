@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 
-use regalloc2::{Inst, InstRange, Operand, PRegSet, RegClass};
+use itertools::Itertools;
+use regalloc2::{Inst, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::vcode::{InstInfo, VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
+use crate::mid::analyse::usage::BlockUsage;
+use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
 
-pub fn lower_new(prog: &Program) -> String {
+pub fn lower_new(prog: &mut Program) -> String {
+    let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
 
     for (func, _) in &prog.nodes.funcs {
@@ -17,31 +21,80 @@ pub fn lower_new(prog: &Program) -> String {
         let func_info = prog.get_func(func);
         let mut mapper = VRegMapper::default();
 
+        let mut blocks = vec![];
+        let mut v_instructions = vec![];
+
         prog.try_visit_blocks(func_info.entry, |block| {
             println!("  Block {:?}", block);
-
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
+            // setup builder
+            let params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
+            let range_start = v_instructions.len();
             let mut builder = VBuilder {
                 prog,
-                instructions: vec![],
+                instructions: &mut v_instructions,
                 vregs: &mut mapper,
                 expr_cache: &mut Default::default(),
                 symbols: &mut symbols,
             };
 
+            // convert instructions to vcode
             for &instr in instructions {
                 builder.append_instr(instr);
             }
-
             builder.append_terminator(terminator);
+
+            // construct block
+            let range_end = v_instructions.len();
+            let inst_range = InstRange::forward(Inst::new(range_start), Inst::new(range_end));
+
+            let mut succs = vec![];
+            terminator.for_each_successor(|succ| succs.push(symbols.map_block(block).1));
+            let preds = use_info[block].iter().filter_map(|usage| {
+                match usage {
+                    BlockUsage::FuncEntry(_) => None,
+                    BlockUsage::Target { pos, kind: _ } => Some(symbols.map_block(pos.block).1)
+                }
+            }).collect();
+
+            blocks.push(R2BlockInfo { inst_range, succs, preds, params });
 
             Never::UNIT
         }).no_err();
+
+        let inst_infos = v_instructions.iter().map(|inst| inst.to_inst_info()).collect();
+
+        let func_wrapper = FuncWrapper {
+            entry_block: symbols.map_block(func_info.entry).1,
+            blocks,
+            v_instructions,
+            inst_infos,
+            vregs: mapper.next_vreg,
+        };
+
+        let env = build_env(8);
+        let options = RegallocOptions {
+            verbose_log: true,
+            validate_ssa: true,
+        };
+        let result = r2::run(&func_wrapper, &env, &options);
+        println!("{:?}", result);
     }
 
     println!("Exiting process");
     std::process::exit(0);
+}
+
+fn build_env(reg_count: usize) -> MachineEnv {
+    let regs = (0..reg_count).map(|i| PReg::new(i, RegClass::Int)).collect();
+
+    MachineEnv {
+        preferred_regs_by_class: [regs, vec![]],
+        non_preferred_regs_by_class: [vec![], vec![]],
+        // TODO use fixed stack slots for params and return values
+        fixed_stack_slots: vec![],
+    }
 }
 
 struct VBlock {
@@ -75,15 +128,15 @@ impl Symbols {
         build(id)
     }
 
-    fn map_block(&mut self, block: Block) -> VSymbol {
+    fn map_block(&mut self, block: Block) -> (VSymbol, r2::Block) {
         let next = self.blocks.len();
         let id = *self.blocks.entry(block).or_insert(next);
-        VSymbol::Block(id)
+        (VSymbol::Block(id), r2::Block(id as u32))
     }
 }
 
 struct VBuilder<'a> {
-    instructions: Vec<VInstruction>,
+    instructions: &'a mut Vec<VInstruction>,
     vregs: &'a mut VRegMapper,
     expr_cache: &'a mut HashMap<Expression, VReg>,
     prog: &'a Program,
@@ -165,7 +218,7 @@ impl VBuilder<'_> {
         let &Target { block, ref args } = target;
 
         VTarget {
-            block: self.symbols.map_block(block),
+            block: self.symbols.map_block(block).0,
             args: args.iter().map(|&arg| self.append_value_to_reg(arg)).collect(),
         }
     }
@@ -290,11 +343,9 @@ impl VBuilder<'_> {
 struct FuncWrapper {
     entry_block: r2::Block,
     blocks: Vec<R2BlockInfo>,
-    insts: Vec<InstInfo>,
+    v_instructions: Vec<VInstruction>,
+    inst_infos: Vec<InstInfo>,
     vregs: usize,
-
-    block_map: HashMap<Block, r2::Block>,
-    _mapper: VRegMapper,
 }
 
 struct R2BlockInfo {
@@ -306,7 +357,7 @@ struct R2BlockInfo {
 
 impl r2::Function for FuncWrapper {
     fn num_insts(&self) -> usize {
-        self.insts.len()
+        self.inst_infos.len()
     }
 
     fn num_blocks(&self) -> usize {
@@ -334,27 +385,27 @@ impl r2::Function for FuncWrapper {
     }
 
     fn is_ret(&self, inst: Inst) -> bool {
-        self.insts[inst.0 as usize].is_ret
+        self.inst_infos[inst.0 as usize].is_ret
     }
 
     fn is_branch(&self, inst: Inst) -> bool {
-        self.insts[inst.0 as usize].is_branch
+        self.inst_infos[inst.0 as usize].is_branch
     }
 
     fn branch_blockparams(&self, _: r2::Block, inst: Inst, succ_idx: usize) -> &[VReg] {
-        &self.insts[inst.0 as usize].branch_block_params[succ_idx]
+        &self.inst_infos[inst.0 as usize].branch_block_params[succ_idx]
     }
 
     fn is_move(&self, inst: Inst) -> Option<(Operand, Operand)> {
-        self.insts[inst.0 as usize].is_move
+        self.inst_infos[inst.0 as usize].is_move
     }
 
     fn inst_operands(&self, inst: Inst) -> &[Operand] {
-        &self.insts[inst.0 as usize].operands
+        &self.inst_infos[inst.0 as usize].operands
     }
 
     fn inst_clobbers(&self, inst: Inst) -> PRegSet {
-        self.insts[inst.0 as usize].clobbers
+        self.inst_infos[inst.0 as usize].clobbers
     }
 
     fn num_vregs(&self) -> usize {
