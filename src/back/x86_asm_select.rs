@@ -1,19 +1,30 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Write};
+use std::iter::zip;
 
+use env_logger::Builder;
 use itertools::Itertools;
-use regalloc2::{Inst, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
+use log::LevelFilter;
+use regalloc2::{Allocation, Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
+use regalloc2::Function as _;
 use regalloc2::VReg;
 
-use crate::back::vcode::{InstInfo, VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
+use crate::back::vcode::{InstInfo, preg_to_asm, VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
 use crate::mid::normalize::split_critical_edges::split_critical_edges;
+use crate::mid::util::verify::verify;
 use crate::util::{Never, NeverExt};
 
 pub fn lower_new(prog: &mut Program) -> String {
     split_critical_edges(prog);
+    verify(prog).unwrap();
+
+    std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
+
+    let mut output = Output::default();
 
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
@@ -27,12 +38,22 @@ pub fn lower_new(prog: &mut Program) -> String {
         let mut blocks = vec![];
         let mut v_instructions = vec![];
 
+        // map blocks in-order
+        let mut blocks_ordered = vec![];
         prog.try_visit_blocks(func_info.entry, |block| {
-            println!("  Block {:?}", block);
+            symbols.define_block(block, blocks_ordered.len());
+            blocks_ordered.push(block);
+            Never::UNIT
+        }).no_err();
+
+        for &block in &blocks_ordered {
+            println!("  Block {:?} -> {:?}", block, symbols.map_block(block).0);
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
             // setup builder
             let params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
+            println!("    params {:?}", params);
+
             let range_start = v_instructions.len();
             let mut builder = VBuilder {
                 prog,
@@ -61,10 +82,10 @@ pub fn lower_new(prog: &mut Program) -> String {
                 }
             }).collect();
 
-            blocks.push(R2BlockInfo { inst_range, succs, preds, params });
+            println!("  succs: {:?}", succs);
 
-            Never::UNIT
-        }).no_err();
+            blocks.push(R2BlockInfo { inst_range, succs, preds, params });
+        };
 
         let inst_infos = v_instructions.iter().map(|inst| inst.to_inst_info()).collect();
 
@@ -76,17 +97,83 @@ pub fn lower_new(prog: &mut Program) -> String {
             vregs: mapper.next_vreg,
         };
 
-        let env = build_env(8);
+        let env = build_env(4);
         let options = RegallocOptions {
             verbose_log: true,
             validate_ssa: true,
         };
-        let result = r2::run(&func_wrapper, &env, &options);
+
+        Builder::new().filter_level(LevelFilter::Trace).init();
+        println!();
+        println!();
+        println!();
+        let result = r2::run(&func_wrapper, &env, &options).unwrap();
         println!("{:?}", result);
+
+        // recover register allocation in a more convenient format
+        let mut vreg_allocs = vec![Allocation::none(); func_wrapper.vregs];
+        for inst in 0..func_wrapper.num_insts() {
+            let inst = Inst::new(inst);
+
+            let inst_operands = func_wrapper.inst_operands(inst);
+            let inst_allocs = result.inst_allocs(inst);
+
+            assert_eq!(inst_operands.len(), inst_allocs.len());
+            for (operand, &alloc) in zip(inst_operands, inst_allocs) {
+                vreg_allocs[operand.vreg().vreg()] = alloc;
+            }
+        }
+
+        // actually generate code
+        output.appendln(format_args!("{}:", symbols.map_global(func)));
+
+        for &block in &blocks_ordered {
+            let block_mapped = symbols.map_block(block);
+            output.appendln(format_args!("  {}:", block_mapped.0));
+
+            for inst in result.block_insts_and_edits(&func_wrapper, block_mapped.1) {
+                match inst {
+                    InstOrEdit::Inst(inst) => {
+                        let v_inst = &func_wrapper.v_instructions[inst.index()];
+                        output.append_v_inst(v_inst, &vreg_allocs, result.inst_allocs(inst));
+                    }
+                    InstOrEdit::Edit(edit) => {
+                        let Edit::Move { from, to } = edit;
+                        let to = preg_to_asm(to.as_reg().unwrap());
+                        let from = preg_to_asm(from.as_reg().unwrap());
+                        output.appendln(format_args!("    ; {:?}", edit));
+                        output.appendln(format_args!("    mov {}, {}", to, from));
+                    }
+                }
+            }
+        }
+
+        output.appendln("\n");
     }
 
-    println!("Exiting process");
-    std::process::exit(0);
+    output.finish()
+}
+
+#[derive(Default)]
+struct Output {
+    header: String,
+    text: String,
+}
+
+impl Output {
+    fn appendln(&mut self, f: impl Display) {
+        writeln!(&mut self.text, "{}", f).unwrap();
+    }
+
+    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &[Allocation], inst_allocs: &[Allocation]) {
+        let result = v_inst.to_asm(allocs);
+        self.appendln(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
+        self.appendln(format_args!("    {}", result));
+    }
+
+    fn finish(self) -> String {
+        format!("global _main\n{}\n\nsection .text\n{}", self.header, self.text)
+    }
 }
 
 fn build_env(reg_count: usize) -> MachineEnv {
@@ -112,10 +199,13 @@ struct Symbols {
     next_data: usize,
 
     blocks: HashMap<Block, usize>,
+    next_label: usize,
 }
 
 impl Symbols {
-    fn map_global(&mut self, value: Global) -> VSymbol {
+    fn map_global(&mut self, value: impl Into<Global>) -> VSymbol {
+        let value = value.into();
+
         let (build, next): (fn(usize) -> VSymbol, &mut usize) = match value {
             Global::Func(_) => (VSymbol::Func, &mut self.next_func),
             Global::Extern(_) => (VSymbol::Ext, &mut self.next_ext),
@@ -131,10 +221,23 @@ impl Symbols {
         build(id)
     }
 
+    fn define_block(&mut self, block: Block, index: usize) {
+        println!("      Defining {:?} -> {:?}", block, index);
+        let prev = self.blocks.insert(block, index);
+        assert!(prev.is_none());
+    }
+
     fn map_block(&mut self, block: Block) -> (VSymbol, r2::Block) {
-        let next = self.blocks.len();
-        let id = *self.blocks.entry(block).or_insert(next);
-        (VSymbol::Block(id), r2::Block(id as u32))
+        let id = *self.blocks.get(&block).unwrap();
+        let result = (VSymbol::Block(id), r2::Block(id as u32));
+        println!("      Mapping {:?} -> {:?}", block, result);
+        result
+    }
+
+    fn new_label(&mut self) -> VSymbol {
+        let id = self.next_label;
+        self.next_label += 1;
+        VSymbol::Label(id)
     }
 }
 
@@ -153,8 +256,9 @@ impl VBuilder<'_> {
     fn push(&mut self, instr: VInstruction) {
         println!("    push {:?}", instr);
         let info = instr.to_inst_info();
-        println!("      args: {:?}  {:?}", info.operands, info.branch_block_params);
-        println!("      as {:?}", Inst::new(self.instructions.len()));
+        println!("      as    {:?}", Inst::new(self.instructions.len()));
+        println!("      args {:?}  {:?}", info.operands, info.branch_block_params);
+        println!("      info {:?}", info);
         self.instructions.push(instr);
     }
 
@@ -198,9 +302,10 @@ impl VBuilder<'_> {
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
                 let cond = self.append_value_to_reg(cond);
+                let label = self.symbols.new_label();
                 let true_target = self.append_target(true_target);
                 let false_target = self.append_target(false_target);
-                self.push(VInstruction::Branch(cond, true_target, false_target));
+                self.push(VInstruction::Branch(cond, label, true_target, false_target));
             }
             Terminator::Return { value } => {
                 let value = if prog.type_of_value(value) == prog.ty_void() {
@@ -220,10 +325,14 @@ impl VBuilder<'_> {
 
     fn append_target(&mut self, target: &Target) -> VTarget {
         let &Target { block, ref args } = target;
+        let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
+
+        let block_mapped = self.symbols.map_block(block).0;
+        println!("    target to {:?} -> {:?} args {:?}", block, block_mapped, args);
 
         VTarget {
-            block: self.symbols.map_block(block).0,
-            args: args.iter().map(|&arg| self.append_value_to_reg(arg)).collect(),
+            block: block_mapped,
+            args,
         }
     }
 
@@ -397,7 +506,9 @@ impl r2::Function for FuncWrapper {
     }
 
     fn branch_blockparams(&self, _: r2::Block, inst: Inst, succ_idx: usize) -> &[VReg] {
-        &self.inst_infos[inst.0 as usize].branch_block_params[succ_idx]
+        let info = &self.inst_infos[inst.0 as usize];
+        assert!(info.is_branch);
+        &info.branch_block_params[succ_idx]
     }
 
     fn is_move(&self, inst: Inst) -> Option<(Operand, Operand)> {

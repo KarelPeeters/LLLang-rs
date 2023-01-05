@@ -1,7 +1,9 @@
+use std::cmp::min_by_key;
 use std::fmt::{Display, Formatter};
+use std::fmt::Write;
 
 use derive_more::From;
-use regalloc2::{Operand, PRegSet, VReg};
+use regalloc2::{Allocation, Operand, PReg, PRegSet, VReg};
 
 use crate::mid::ir::Const;
 
@@ -21,12 +23,13 @@ pub enum VInstruction {
     Cmp(VReg, VopRCM),
     Test(VReg, VopRCM),
 
-    Setcc(&'static str, VopRM),
+    // TODO allow mem operand here
+    Setcc(&'static str, VReg),
 
     Jump(VTarget),
 
     // TODO make sure we end up generating good branch code
-    Branch(VReg, VTarget, VTarget),
+    Branch(VReg, VSymbol, VTarget, VTarget),
     Return(Option<VReg>),
     Unreachable,
 }
@@ -61,12 +64,26 @@ pub enum VConst {
     Symbol(VSymbol),
 }
 
+impl VConst {
+    pub fn to_asm(&self) -> String {
+        match self {
+            VConst::Const(cst) => min_by_key(
+                format!("{}", cst.value.unsigned()),
+                format!("{}", cst.value.signed()),
+                |s| s.len(),
+            ),
+            VConst::Symbol(symbol) => format!("{}", symbol),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum VSymbol {
     Func(usize),
     Ext(usize),
     Data(usize),
     Block(usize),
+    Label(usize),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -111,11 +128,23 @@ impl From<VopRC> for VopRCM {
 
 pub trait VOperand {
     fn for_each_reg(&self, f: impl FnMut(RegOperand));
+    fn to_asm(&self, allocs: &[Allocation]) -> String;
 }
 
 impl VOperand for VMem {
     fn for_each_reg(&self, mut f: impl FnMut(RegOperand)) {
         f(RegOperand::Use(self.reg));
+    }
+
+    fn to_asm(&self, allocs: &[Allocation]) -> String {
+        let &VMem { reg, offset } = self;
+
+        let reg = reg.to_asm(allocs);
+        if offset == 0 {
+            format!("[{}]", reg)
+        } else {
+            format!("[{}{:+}]", reg, offset)
+        }
     }
 }
 
@@ -127,6 +156,24 @@ impl VOperand for VopRCM {
             VopRCM::Mem(mem) => mem.for_each_reg(f)
         }
     }
+
+    fn to_asm(&self, allocs: &[Allocation]) -> String {
+        match *self {
+            VopRCM::Reg(reg) => {
+                let preg = allocs[reg.vreg()].as_reg().unwrap();
+                preg_to_asm(preg).to_string()
+            }
+            VopRCM::Const(cst) => cst.to_asm(),
+            VopRCM::Mem(mem) => mem.to_asm(allocs),
+        }
+    }
+}
+
+const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx"];
+const REG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl"];
+
+pub fn preg_to_asm(preg: PReg) -> &'static str {
+    REG_NAMES[preg.index()]
 }
 
 macro_rules! impl_vop_for {
@@ -135,10 +182,12 @@ macro_rules! impl_vop_for {
             fn for_each_reg(&self, f: impl FnMut(RegOperand)) {
                 VopRCM::from(*self).for_each_reg(f)
             }
+            fn to_asm(&self, allocs: &[Allocation]) -> String {
+                VopRCM::from(*self).to_asm(allocs)
+            }
         }
     };
 }
-
 impl_vop_for!(VopRC);
 impl_vop_for!(VopRM);
 impl_vop_for!(VReg);
@@ -148,34 +197,34 @@ impl VInstruction {
         let mut operands = Operands::default();
 
         match *self {
-            VInstruction::DummyDef(result) => {
-                operands.push_def(result);
+            VInstruction::DummyDef(dest) => {
+                operands.push_def(dest);
             }
-            VInstruction::MovReg(target, source) => {
+            VInstruction::MovReg(dest, source) => {
                 operands.push_use(source);
-                operands.push_def(target);
+                operands.push_def(dest);
             }
-            VInstruction::MovMem(target, source) => {
+            VInstruction::MovMem(dest, source) => {
                 operands.push_use(source);
-                operands.push_def(target);
+                operands.push_def(dest);
             }
-            VInstruction::Binary(_instr, result, left, right) => {
+            VInstruction::Binary(_instr, dest, left, right) => {
+                operands.push(Operand::reg_reuse_def(dest, 1));
                 operands.push_use(left);
                 operands.push_use(right);
-                operands.push(Operand::reg_reuse_def(result, 0));
             }
             VInstruction::Cmp(left, right) | VInstruction::Test(left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
             }
-            VInstruction::Setcc(_instr, result) => {
-                operands.push_def(result);
+            VInstruction::Setcc(_instr, dest) => {
+                operands.push_def(dest);
             }
 
             VInstruction::Jump(ref target) => {
                 return InstInfo::branch(operands, vec![target.args.clone()]);
             }
-            VInstruction::Branch(cond, ref true_target, ref false_target) => {
+            VInstruction::Branch(cond, _label, ref true_target, ref false_target) => {
                 operands.push_use(cond);
                 let params = vec![true_target.args.clone(), false_target.args.clone()];
                 return InstInfo::branch(operands, params);
@@ -192,6 +241,48 @@ impl VInstruction {
         }
 
         InstInfo::simple(operands)
+    }
+
+    pub fn to_asm(&self, allocs: &[Allocation]) -> String {
+        match *self {
+            VInstruction::DummyDef(reg) =>
+                format!("; dummy {:?}", reg.to_asm(allocs)),
+            VInstruction::MovReg(dest, source) =>
+                format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
+            VInstruction::MovMem(dest, source) =>
+                format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
+            VInstruction::Binary(instr, target, left, right) => {
+                assert_eq!(allocs[target.vreg()], allocs[left.vreg()]);
+                format!("{} {}, {}", instr, left.to_asm(allocs), right.to_asm(allocs))
+            }
+            VInstruction::Cmp(left, right) =>
+                format!("cmp {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
+            VInstruction::Test(left, right) =>
+                format!("test {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
+            VInstruction::Setcc(instr, dest) =>
+                format!("{} {}", instr, REG_NAMES_BYTE[allocs[dest.vreg()].as_reg().unwrap().index()]),
+            VInstruction::Jump(ref target) =>
+                format!("jmp {}", target.block),
+            VInstruction::Branch(cond, label, ref true_target, ref false_target) => {
+                let cond = cond.to_asm(allocs);
+
+                let mut s = String::new();
+                let f = &mut s;
+                writeln!(f, "test {}, {}", cond, cond).unwrap();
+                writeln!(f, "jz {}", label).unwrap();
+                writeln!(f, "jmp {}", true_target.block).unwrap();
+                writeln!(f, "{}:", label).unwrap();
+                writeln!(f, "jmp {}", false_target.block).unwrap();
+
+                s
+            }
+            VInstruction::Return(_value) => {
+                format!("ret 0")
+            }
+            VInstruction::Unreachable => {
+                format!("hlt")
+            }
+        }
     }
 }
 
@@ -226,6 +317,7 @@ impl Operands {
     }
 }
 
+#[derive(Debug)]
 pub struct InstInfo {
     // ret/unreachable -> ret
     pub is_ret: bool,
@@ -285,6 +377,7 @@ impl Display for VSymbol {
             VSymbol::Ext(id) => write!(f, "ext_{}", id),
             VSymbol::Data(id) => write!(f, "data_{}", id),
             VSymbol::Block(id) => write!(f, "block_{}", id),
+            VSymbol::Label(id) => write!(f, "label_{}", id),
         }
     }
 }
