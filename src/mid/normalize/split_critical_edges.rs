@@ -12,25 +12,23 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
     for &func in &funcs {
         let dom_info = DomInfo::new(prog, func);
 
-        for &block in &dom_info.blocks {
+        for &block in dom_info.blocks() {
             let mut terminator = prog.get_block(block).terminator.clone();
             let mut replacement_targets = VecDeque::new();
 
             terminator.for_each_target_mut(|target| {
                 let replacement = if dom_info.iter_predecessors(target.block).count() > 1 {
                     // we've found a critical edge, split it
-                    split_edges += 1;
-
-                    let dummy_target = Target { block: target.block, phi_values: vec![] };
+                    let dummy_target = Target { block: target.block, args: vec![] };
                     let target = std::mem::replace(target, dummy_target);
 
                     let new_block = prog.define_block(BlockInfo {
-                        phis: vec![],
+                        params: vec![],
                         instructions: vec![],
                         terminator: Terminator::Jump { target },
                     });
 
-                    Some(Target { block: new_block, phi_values: vec![] })
+                    Some(Target { block: new_block, args: vec![] })
                 } else {
                     None
                 };
@@ -41,10 +39,12 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
             prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
                 if let Some(replacement) = replacement_targets.pop_front().unwrap() {
                     *target = replacement;
+                    split_edges += 1;
                 }
             });
         }
     }
 
+    println!("split {} critical edges", split_edges);
     split_edges > 0
 }
