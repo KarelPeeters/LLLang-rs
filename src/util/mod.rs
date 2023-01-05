@@ -83,3 +83,25 @@ impl<T: Eq> VecExt for Vec<T> {
         self.iter().position(|cand| cand == value)
     }
 }
+
+#[derive(Debug)]
+pub enum Never {}
+
+impl Never {
+    pub const UNIT: Result<(), Never> = Ok(());
+}
+
+pub trait NeverExt {
+    type T;
+    fn no_err(self) -> Self::T;
+}
+
+impl<T> NeverExt for Result<T, Never> {
+    type T = T;
+    fn no_err(self) -> T {
+        match self {
+            Ok(inner) => inner,
+            Err(_) => unreachable!(),
+        }
+    }
+}

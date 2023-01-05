@@ -7,7 +7,7 @@ use crate::mid::analyse::usage::{BlockUsage, for_each_usage_in_expr, for_each_us
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
 use crate::mid::util::visit::{Visitor, VisitState};
-use crate::util::VecExt;
+use crate::util::{Never, NeverExt, VecExt};
 
 /// Dead code elimination.
 ///
@@ -320,8 +320,8 @@ fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive: &Alive) -> 
         prog.try_visit_blocks_mut(entry, |prog, block| {
             let keep_params = block == entry && func_used_as_non_call_target;
             remove_dead_values_from_block(prog, &mut removed, alive, block, keep_params);
-            Ok::<(), ()>(())
-        }).unwrap();
+            Never::UNIT
+        }).no_err();
     }
 
     removed
