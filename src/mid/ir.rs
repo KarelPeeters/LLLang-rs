@@ -634,6 +634,7 @@ macro_rules! impl_nested_from {
 // TODO considering using .value() instead of the current .into() which is more vague
 #[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
+    // TODO move immediate into expression? they're both identity-less, do we ever handle them differently?
     Immediate(Immediate),
     Global(Global),
     Scoped(Scoped),

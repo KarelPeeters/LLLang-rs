@@ -1,7 +1,7 @@
 use fixedbitset::FixedBitSet;
 
 use crate::mid::ir::{Block, Function, Program, Scoped, Value};
-use crate::util::{IndexMutTwice, VecExt};
+use crate::util::{IndexMutTwice, Never, NeverExt, VecExt};
 
 #[derive(Debug)]
 pub struct DomInfo {
@@ -13,9 +13,6 @@ pub struct DomInfo {
     parent: Vec<Option<usize>>,
 }
 
-#[derive(Debug)]
-enum Never {}
-
 impl DomInfo {
     //TODO this whole construction is a disaster, replace it with a better algorithm
     // also don't store all of this redundant state
@@ -26,8 +23,8 @@ impl DomInfo {
         let mut blocks = Vec::new();
         prog.try_visit_blocks(entry_block, |block| {
             blocks.push(block);
-            Ok::<(), Never>(())
-        }).unwrap();
+            Never::UNIT
+        }).no_err();
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());

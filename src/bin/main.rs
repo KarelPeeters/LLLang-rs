@@ -13,6 +13,7 @@ use itertools::Itertools;
 use walkdir::{DirEntry, WalkDir};
 
 use lllang::{front, mid};
+use lllang::back::x86_asm_select::lower_new;
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
@@ -229,6 +230,8 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
     }
     verify(&ir_program)?;
+
+    lower_new(&ir_program);
 
     todo!("backend")
 //     println!("----Backend----");
