@@ -343,6 +343,7 @@ pub enum InstructionInfo {
     /// Call `target` with arguments `args`.
     ///
     /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
+    // TODO add an expression variant of call that can't have have any side effects 
     Call { target: Value, args: Vec<Value> },
 
     /// Return `value` as-is.
@@ -759,6 +760,7 @@ impl Const {
 
 // Visits
 impl Program {
+    // TODO switch to using Try trait, or something custom that accepts (), Result and ControlFlow
     /// Visit the blocks reachable from `start` while staying within the same function.
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
         let mut blocks_left = VecDeque::new();
@@ -769,6 +771,24 @@ impl Program {
             if !blocks_seen.insert(block) { continue; }
 
             f(block)?;
+
+            let block_info = self.get_block(block);
+            block_info.terminator.for_each_successor(
+                |succ| blocks_left.push_back(succ));
+        }
+
+        Ok(())
+    }
+
+    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, start: Block, mut f: F) -> Result<(), E> {
+        let mut blocks_left = VecDeque::new();
+        let mut blocks_seen = HashSet::new();
+        blocks_left.push_front(start);
+
+        while let Some(block) = blocks_left.pop_front() {
+            if !blocks_seen.insert(block) { continue; }
+
+            f(self, block)?;
 
             let block_info = self.get_block(block);
             block_info.terminator.for_each_successor(

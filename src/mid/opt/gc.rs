@@ -52,7 +52,7 @@ impl Visitor for GcVisitor {
 fn collect_used(prog: &Program) -> VisitedResult {
     let mut state = VisitState::new(prog);
     state.add_values(prog.root_functions.values().copied());
-    state.run(GcVisitor)
+    state.run(&mut GcVisitor)
 }
 
 pub fn gc(prog: &mut Program) -> bool {

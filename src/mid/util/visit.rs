@@ -62,7 +62,7 @@ impl<'a> VisitState<'a> {
         }
     }
 
-    pub fn run(mut self, mut visitor: impl Visitor) -> VisitedResult {
+    pub fn run(mut self, visitor: &mut impl Visitor) -> VisitedResult {
         loop {
             if let Some(block) = self.todo_blocks.pop_front() {
                 visitor.visit_block(&mut self, block);
@@ -83,5 +83,13 @@ impl<'a> VisitState<'a> {
             visited_blocks: self.visited_blocks,
             visited_values: self.visited_values,
         }
+    }
+
+    pub fn has_visited_value(&self, value: impl Into<Value>) -> bool {
+        self.visited_values.contains(&value.into())
+    }
+
+    pub fn has_visited_block(&self, block: Block) -> bool {
+        self.visited_blocks.contains(&block)
     }
 }

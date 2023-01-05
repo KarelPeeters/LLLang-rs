@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::convert::identity;
+use std::fmt::Debug;
 
-use derive_more::Constructor;
-use itertools::Itertools;
+use fixedbitset::FixedBitSet;
 
-use crate::mid::analyse::use_info::{BlockUsage, for_each_usage_in_instr, Usage, UseInfo};
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, TypeInfo, Value};
+use crate::mid::analyse::usage::{BlockUsage, for_each_usage_in_expr, for_each_usage_in_instr, InstrOperand, Usage};
+use crate::mid::analyse::use_info::UseInfo;
+use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
 use crate::mid::util::visit::{Visitor, VisitState};
 use crate::util::VecExt;
 
@@ -14,32 +14,87 @@ use crate::util::VecExt;
 /// Removes unused:
 /// * function parameters and the corresponding call arguments
 /// * function slots
-/// * phi parameters and the corresponding terminator arguments
+/// * block parameters and the corresponding target arguments
 /// * instructions
+/// * TODO func return values
 ///
 /// Here unused is not just a simple "no usages", but a recursive "no usages with potential side-effects".
+///
+/// For functions used as non-call targets we have to keep the params,
+/// but in  calls to functions with dead params we still replace the corresponding args with undef.
 pub fn dce(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
-    let alive_values = find_alive_values(prog, &use_info);
-    let removed = remove_dead_values(prog, &use_info, &alive_values);
+    let alive = collect_alive(prog, &use_info);
+
+    let removed = remove_dead_values(prog, &use_info, &alive);
 
     println!("dce removed {:?}", removed);
     removed.total() > 0
 }
 
-fn find_alive_values(prog: &Program, use_info: &UseInfo) -> HashSet<Value> {
-    let mut state = VisitState::new(prog);
-    let visitor = DceVisitor::new(use_info);
-
-    state.add_value(prog.main);
-    let result = state.run(visitor);
-
-    result.visited_values
+struct Alive {
+    values: HashSet<Value>,
+    funcs_used_as_non_call_target: HashSet<Function>,
+    block_masks: HashMap<Block, FixedBitSet>,
 }
 
-#[derive(Constructor)]
+enum FuncParamMask<'a> {
+    RemoveKeep(&'a FixedBitSet),
+    ReplaceKeep(&'a FixedBitSet),
+    Full,
+}
+
+impl Alive {
+    fn is_alive(&self, value: impl Into<Value>) -> bool {
+        self.values.contains(&value.into())
+    }
+
+    fn block_param_mask(&self, block: Block) -> Option<&FixedBitSet> {
+        self.block_masks.get(&block)
+    }
+
+    fn func_param_mask(&self, func: Function, entry: Block) -> FuncParamMask {
+        match self.block_param_mask(entry) {
+            None => FuncParamMask::Full,
+            Some(mask) => {
+                let can_remove = !self.funcs_used_as_non_call_target.contains(&func);
+                if can_remove {
+                    FuncParamMask::RemoveKeep(mask)
+                } else {
+                    FuncParamMask::ReplaceKeep(mask)
+                }
+            }
+        }
+    }
+}
+
+fn collect_alive(prog: &Program, use_info: &UseInfo) -> Alive {
+    let mut state = VisitState::new(prog);
+    let mut visitor = DceVisitor::new(use_info);
+
+    visitor.add_values_target(&mut state, prog.root_functions.values().copied());
+    let result = state.run(&mut visitor);
+
+    let block_masks: HashMap<Block, FixedBitSet> = result.visited_blocks.iter()
+        .filter_map(|&block| {
+            calc_block_param_mask(prog, block, &result.visited_values)
+                .map(|used| (block, used))
+        })
+        .collect();
+
+    Alive {
+        values: result.visited_values,
+        funcs_used_as_non_call_target: visitor.funcs_used_as_non_call_target,
+        block_masks,
+    }
+}
+
 struct DceVisitor<'a> {
     use_info: &'a UseInfo,
+
+    // separately track which functions are used as non-call-targets
+    //   we don't rely on use_info for this since we can discover more of them
+    funcs_used_as_non_call_target: HashSet<Function>,
 }
 
 impl Visitor for DceVisitor<'_> {
@@ -48,58 +103,73 @@ impl Visitor for DceVisitor<'_> {
 
         match value {
             Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) | Value::Scoped(Scoped::Slot(_)) => {
-                // no additional handling (beyond maybe marking them as used, which already happens in add_value)
-                //   this also works for slots!
-                // TODO maybe only consider slots alive if they are actually loaded from or stored to?
+                // no additional handling (beyond marking them as used, which already happens in add_value)
             }
             Value::Global(Global::Func(func)) => {
-                let FunctionInfo {
-                    entry, params, slots,
-                    ty: _, func_ty: _, global_name: _, debug_name: _
+                // slots and func params (really block params) are tracked separately
+                let &FunctionInfo {
+                    entry, slots: _,
+                    ty: _, func_ty: _, debug_name: _
                 } = state.prog.get_func(func);
 
-                // slots, params and phi arguments are tracked separately
-                let _ = slots;
-                let _ = params;
-                let _ = entry.phi_values;
-
-                state.add_block(entry.block);
+                state.add_block(entry);
             }
             Value::Scoped(Scoped::Param(param)) => {
-                // find func and index of this param
-                // TODO this is slow and ugly
-                let (func, index) = prog.nodes.funcs.iter().find_map(|(func, func_info)| {
-                    func_info.params.index_of(&param).map(|index| (func, index))
-                }).unwrap();
+                let (func, block, index) = find_param_pos(prog, &param);
 
-                // mark corresponding call arguments as used
-                for &usage in &self.use_info[func] {
-                    if let Usage::CallTarget { pos } = usage {
-                        let args = unwrap_match!(
-                            prog.get_instr(pos.instr),
-                            InstructionInfo::Call { target: _, args } => args
-                        );
-                        state.add_value(args[index]);
+                if prog.get_func(func).entry == block {
+                    // this is a function param, visit the corresponding call args
+                    for usage in &self.use_info[func] {
+                        if let Usage::InstrOperand { pos, usage: InstrOperand::CallTarget } = usage {
+                            let args = unwrap_match!(
+                                prog.get_instr(pos.instr),
+                                InstructionInfo::Call { target: _, args } => args
+                            );
+
+                            self.add_value(state, args[index]);
+                        }
+                    }
+                } else {
+                    // this is a block param, visit the corresponding target args
+                    for &usage in &self.use_info[block] {
+                        let (pred, kind) = unwrap_match!(usage, BlockUsage::Target { pos, kind } => (pos, kind));
+                        let target = kind.get_target(&prog.get_block(pred.block).terminator);
+                        self.add_value(state, target.args[index]);
                     }
                 }
             }
-            Value::Scoped(Scoped::Phi(phi)) => {
-                // find block and index of this phi
-                // TODO this is slow and ugly
-                let (block, index) = prog.nodes.blocks.iter().find_map(|(block, block_info)| {
-                    block_info.phis.index_of(&phi).map(|index| (block, index))
-                }).unwrap();
+            Value::Scoped(Scoped::Instr(instr)) => {
+                let instr_info = prog.get_instr(instr);
 
-                // mark corresponding phi args as used
-                for &usage in &self.use_info[block] {
-                    let BlockUsage { target_kind } = usage;
-                    state.add_value(target_kind.get_target(prog).phi_values[index]);
+                match instr_info {
+                    &InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args } => {
+                        // value used as call target, so we don't need to mark all of the args as used
+                        self.add_value_target(state, func);
+
+                        // mark args that correspond to used params as used
+                        for (i, &arg) in args.iter().enumerate() {
+                            let param = prog.get_block(prog.get_func(func).entry).params[i];
+                            if state.has_visited_value(param) {
+                                self.add_value(state, arg);
+                            }
+                        }
+                    }
+                    _ => {
+                        // fallback, mark all operands as used
+                        for_each_usage_in_instr(prog.get_instr(instr), |operand, usage| {
+                            if matches!(usage, InstrOperand::CallTarget) {
+                                self.add_value_target(state, operand);
+                            } else {
+                                self.add_value(state, operand);
+                            }
+                        });
+                    }
                 }
             }
-            Value::Scoped(Scoped::Instr(instr)) => {
-                // mark operands as used
-                for_each_usage_in_instr((), prog.get_instr(instr), |operand, _usage| {
-                    state.add_value(operand);
+            Value::Expr(expr) => {
+                // mark all operands as used
+                for_each_usage_in_expr(prog.get_expr(expr), |operand, _| {
+                    self.add_value(state, operand);
                 });
             }
         }
@@ -108,31 +178,29 @@ impl Visitor for DceVisitor<'_> {
     fn visit_block(&mut self, state: &mut VisitState, block: Block) {
         let prog = state.prog;
 
-        let BlockInfo { phis, instructions, terminator } = state.prog.get_block(block);
-
-        // phy parameters are tracked separately
-        let _ = phis;
+        // block params are tracked separately
+        let BlockInfo { params: _, instructions, terminator } = state.prog.get_block(block);
 
         // mark side effect instructions as used
         for &instr in instructions {
             if instr_has_side_effect(prog, instr) {
-                state.add_value(instr);
+                self.add_value(state, instr);
             }
         }
 
         // mark successor block as used
-        // phy arguments are tracked separately
+        // block args are tracked separately
         match *terminator {
             Terminator::Jump { ref target } => {
                 state.add_block(target.block);
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
-                state.add_value(cond);
+                self.add_value(state, cond);
                 state.add_block(true_target.block);
                 state.add_block(false_target.block);
             }
             Terminator::Return { value } => {
-                state.add_value(value);
+                self.add_value(state, value);
             }
             Terminator::Unreachable => {}
         }
@@ -143,130 +211,201 @@ impl Visitor for DceVisitor<'_> {
     }
 }
 
+// TODO it's kind of awkward that we have to remember to use these functions instead of the state ones
+//    (aka default unsafe), is there a better way to do this? maybe make visitor usage-aware?
+impl<'a> DceVisitor<'a> {
+    pub fn new(use_info: &'a UseInfo) -> Self {
+        Self {
+            use_info,
+            funcs_used_as_non_call_target: Default::default(),
+        }
+    }
+
+    fn add_value_target(&mut self, state: &mut VisitState, value: impl Into<Value>) {
+        state.add_value(value);
+    }
+
+    pub fn add_values_target<I: Into<Value>>(&mut self, state: &mut VisitState, values: impl IntoIterator<Item=I>) {
+        state.add_values(values);
+    }
+
+    fn add_value(&mut self, state: &mut VisitState, value: impl Into<Value>) {
+        let value = value.into();
+
+        // add the value as normal
+        state.add_value(value);
+
+        // potentially mark the function as used as non-call-target
+        if let Some(func) = value.as_func() {
+            self.funcs_used_as_non_call_target.insert(func);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn add_values<I: Into<Value>>(&mut self, state: &mut VisitState, values: impl IntoIterator<Item=I>) {
+        for value in values {
+            self.add_value(state, value.into());
+        }
+    }
+}
+
+// TODO this is slow and ugly
+fn find_param_pos(prog: &Program, param: &Parameter) -> (Function, Block, usize) {
+    prog.nodes.funcs.iter().find_map(|(func, func_info)| {
+        prog.try_visit_blocks(func_info.entry, |block| {
+            let block_info = prog.get_block(block);
+            match block_info.params.index_of(param) {
+                Some(index) => Err((func, block, index)),
+                None => Ok(())
+            }
+        }).err()
+    }).unwrap()
+}
+
 fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
     match prog.get_instr(instr) {
         InstructionInfo::Load { addr: _, ty: _ } => false,
-        InstructionInfo::Store { addr: _, ty, value: _ } => {
-            *ty != prog.ty_void()
-        }
-
-        InstructionInfo::Call { target: _, args: _ } => {
-            // TODO somehow track side effects for a function?
-            true
-        }
-
-        InstructionInfo::Arithmetic { kind: _, left: _, right: _ } => false,
-        InstructionInfo::Comparison { kind: _, left: _, right: _ } => false,
-        InstructionInfo::TupleFieldPtr { base: _, index: _, tuple_ty: _ } => false,
-        InstructionInfo::PointerOffSet { ty: _, base: _, index: _ } => false,
-        InstructionInfo::Cast { ty: _, kind: _, value: _ } => false,
-        InstructionInfo::BlackBox { .. } => true,
+        InstructionInfo::Store { addr: _, ty, value: _ } => *ty != prog.ty_void(),
+        InstructionInfo::Call { target: _, args: _ } => true,
+        InstructionInfo::BlackBox { value: _ } => true,
     }
 }
 
 #[derive(Debug, Default)]
 struct Removed {
-    params: usize,
-    args: usize,
     slots: usize,
-    phi_params: usize,
-    phi_args: usize,
     instrs: usize,
+
+    func_params: usize,
+    call_args: usize,
+    call_args_undef: usize,
+
+    block_params: usize,
+    target_args: usize,
 }
 
-fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive_values: &HashSet<Value>) -> Removed {
+fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive: &Alive) -> Removed {
     let mut removed = Removed::default();
 
-    let param_masks: HashMap<Function, Vec<bool>> = calc_param_masks(prog, use_info, alive_values);
-
-    for block in use_info.blocks() {
-        // figure out which phis are alive
-        let phi_mask = prog.get_block(block).phis.iter()
-            .map(|&phi| {
-                alive_values.contains(&phi.into())
-            })
-            .collect_vec();
-
-        // remove all dead phi args from targets pointing to this block
-        for usage in &use_info[block] {
-            let BlockUsage { target_kind } = usage;
-            let target = target_kind.get_target_mut(prog);
-            removed.phi_args += retain_mask(&mut target.phi_values, &phi_mask);
+    for func in use_info.funcs() {
+        // don't bother fixing dead functions
+        // TODO maybe we should, otherwise verify can fail?
+        if !alive.is_alive(func) {
+            continue;
         }
 
-        // remove the phi params of this block itself
-        removed.phi_params += retain_mask(&mut prog.get_block_mut(block).phis, &phi_mask);
+        let FunctionInfo { ty, func_ty, slots, entry, debug_name: _ } =
+            &mut prog.nodes.funcs[func];
+        let entry = *entry;
 
-        // remove dead instructions (and dead call args)
-        let block_info = &mut prog.nodes.blocks[block];
-        let prog_instrs = &mut prog.nodes.instrs;
-        block_info.instructions.retain(|&instr| {
-            let keep = alive_values.contains(&instr.into());
-            if keep {
-                // potentially remove dead call args
-                if let InstructionInfo::Call { target: Value::Global(Global::Func(target)), args } = &mut prog_instrs[instr] {
-                    if let Some(arg_mask) = param_masks.get(target) {
-                        removed.args += retain_mask(args, arg_mask);
-                    }
-                }
-            }
-            removed.instrs += !keep as usize;
+        // remove dead slots
+        slots.retain(|&slot| {
+            let keep = alive.is_alive(slot);
+            removed.slots += !keep as usize;
             keep
         });
-    }
 
-    for (func, func_info) in prog.nodes.funcs.iter_mut() {
-        let FunctionInfo {
-            ty, func_ty,
-            global_name: _, debug_name: _, entry: _,
-            params, slots
-        } = func_info;
-
-        // remove dead function params
-        if let Some(param_mask) = param_masks.get(&func) {
-            removed.params += retain_mask(params, param_mask);
-
-            // also change function type
+        // update the function type
+        if let FuncParamMask::RemoveKeep(param_mask) = alive.func_param_mask(func, entry) {
             let mut new_func_ty = func_ty.clone();
-            retain_mask(&mut new_func_ty.params, param_mask);
+            let _ = retain_mask(&mut new_func_ty.params, param_mask);
             let new_ty = prog.types.push(TypeInfo::Func(new_func_ty.clone()));
 
             *ty = new_ty;
             *func_ty = new_func_ty;
         }
 
-        // remove dead slots
-        slots.retain(|&slot| {
-            let keep = alive_values.contains(&slot.into());
-            removed.slots += !keep as usize;
-            keep
-        })
+        let func_used_as_non_call_target = alive.funcs_used_as_non_call_target.contains(&func);
+
+        prog.try_visit_blocks_mut(entry, |prog, block| {
+            let keep_params = block == entry && func_used_as_non_call_target;
+            remove_dead_values_from_block(prog, &mut removed, alive, block, keep_params);
+            Ok::<(), ()>(())
+        }).unwrap();
     }
 
     removed
 }
 
-/// Calculate which parameters to keep for the given function.
-/// If a function is not present all its parameters should be kept.
-fn calc_param_masks(prog: &mut Program, use_info: &UseInfo, alive_values: &HashSet<Value>) -> HashMap<Function, Vec<bool>> {
-    prog.nodes.funcs.iter().filter_map(|(func, func_info)| {
-        if use_info.function_only_used_as_call_target(func) {
-            let mask = func_info.params.iter()
-                .map(|&param| alive_values.contains(&param.into()))
-                .collect_vec();
+fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, alive: &Alive, block: Block, keep_params: bool) {
+    let prog_instrs = &mut prog.nodes.instrs;
+    let prog_blocks = &mut prog.nodes.blocks;
+    let prog_funcs = &mut prog.nodes.funcs;
 
-            if mask.iter().copied().all(identity) {
-                None
-            } else {
-                Some((func, mask))
-            }
-        } else {
-            None
+    let BlockInfo { params, instructions, terminator } = &mut prog_blocks[block];
+
+    // remove block params if we're allowed to
+    if !keep_params {
+        if let Some(block_mask) = alive.block_param_mask(block) {
+            removed.block_params += retain_mask(params, block_mask);
         }
-    }).collect()
+    }
+
+    // remove dead instructions and dead call args
+    instructions.retain(|&instr| {
+        let keep = alive.is_alive(instr);
+
+        if keep {
+            // only consider instructions that we're going to keep
+            let instr_info = &mut prog_instrs[instr];
+
+            // is this is a call to a function
+            if let &mut InstructionInfo::Call { target: Value::Global(Global::Func(target)), ref mut args } = instr_info {
+                let target_info = &prog_funcs[target];
+
+                // remove or replace dead params if any
+                match alive.func_param_mask(target, target_info.entry) {
+                    FuncParamMask::RemoveKeep(mask) => {
+                        // we can just remove the args
+                        removed.call_args += retain_mask(args, mask);
+                    }
+                    FuncParamMask::ReplaceKeep(mask) => {
+                        // we can't actually remove the args, but we can replace them with undef
+                        for (i, arg) in args.iter_mut().enumerate() {
+                            if !mask[i] && !arg.is_undef() {
+                                let ty = target_info.func_ty.params[i];
+                                *arg = Immediate::Undef(ty).into();
+                                removed.call_args_undef += 1;
+                            }
+                        }
+                    }
+                    FuncParamMask::Full => {
+                        // we can't do anything
+                    }
+                }
+            }
+        }
+
+        removed.instrs += !keep as usize;
+        keep
+    });
+
+    // remove dead target args
+    terminator.for_each_target_mut(|target| {
+        let &mut Target { block: target_block, ref mut args } = target;
+        if let Some(target_mask) = alive.block_param_mask(target_block) {
+            removed.target_args += retain_mask(args, target_mask);
+        }
+    })
 }
 
-fn retain_mask<T>(values: &mut Vec<T>, mask: &[bool]) -> usize {
+fn calc_block_param_mask(prog: &Program, block: Block, alive: &HashSet<Value>) -> Option<FixedBitSet> {
+    let params = &prog.get_block(block).params;
+
+    let mut used = FixedBitSet::with_capacity(params.len());
+    for (i, &param) in params.iter().enumerate() {
+        used.set(i, alive.contains(&param.into()));
+    }
+
+    if used.count_ones(..) == used.len() {
+        None
+    } else {
+        Some(used)
+    }
+}
+
+#[must_use]
+fn retain_mask<T: Debug>(values: &mut Vec<T>, mask: &FixedBitSet) -> usize {
     assert_eq!(values.len(), mask.len());
 
     let mut count = 0;
@@ -284,10 +423,7 @@ fn retain_mask<T>(values: &mut Vec<T>, mask: &[bool]) -> usize {
 
 impl Removed {
     fn total(&self) -> usize {
-        let &Removed {
-            params, args, slots, phi_params, phi_args, instrs
-        } = self;
-
-        params + args + slots + phi_params + phi_args + instrs
+        let &Removed { slots, instrs, func_params, call_args, call_args_undef, block_params, target_args } = self;
+        slots + instrs + func_params + call_args + call_args_undef + block_params + target_args
     }
 }
