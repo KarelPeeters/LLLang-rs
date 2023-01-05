@@ -1,26 +1,21 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 
-use derive_more::From;
 use regalloc2::{Inst, InstRange, Operand, PRegSet, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
 
-use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Const, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
+use crate::back::vcode::{InstInfo, VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
+use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
-use crate::util::arena::IndexType;
 
 pub fn lower_new(prog: &Program) -> String {
     let mut symbols = Symbols::default();
 
     for (func, _) in &prog.nodes.funcs {
         println!("Func {:?}", func);
-        let mut v_blocks = vec![];
 
         let func_info = prog.get_func(func);
         let mut mapper = VRegMapper::default();
-
-        let mut v_instructions = vec![];
 
         prog.try_visit_blocks(func_info.entry, |block| {
             println!("  Block {:?}", block);
@@ -43,10 +38,6 @@ pub fn lower_new(prog: &Program) -> String {
 
             Never::UNIT
         }).no_err();
-
-        v_blocks.push(VBlock {
-            instructions: v_instructions,
-        })
     }
 
     println!("Exiting process");
@@ -55,36 +46,6 @@ pub fn lower_new(prog: &Program) -> String {
 
 struct VBlock {
     instructions: Vec<VInstruction>,
-}
-
-// TODO find proper names for these instructions
-#[derive(Debug)]
-enum VInstruction {
-    DummyDef(VReg),
-
-    // read as "move into .. from .."
-    MovReg(VReg, VopRCM),
-    MovMem(VMem, VopRC),
-
-    // args are "target = left (+) right"
-    // target and left must be the same register, this is handled with a register allocation constraint
-    Binary(&'static str, VReg, VReg, VopRCM),
-
-    Cmp(VReg, VopRCM),
-    Test(VReg, VopRCM),
-
-    Setcc(&'static str, VopRM),
-
-    Jump(VTarget),
-    Branch(VReg, VTarget, VTarget),
-    Return(Option<VReg>),
-    Unreachable,
-}
-
-#[derive(Debug)]
-struct VTarget {
-    block: String,
-    args: Vec<VReg>,
 }
 
 #[derive(Default)]
@@ -98,11 +59,11 @@ struct Symbols {
 }
 
 impl Symbols {
-    fn map_global(&mut self, value: Global) -> String {
-        let (prefix, next) = match value {
-            Global::Func(_) => ("func", &mut self.next_func),
-            Global::Extern(_) => ("ext", &mut self.next_ext),
-            Global::Data(_) => ("data", &mut self.next_data),
+    fn map_global(&mut self, value: Global) -> VSymbol {
+        let (build, next): (fn(usize) -> VSymbol, &mut usize) = match value {
+            Global::Func(_) => (VSymbol::Func, &mut self.next_func),
+            Global::Extern(_) => (VSymbol::Ext, &mut self.next_ext),
+            Global::Data(_) => (VSymbol::Data, &mut self.next_data),
         };
 
         let id = *self.globals.entry(value).or_insert_with(|| {
@@ -111,88 +72,13 @@ impl Symbols {
             curr
         });
 
-        format!("{}_{}", prefix, id)
+        build(id)
     }
 
-    fn map_block(&mut self, block: Block) -> String {
+    fn map_block(&mut self, block: Block) -> VSymbol {
         let next = self.blocks.len();
         let id = *self.blocks.entry(block).or_insert(next);
-        format!("block_{}", id)
-    }
-}
-
-#[derive(Debug, From)]
-enum VopRC {
-    Reg(VReg),
-    Const(VConst),
-}
-
-#[derive(Debug, From)]
-enum VopRM {
-    Reg(VReg),
-    Mem(VMem),
-}
-
-#[derive(Debug, From)]
-enum VopRCM {
-    Reg(VReg),
-    Const(VConst),
-    Mem(VMem),
-}
-
-#[derive(Debug, From)]
-enum VConst {
-    Const(Const),
-    Symbol(String),
-}
-
-#[derive(Debug)]
-struct VMem {
-    reg: VReg,
-    offset: isize,
-}
-
-impl VMem {
-    pub fn at_offset(reg: VReg, offset: isize) -> Self {
-        VMem { reg, offset }
-    }
-
-    pub fn at(reg: VReg) -> Self {
-        VMem { reg, offset: 0 }
-    }
-}
-
-#[derive(Default)]
-struct VRegMapper {
-    next_vreg: usize,
-    value_map: HashMap<Value, VReg>,
-}
-
-impl VRegMapper {
-    fn new_vreg(&mut self) -> VReg {
-        let index = self.next_vreg;
-        self.next_vreg += 1;
-        VReg::new(index, RegClass::Int)
-    }
-
-    fn get_or_new(&mut self, value: Value) -> VReg {
-        let next_vreg = &mut self.next_vreg;
-        *self.value_map.entry(value).or_insert_with(|| {
-            let index = *next_vreg;
-            *next_vreg += 1;
-            let reg = VReg::new(index, RegClass::Int);
-
-            println!("      Mapping {:?} to {:?}", value, reg);
-            reg
-        })
-    }
-
-    fn map_param(&mut self, param: Parameter) -> VReg {
-        self.get_or_new(param.into())
-    }
-
-    fn map_instr(&mut self, instr: Instruction) -> VReg {
-        self.get_or_new(instr.into())
+        VSymbol::Block(id)
     }
 }
 
@@ -210,6 +96,8 @@ struct Void;
 impl VBuilder<'_> {
     fn push(&mut self, instr: VInstruction) {
         println!("    push {:?}", instr);
+        let info = instr.to_inst_info();
+        println!("      {:?}  {:?}", info.operands, info.branch_block_params);
         self.instructions.push(instr);
     }
 
@@ -336,7 +224,7 @@ impl VBuilder<'_> {
 
                 result
             }
-            ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } => todo!("TupleFieldPtr"),
+            ExpressionInfo::TupleFieldPtr { .. } => todo!("TupleFieldPtr"),
             ExpressionInfo::PointerOffSet { .. } => todo!("PointerOffSet"),
             ExpressionInfo::Cast { .. } => todo!("Cast"),
         };
@@ -409,20 +297,6 @@ struct FuncWrapper {
     _mapper: VRegMapper,
 }
 
-struct InstInfo {
-    // ret/unreachable -> ret
-    is_ret: bool,
-    // jump/branch -> branch
-    is_branch: bool,
-
-    // TODO figure out when this should be set, maybe for stack loads/stores?
-    is_move: Option<(Operand, Operand)>,
-    operands: Vec<Operand>,
-    clobbers: PRegSet,
-
-    branch_blockparams: Vec<Vec<VReg>>,
-}
-
 struct R2BlockInfo {
     inst_range: InstRange,
     succs: Vec<r2::Block>,
@@ -468,7 +342,7 @@ impl r2::Function for FuncWrapper {
     }
 
     fn branch_blockparams(&self, _: r2::Block, inst: Inst, succ_idx: usize) -> &[VReg] {
-        &self.insts[inst.0 as usize].branch_blockparams[succ_idx]
+        &self.insts[inst.0 as usize].branch_block_params[succ_idx]
     }
 
     fn is_move(&self, inst: Inst) -> Option<(Operand, Operand)> {
@@ -490,5 +364,39 @@ impl r2::Function for FuncWrapper {
     fn spillslot_size(&self, _: RegClass) -> usize {
         // TODO figure out what this is
         1
+    }
+}
+
+#[derive(Default)]
+pub struct VRegMapper {
+    next_vreg: usize,
+    value_map: HashMap<Value, VReg>,
+}
+
+impl VRegMapper {
+    fn new_vreg(&mut self) -> VReg {
+        let index = self.next_vreg;
+        self.next_vreg += 1;
+        VReg::new(index, RegClass::Int)
+    }
+
+    fn get_or_new(&mut self, value: Value) -> VReg {
+        let next_vreg = &mut self.next_vreg;
+        *self.value_map.entry(value).or_insert_with(|| {
+            let index = *next_vreg;
+            *next_vreg += 1;
+            let reg = VReg::new(index, RegClass::Int);
+
+            println!("      Mapping {:?} to {:?}", value, reg);
+            reg
+        })
+    }
+
+    fn map_param(&mut self, param: Parameter) -> VReg {
+        self.get_or_new(param.into())
+    }
+
+    fn map_instr(&mut self, instr: Instruction) -> VReg {
+        self.get_or_new(instr.into())
     }
 }
