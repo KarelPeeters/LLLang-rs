@@ -148,8 +148,8 @@ impl VInstruction {
         let mut operands = Operands::default();
 
         match *self {
-            VInstruction::DummyDef(target) => {
-                operands.push_def(target);
+            VInstruction::DummyDef(result) => {
+                operands.push_def(result);
             }
             VInstruction::MovReg(target, source) => {
                 operands.push_use(source);
@@ -159,17 +159,17 @@ impl VInstruction {
                 operands.push_use(source);
                 operands.push_def(target);
             }
-            VInstruction::Binary(_instr, target, left, right) => {
+            VInstruction::Binary(_instr, result, left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
-                operands.push(Operand::reg_reuse_def(target, 0));
+                operands.push(Operand::reg_reuse_def(result, 0));
             }
             VInstruction::Cmp(left, right) | VInstruction::Test(left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
             }
-            VInstruction::Setcc(_instr, input) => {
-                operands.push_use(input);
+            VInstruction::Setcc(_instr, result) => {
+                operands.push_def(result);
             }
 
             VInstruction::Jump(ref target) => {

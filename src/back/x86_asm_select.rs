@@ -153,7 +153,8 @@ impl VBuilder<'_> {
     fn push(&mut self, instr: VInstruction) {
         println!("    push {:?}", instr);
         let info = instr.to_inst_info();
-        println!("      {:?}  {:?}", info.operands, info.branch_block_params);
+        println!("      args: {:?}  {:?}", info.operands, info.branch_block_params);
+        println!("      as {:?}", Inst::new(self.instructions.len()));
         self.instructions.push(instr);
     }
 
