@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fmt::Write;
 
 use derive_more::From;
-use regalloc2::{Allocation, Operand, PReg, PRegSet, VReg};
+use regalloc2::{Allocation, Operand, PReg, PRegSet, RegClass, VReg};
 
 use crate::mid::ir::Const;
 
@@ -231,7 +231,8 @@ impl VInstruction {
             }
             VInstruction::Return(value) => {
                 if let Some(value) = value {
-                    operands.push_use(value);
+                    let eax = PReg::new(0, RegClass::Int);
+                    operands.push(Operand::reg_fixed_use(value, eax));
                 }
                 return InstInfo::ret(operands);
             }
