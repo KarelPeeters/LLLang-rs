@@ -201,6 +201,10 @@ impl VInstruction {
                 operands.push_def(dest);
             }
             VInstruction::MovReg(dest, source) => {
+                if let VopRCM::Reg(source) = source {
+                    return InstInfo::mov(Operand::reg_def(dest), Operand::reg_use(source));
+                }
+
                 operands.push_use(source);
                 operands.push_def(dest);
             }
@@ -340,6 +344,18 @@ impl InstInfo {
             is_move: None,
             operands,
             clobbers,
+            branch_block_params: vec![],
+        }
+    }
+
+    fn mov(dest: Operand, source: Operand) -> Self {
+        InstInfo {
+            is_ret: false,
+            is_branch: false,
+            // order is source,dest
+            is_move: Some((source, dest)),
+            operands: vec![dest, source],
+            clobbers: PRegSet::default(),
             branch_block_params: vec![],
         }
     }

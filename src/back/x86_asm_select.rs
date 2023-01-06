@@ -124,11 +124,19 @@ pub fn lower_new(prog: &mut Program) -> String {
             let inst_operands = func_wrapper.inst_operands(inst);
             let inst_allocs = result.inst_allocs(inst);
 
+            println!("inst {:?} operands {:?} allocs {:?}", inst, inst_operands, inst_allocs);
+
             assert_eq!(inst_operands.len(), inst_allocs.len());
             for (operand, &alloc) in zip(inst_operands, inst_allocs) {
-                vreg_allocs[operand.vreg().vreg()] = alloc;
+                if !alloc.is_none() {
+                    let slot = &mut vreg_allocs[operand.vreg().vreg()];
+                    assert!(slot.is_none() || *slot == alloc);
+                     *slot = alloc;
+                }
             }
         }
+
+        println!("{:?}", vreg_allocs);
 
         // actually generate code
         output.appendln(format_args!("{}:", symbols.map_global(func)));
@@ -141,7 +149,8 @@ pub fn lower_new(prog: &mut Program) -> String {
                 match inst {
                     InstOrEdit::Inst(inst) => {
                         let v_inst = &func_wrapper.v_instructions[inst.index()];
-                        output.append_v_inst(v_inst, &vreg_allocs, result.inst_allocs(inst));
+                        let inst_allocs = result.inst_allocs(inst);
+                        output.append_v_inst(v_inst, &vreg_allocs, inst_allocs);
                     }
                     InstOrEdit::Edit(edit) => {
                         let Edit::Move { from, to } = edit;
@@ -186,6 +195,13 @@ impl Output {
     fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &[Allocation], inst_allocs: &[Allocation]) {
         self.appendln(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
 
+        // moves that should be skipped get "none" as operands
+        if inst_allocs.iter().any(|a| a.is_none()) {
+            assert!(v_inst.to_inst_info().is_move.is_some());
+            return;
+        }
+
+        // append the actual code
         let result = v_inst.to_asm(allocs);
         for line in result.lines() {
             self.appendln(format_args!("    {}", line.trim()));
