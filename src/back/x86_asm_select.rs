@@ -3,11 +3,11 @@ use std::fmt::{Display, Write};
 use std::iter::zip;
 
 use env_logger::Builder;
+use indexmap::IndexMap;
 use itertools::Itertools;
 use log::LevelFilter;
 use regalloc2::{Allocation, Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
-use regalloc2::Function as _;
 use regalloc2::VReg;
 
 use crate::back::vcode::{InstInfo, preg_to_asm, VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
@@ -26,7 +26,7 @@ pub fn lower_new(prog: &mut Program) -> String {
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
 
-    let mut output = Output::new(false);
+    let mut output = Output::new(true);
 
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("_main:");
@@ -116,30 +116,10 @@ pub fn lower_new(prog: &mut Program) -> String {
         let result = r2::run(&func_wrapper, &env, &options).unwrap();
         println!("{:?}", result);
 
-        // recover register allocation in a more convenient format
-        let mut vreg_allocs = vec![Allocation::none(); func_wrapper.vregs];
-        for inst in 0..func_wrapper.num_insts() {
-            let inst = Inst::new(inst);
-
-            let inst_operands = func_wrapper.inst_operands(inst);
-            let inst_allocs = result.inst_allocs(inst);
-
-            println!("inst {:?} operands {:?} allocs {:?}", inst, inst_operands, inst_allocs);
-
-            assert_eq!(inst_operands.len(), inst_allocs.len());
-            for (operand, &alloc) in zip(inst_operands, inst_allocs) {
-                if !alloc.is_none() {
-                    let slot = &mut vreg_allocs[operand.vreg().vreg()];
-                    assert!(slot.is_none() || *slot == alloc);
-                     *slot = alloc;
-                }
-            }
-        }
-
-        println!("{:?}", vreg_allocs);
-
         // actually generate code
         output.appendln(format_args!("{}:", symbols.map_global(func)));
+
+        let mut allocs = Allocs::default();
 
         for &block in &blocks_ordered {
             let block_mapped = symbols.map_block(block);
@@ -149,8 +129,17 @@ pub fn lower_new(prog: &mut Program) -> String {
                 match inst {
                     InstOrEdit::Inst(inst) => {
                         let v_inst = &func_wrapper.v_instructions[inst.index()];
+
                         let inst_allocs = result.inst_allocs(inst);
-                        output.append_v_inst(v_inst, &vreg_allocs, inst_allocs);
+                        let inst_operands = &func_wrapper.inst_infos[inst.index()].operands;
+                        assert_eq!(inst_allocs.len(), inst_operands.len());
+
+                        allocs.inner.clear();
+                        for (&operand, &alloc) in zip(inst_operands, inst_allocs) {
+                            allocs.inner.insert(operand.vreg(), alloc);
+                        }
+
+                        output.append_v_inst(v_inst, &allocs);
                     }
                     InstOrEdit::Edit(edit) => {
                         let Edit::Move { from, to } = edit;
@@ -187,6 +176,18 @@ struct Output {
     comments: bool,
 }
 
+#[derive(Default)]
+pub struct Allocs {
+    // TODO maybe just replace this with a vec, it's going to be tiny anyways
+    inner: IndexMap<VReg, Allocation>,
+}
+
+impl Allocs {
+    pub fn map_reg(&self, reg: VReg) -> PReg {
+        self.inner.get(&reg).unwrap().as_reg().unwrap()
+    }
+}
+
 impl Output {
     fn new(comments: bool) -> Self {
         Output {
@@ -206,11 +207,11 @@ impl Output {
         writeln!(&mut self.text, "{}", f).unwrap();
     }
 
-    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &[Allocation], inst_allocs: &[Allocation]) {
-        self.comment(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
+    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &Allocs) {
+        self.comment(format_args!("    ; {:?} {:?}", v_inst, allocs.inner));
 
         // moves that should be skipped get "none" as operands
-        if inst_allocs.iter().any(|a| a.is_none()) {
+        if allocs.inner.values().any(|a| a.is_none()) {
             assert!(v_inst.to_inst_info().is_move.is_some());
             return;
         }
@@ -430,16 +431,17 @@ impl VBuilder<'_> {
                     ComparisonOp::Lte(Signed::Unsigned) => "setbe",
                 };
 
-                let result = self.vregs.new_vreg();
+                let before = self.vregs.new_vreg();
+                let after = self.vregs.new_vreg();
                 let left = self.append_value_to_reg(left);
                 let right = self.append_value_to_rcm(right);
 
-                // the second instr uses the flags set by the first
-                // the register allocator can insert moves between them, but those don't affect the flags
+                // moves potentially inserted by register allocation can't change the flags
+                self.push(VInstruction::Clear(before));
                 self.push(VInstruction::Cmp(left, right));
-                self.push(VInstruction::Setcc(set_instr, result));
+                self.push(VInstruction::Setcc(set_instr, after, before));
 
-                result
+                before
             }
             ExpressionInfo::TupleFieldPtr { .. } => todo!("TupleFieldPtr"),
             ExpressionInfo::PointerOffSet { .. } => todo!("PointerOffSet"),

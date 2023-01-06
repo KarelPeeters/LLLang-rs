@@ -3,14 +3,18 @@ use std::fmt::{Display, Formatter};
 use std::fmt::Write;
 
 use derive_more::From;
-use regalloc2::{Allocation, Operand, PReg, PRegSet, RegClass, VReg};
+use regalloc2::{Operand, PReg, PRegSet, RegClass, VReg};
 
+use crate::back::x86_asm_select::Allocs;
 use crate::mid::ir::Const;
 
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
 pub enum VInstruction {
     DummyDef(VReg),
+
+    // set the given register to zero
+    Clear(VReg),
 
     // read as "move into .. from .."
     MovReg(VReg, VopRCM),
@@ -24,7 +28,7 @@ pub enum VInstruction {
     Test(VReg, VopRCM),
 
     // TODO allow mem operand here
-    Setcc(&'static str, VReg),
+    Setcc(&'static str, VReg, VReg),
 
     Jump(VTarget),
 
@@ -128,7 +132,7 @@ impl From<VopRC> for VopRCM {
 
 pub trait VOperand {
     fn for_each_reg(&self, f: impl FnMut(RegOperand));
-    fn to_asm(&self, allocs: &[Allocation]) -> String;
+    fn to_asm(&self, allocs: &Allocs) -> String;
 }
 
 impl VOperand for VMem {
@@ -136,7 +140,7 @@ impl VOperand for VMem {
         f(RegOperand::Use(self.reg));
     }
 
-    fn to_asm(&self, allocs: &[Allocation]) -> String {
+    fn to_asm(&self, allocs: &Allocs) -> String {
         let &VMem { reg, offset } = self;
 
         let reg = reg.to_asm(allocs);
@@ -157,10 +161,10 @@ impl VOperand for VopRCM {
         }
     }
 
-    fn to_asm(&self, allocs: &[Allocation]) -> String {
+    fn to_asm(&self, allocs: &Allocs) -> String {
         match *self {
             VopRCM::Reg(reg) => {
-                let preg = allocs[reg.vreg()].as_reg().unwrap();
+                let preg = allocs.map_reg(reg);
                 preg_to_asm(preg).to_string()
             }
             VopRCM::Const(cst) => cst.to_asm(),
@@ -182,7 +186,7 @@ macro_rules! impl_vop_for {
             fn for_each_reg(&self, f: impl FnMut(RegOperand)) {
                 VopRCM::from(*self).for_each_reg(f)
             }
-            fn to_asm(&self, allocs: &[Allocation]) -> String {
+            fn to_asm(&self, allocs: &Allocs) -> String {
                 VopRCM::from(*self).to_asm(allocs)
             }
         }
@@ -198,6 +202,9 @@ impl VInstruction {
 
         match *self {
             VInstruction::DummyDef(dest) => {
+                operands.push_def(dest);
+            }
+            VInstruction::Clear(dest) => {
                 operands.push_def(dest);
             }
             VInstruction::MovReg(dest, source) => {
@@ -221,8 +228,10 @@ impl VInstruction {
                 operands.push_use(left);
                 operands.push_use(right);
             }
-            VInstruction::Setcc(_instr, dest) => {
-                operands.push_def(dest);
+            VInstruction::Setcc(_instr, dest, src) => {
+                // setcc doesn't modify the upper bits of the register, so just adding a def is not enough
+                operands.push(Operand::reg_reuse_def(dest, 1));
+                operands.push_use(src);
             }
 
             VInstruction::Jump(ref target) => {
@@ -248,24 +257,30 @@ impl VInstruction {
         InstInfo::simple(operands)
     }
 
-    pub fn to_asm(&self, allocs: &[Allocation]) -> String {
+    pub fn to_asm(&self, allocs: &Allocs) -> String {
         match *self {
             VInstruction::DummyDef(reg) =>
                 format!("; dummy {:?}", reg.to_asm(allocs)),
+            VInstruction::Clear(dest) => {
+                let dest = dest.to_asm(allocs);
+                format!("xor {}, {}", dest, dest)
+            }
             VInstruction::MovReg(dest, source) =>
                 format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
             VInstruction::MovMem(dest, source) =>
                 format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
-            VInstruction::Binary(instr, target, left, right) => {
-                assert_eq!(allocs[target.vreg()], allocs[left.vreg()]);
+            VInstruction::Binary(instr, dest, left, right) => {
+                assert_eq!(allocs.map_reg(dest), allocs.map_reg(left));
                 format!("{} {}, {}", instr, left.to_asm(allocs), right.to_asm(allocs))
             }
             VInstruction::Cmp(left, right) =>
                 format!("cmp {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
             VInstruction::Test(left, right) =>
                 format!("test {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
-            VInstruction::Setcc(instr, dest) =>
-                format!("{} {}", instr, REG_NAMES_BYTE[allocs[dest.vreg()].as_reg().unwrap().index()]),
+            VInstruction::Setcc(instr, dest, source) => {
+                assert_eq!(allocs.map_reg(dest), allocs.map_reg(source));
+                format!("{} {}", instr, REG_NAMES_BYTE[allocs.map_reg(dest).index()])
+            }
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", target.block),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
