@@ -26,7 +26,7 @@ pub fn lower_new(prog: &mut Program) -> String {
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
 
-    let mut output = Output::default();
+    let mut output = Output::new(false);
 
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("_main:");
@@ -156,7 +156,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                         let Edit::Move { from, to } = edit;
                         let to = preg_to_asm(to.as_reg().unwrap());
                         let from = preg_to_asm(from.as_reg().unwrap());
-                        output.appendln(format_args!("    ; {:?}", edit));
+                        output.comment(format_args!("    ; {:?}", edit));
                         output.appendln(format_args!("    mov {}, {}", to, from));
                     }
                 }
@@ -181,19 +181,33 @@ pub fn lower_new(prog: &mut Program) -> String {
     output.finish()
 }
 
-#[derive(Default)]
 struct Output {
     header: String,
     text: String,
+    comments: bool,
 }
 
 impl Output {
+    fn new(comments: bool) -> Self {
+        Output {
+            header: String::new(),
+            text: String::new(),
+            comments,
+        }
+    }
+
+    fn comment(&mut self, f: impl Display) {
+        if self.comments {
+            self.appendln(f);
+        }
+    }
+
     fn appendln(&mut self, f: impl Display) {
         writeln!(&mut self.text, "{}", f).unwrap();
     }
 
     fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &[Allocation], inst_allocs: &[Allocation]) {
-        self.appendln(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
+        self.comment(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
 
         // moves that should be skipped get "none" as operands
         if inst_allocs.iter().any(|a| a.is_none()) {
