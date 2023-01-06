@@ -29,7 +29,7 @@ pub enum VInstruction {
     Jump(VTarget),
 
     // TODO make sure we end up generating good branch code
-    Branch(VReg, VSymbol, VTarget, VTarget),
+    Branch(VReg, VTarget, VTarget),
     Return(Option<VReg>),
     Unreachable,
 }
@@ -224,7 +224,7 @@ impl VInstruction {
             VInstruction::Jump(ref target) => {
                 return InstInfo::branch(operands, vec![target.args.clone()]);
             }
-            VInstruction::Branch(cond, _label, ref true_target, ref false_target) => {
+            VInstruction::Branch(cond, ref true_target, ref false_target) => {
                 operands.push_use(cond);
                 let params = vec![true_target.args.clone(), false_target.args.clone()];
                 return InstInfo::branch(operands, params);
@@ -263,15 +263,13 @@ impl VInstruction {
                 format!("{} {}", instr, REG_NAMES_BYTE[allocs[dest.vreg()].as_reg().unwrap().index()]),
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", target.block),
-            VInstruction::Branch(cond, label, ref true_target, ref false_target) => {
+            VInstruction::Branch(cond, ref true_target, ref false_target) => {
                 let cond = cond.to_asm(allocs);
 
                 let mut s = String::new();
                 let f = &mut s;
                 writeln!(f, "test {}, {}", cond, cond).unwrap();
-                writeln!(f, "jz {}", label).unwrap();
-                writeln!(f, "jmp {}", true_target.block).unwrap();
-                writeln!(f, "{}:", label).unwrap();
+                writeln!(f, "jnz {}", true_target.block).unwrap();
                 writeln!(f, "jmp {}", false_target.block).unwrap();
 
                 s

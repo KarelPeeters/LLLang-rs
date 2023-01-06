@@ -14,20 +14,26 @@ use crate::back::vcode::{InstInfo, preg_to_asm, VConst, VInstruction, VMem, VopR
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, BlockInfo, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
-use crate::mid::normalize::split_critical_edges::split_critical_edges;
-use crate::mid::util::verify::verify;
 use crate::util::{Never, NeverExt};
 
 pub fn lower_new(prog: &mut Program) -> String {
-    split_critical_edges(prog);
-    verify(prog).unwrap();
+    // TODO do we need to split critical edges or not?
+    // split_critical_edges(prog);
+    // verify(prog).unwrap();
 
     std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
 
-    let mut output = Output::default();
-
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
+
+    let mut output = Output::default();
+
+    let main_func = *prog.root_functions.get("main").unwrap();
+    output.appendln("_main:");
+    output.appendln(format_args!("    call {}", symbols.map_global(main_func)));
+    output.appendln(format_args!("    push eax"));
+    output.appendln(format_args!("    call _ExitProcess@4"));
+    output.appendln("");
 
     for (func, _) in &prog.nodes.funcs {
         println!("Func {:?}", func);
@@ -151,6 +157,18 @@ pub fn lower_new(prog: &mut Program) -> String {
         output.appendln("\n");
     }
 
+    // TODO extern symbols
+    // TODO _main
+    // => single func, no slots, simple loops should start working
+
+    // TODO stack management
+    // TODO call arg pushing
+    // => func calls should start working
+
+    // TODO proper register sizing
+    // TODO managing larger-than reg values
+    // => everything should be working
+
     output.finish()
 }
 
@@ -166,13 +184,16 @@ impl Output {
     }
 
     fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &[Allocation], inst_allocs: &[Allocation]) {
-        let result = v_inst.to_asm(allocs);
         self.appendln(format_args!("    ; {:?} {:?}", v_inst, inst_allocs));
-        self.appendln(format_args!("    {}", result));
+
+        let result = v_inst.to_asm(allocs);
+        for line in result.lines() {
+            self.appendln(format_args!("    {}", line.trim()));
+        }
     }
 
     fn finish(self) -> String {
-        format!("global _main\n{}\n\nsection .text\n{}", self.header, self.text)
+        format!("global _main\nextern _ExitProcess@4\n{}\n\nsection .text\n{}", self.header, self.text)
     }
 }
 
@@ -234,6 +255,7 @@ impl Symbols {
         result
     }
 
+    #[allow(dead_code)]
     fn new_label(&mut self) -> VSymbol {
         let id = self.next_label;
         self.next_label += 1;
@@ -302,10 +324,9 @@ impl VBuilder<'_> {
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
                 let cond = self.append_value_to_reg(cond);
-                let label = self.symbols.new_label();
                 let true_target = self.append_target(true_target);
                 let false_target = self.append_target(false_target);
-                self.push(VInstruction::Branch(cond, label, true_target, false_target));
+                self.push(VInstruction::Branch(cond, true_target, false_target));
             }
             Terminator::Return { value } => {
                 let value = if prog.type_of_value(value) == prog.ty_void() {
