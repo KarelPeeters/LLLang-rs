@@ -136,7 +136,7 @@ impl Selector<'_> {
             InstructionInfo::Store { addr, ty: _, value } => {
                 let addr = self.append_value_to_reg(addr);
                 let value = self.append_value_to_rc(value);
-                self.push(VInstruction::MovMem(VMem::at(addr), value.into()));
+                self.push(VInstruction::MovMem(VMem::at(addr), value));
             }
             InstructionInfo::Call { .. } => todo!("call"),
             InstructionInfo::BlackBox { value } => {

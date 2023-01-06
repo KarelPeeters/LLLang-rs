@@ -294,12 +294,8 @@ impl VInstruction {
 
                 s
             }
-            VInstruction::Return(_value) => {
-                format!("ret 0")
-            }
-            VInstruction::Unreachable => {
-                format!("hlt")
-            }
+            VInstruction::Return(_value) => "ret 0".to_string(),
+            VInstruction::Unreachable => "hlt".to_string(),
         }
     }
 }
