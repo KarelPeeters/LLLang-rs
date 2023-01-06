@@ -411,7 +411,7 @@ impl VBuilder<'_> {
                 let left = self.append_value_to_reg(left);
                 let right = self.append_value_to_rcm(right);
                 self.push(VInstruction::Binary(instr, result, left, right));
-                left
+                result
             }
             ExpressionInfo::Comparison { kind, left, right } => {
                 // TODO use "test" when comparing with zero
@@ -441,7 +441,7 @@ impl VBuilder<'_> {
                 self.push(VInstruction::Cmp(left, right));
                 self.push(VInstruction::Setcc(set_instr, after, before));
 
-                before
+                after
             }
             ExpressionInfo::TupleFieldPtr { .. } => todo!("TupleFieldPtr"),
             ExpressionInfo::PointerOffSet { .. } => todo!("PointerOffSet"),
