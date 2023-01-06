@@ -243,7 +243,7 @@ impl Symbols {
     }
 
     fn define_block(&mut self, block: Block, index: usize) {
-        println!("      Defining {:?} -> {:?}", block, index);
+        println!("  Defining {:?} -> {:?}", block, index);
         let prev = self.blocks.insert(block, index);
         assert!(prev.is_none());
     }
@@ -251,7 +251,6 @@ impl Symbols {
     fn map_block(&mut self, block: Block) -> (VSymbol, r2::Block) {
         let id = *self.blocks.get(&block).unwrap();
         let result = (VSymbol::Block(id), r2::Block(id as u32));
-        println!("      Mapping {:?} -> {:?}", block, result);
         result
     }
 
@@ -276,8 +275,8 @@ struct Void;
 
 impl VBuilder<'_> {
     fn push(&mut self, instr: VInstruction) {
-        println!("    push {:?}", instr);
         let info = instr.to_inst_info();
+        println!("    push {:?}", instr);
         println!("      as    {:?}", Inst::new(self.instructions.len()));
         println!("      args {:?}  {:?}", info.operands, info.branch_block_params);
         println!("      info {:?}", info);
@@ -309,7 +308,9 @@ impl VBuilder<'_> {
             }
             InstructionInfo::Call { .. } => todo!("call"),
             InstructionInfo::BlackBox { value } => {
-                let _ = self.append_value_to_reg(value);
+                let value = self.append_value_to_reg(value);
+                let result = self.vregs.map_instr(instr);
+                self.push(VInstruction::MovReg(result, value.into()))
             }
         }
     }
@@ -349,7 +350,6 @@ impl VBuilder<'_> {
         let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
 
         let block_mapped = self.symbols.map_block(block).0;
-        println!("    target to {:?} -> {:?} args {:?}", block, block_mapped, args);
 
         VTarget {
             block: block_mapped,
@@ -407,7 +407,7 @@ impl VBuilder<'_> {
                 // the second instr uses the flags set by the first
                 // the register allocator can insert moves between them, but those don't affect the flags
                 self.push(VInstruction::Cmp(left, right));
-                self.push(VInstruction::Setcc(set_instr, result.into()));
+                self.push(VInstruction::Setcc(set_instr, result));
 
                 result
             }
