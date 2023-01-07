@@ -294,7 +294,7 @@ impl VInstruction {
                 }
             }
             VInstruction::MovMem(dest, source) =>
-                format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
+                format!("mov dword {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
             VInstruction::Binary(instr, dest, left, right) => {
                 assert_eq!(allocs.map_reg(dest), allocs.map_reg(left));
                 format!("{} {}, {}", instr, left.to_asm(allocs), right.to_asm(allocs))
