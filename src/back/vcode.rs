@@ -189,6 +189,8 @@ impl VOperand for VopRCM {
     }
 }
 
+pub const PREG_COUNT: usize = 6;
+
 // TODO this is not really the right order, but do we care?
 const PREG_A: PReg = PReg::new(0, RegClass::Int);
 #[allow(dead_code)]
@@ -196,8 +198,9 @@ const PREG_B: PReg = PReg::new(1, RegClass::Int);
 #[allow(dead_code)]
 const PREG_C: PReg = PReg::new(2, RegClass::Int);
 const PREG_D: PReg = PReg::new(3, RegClass::Int);
-const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx"];
-const REG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl"];
+
+const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx", "esi", "edi"];
+const REG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl", "sil", "dil"];
 
 pub fn preg_to_asm(preg: PReg) -> &'static str {
     REG_NAMES[preg.index()]
@@ -264,7 +267,11 @@ impl VInstruction {
             VInstruction::Setcc(_instr, dest, src) => {
                 // setcc doesn't modify the upper bits of the register, so just adding a def is not enough
                 operands.push(Operand::reg_reuse_def(dest, 1));
-                operands.push_use(src);
+
+                // in x86 we can only use the first 4 registers for setcc
+                // regalloc2 only supports either all regs or a single one, so we have to pick the latter
+                // TODO remove this limitation once we switch to x64
+                operands.push(Operand::reg_fixed_use(src, PREG_A));
             }
 
             VInstruction::Jump(ref target) => {

@@ -10,7 +10,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{InstInfo, preg_to_asm, VInstruction};
+use crate::back::vcode::{InstInfo, PREG_COUNT, preg_to_asm, VInstruction};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -106,7 +106,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             vregs: mapper.vreg_count(),
         };
 
-        let env = build_env(4);
+        let env = build_env(PREG_COUNT);
         let options = RegallocOptions {
             verbose_log: true,
             validate_ssa: true,
