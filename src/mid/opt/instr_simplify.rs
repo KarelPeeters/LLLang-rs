@@ -49,23 +49,41 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
         // most binary simplifications are already handled in SCCP, where they have more information
         // TODO this may change when we add equality to the SCCP lattice (see "combining analysis")
         ExpressionInfo::Arithmetic { kind, left, right } => {
-            match kind {
-                ArithmeticOp::Add => {}
-                ArithmeticOp::Sub => {
-                    if left == right {
-                        let bits = prog.types[ty_expr].unwrap_int().unwrap();
-                        return Const::new(ty_expr, BitInt::zero(bits)).into();
+            let properties = kind.properties();
+
+            // subtract value from itself
+            if left == right && kind == ArithmeticOp::Sub {
+                let bits = prog.types[ty_expr].unwrap_int().unwrap();
+                return Const::new(ty_expr, BitInt::zero(bits)).into();
+            }
+
+            // combine constants
+            if right.is_const() && properties.associative {
+                if let Value::Expr(left) = left {
+                    if let &ExpressionInfo::Arithmetic { kind: left_kind, left: left_left, right: left_right } = prog.get_expr(left) {
+                        if left_kind == kind && left_right.is_const() {
+                            let new_expr_right = ExpressionInfo::Arithmetic { kind, left: left_right, right };
+                            let new_expr_right = prog.define_expr(new_expr_right);
+
+                            let new_expr = ExpressionInfo::Arithmetic { kind, left: left_left, right: new_expr_right.into() };
+                            return prog.define_expr(new_expr).into();
+                        }
                     }
                 }
-                ArithmeticOp::Mul => {}
-                ArithmeticOp::Div(_) => {}
-                ArithmeticOp::Mod(_) => {}
-                ArithmeticOp::And => {}
-                ArithmeticOp::Or => {}
-                ArithmeticOp::Xor => {}
-            };
+            }
+
+            // move constants to the right
+            if let Some(commuted) = properties.commuted {
+                if left.is_const() && !right.is_const() {
+                    let new_expr = ExpressionInfo::Arithmetic { kind: commuted, left: right, right: left };
+                    return prog.define_expr(new_expr).into();
+                }
+            }
         }
         ExpressionInfo::Comparison { kind, left, right } => {
+            let properties = kind.properties();
+
+            // compare value with itself
             if left == right {
                 let result = match kind {
                     ComparisonOp::Eq => true,
@@ -77,6 +95,12 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
                 };
 
                 return prog.const_bool(result).into();
+            }
+
+            // move constants to the right
+            if left.is_const() && !right.is_const() {
+                let new_expr = ExpressionInfo::Comparison { kind: properties.commuted, left: right, right: left };
+                return prog.define_expr(new_expr).into();
             }
         }
         ExpressionInfo::Cast { .. } => {

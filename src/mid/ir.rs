@@ -395,7 +395,7 @@ pub enum Signed {
     Unsigned,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -408,7 +408,7 @@ pub enum ArithmeticOp {
     Xor,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ComparisonOp {
     Eq,
     Neq,
