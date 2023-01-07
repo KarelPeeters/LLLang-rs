@@ -173,7 +173,10 @@ impl Selector<'_> {
             Terminator::Unreachable => {
                 self.push(VInstruction::Unreachable);
             }
-            Terminator::LoopForever => todo!("loop forever"),
+            Terminator::LoopForever => {
+                let label = self.symbols.new_label();
+                self.push(VInstruction::LoopForever(label));
+            },
         }
     }
 

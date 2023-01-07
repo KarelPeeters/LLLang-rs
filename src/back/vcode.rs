@@ -31,11 +31,11 @@ pub enum VInstruction {
     Setcc(&'static str, VReg, VReg),
 
     Jump(VTarget),
-
     // TODO make sure we end up generating good branch code
     Branch(VReg, VTarget, VTarget),
     Return(Option<VReg>),
     Unreachable,
+    LoopForever(VSymbol),
 }
 
 pub enum RegOperand {
@@ -252,6 +252,9 @@ impl VInstruction {
             VInstruction::Unreachable => {
                 return InstInfo::ret(operands);
             }
+            VInstruction::LoopForever(_label) => {
+                return InstInfo::ret(operands);
+            }
         }
 
         InstInfo::simple(operands)
@@ -296,6 +299,9 @@ impl VInstruction {
             }
             VInstruction::Return(_value) => "ret 0".to_string(),
             VInstruction::Unreachable => "hlt".to_string(),
+            VInstruction::LoopForever(label) => {
+                format!("{}: jmp {}", label, label)
+            }
         }
     }
 }
