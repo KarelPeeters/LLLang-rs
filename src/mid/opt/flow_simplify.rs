@@ -13,11 +13,13 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
     let funcs = prog.nodes.funcs.keys().collect_vec();
     for func in funcs {
         let entry = prog.get_func(func).entry;
-        // convert to final entry
-        let (skipped, new_entry) = find_block(prog, entry);
 
-        count_skipped += skipped;
-        prog.get_func_mut(func).entry = new_entry;
+        if prog.get_block(entry).params.is_empty() {
+            // convert to final entry
+            let (skipped, new_entry) = find_block(prog, entry);
+            count_skipped += skipped;
+            prog.get_func_mut(func).entry = new_entry;
+        }
     }
 
     // simplify block terminators
