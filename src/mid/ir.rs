@@ -6,6 +6,7 @@ use derive_more::{Constructor, From};
 use itertools::Itertools;
 
 use crate::mid::util::bit_int::BitInt;
+use crate::util::{Never, NeverExt};
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
@@ -760,6 +761,15 @@ impl Const {
 
 // Visits
 impl Program {
+    pub fn collect_blocks(&self, start: Block) -> Vec<Block> {
+        let mut blocks = vec![];
+        self.try_visit_blocks(start, |block| {
+            blocks.push(block);
+            Never::UNIT
+        }).no_err();
+        blocks
+    }
+
     // TODO switch to using Try trait, or something custom that accepts (), Result and ControlFlow
     /// Visit the blocks reachable from `start` while staying within the same function.
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
