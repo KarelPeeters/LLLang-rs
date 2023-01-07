@@ -14,12 +14,15 @@ use crate::back::vcode::{InstInfo, preg_to_asm, VInstruction};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
+use crate::mid::normalize::split_critical_edges::split_critical_edges;
+use crate::mid::util::verify::verify;
 use crate::util::{Never, NeverExt};
 
 pub fn lower_new(prog: &mut Program) -> String {
-    // TODO do we need to split critical edges or not?
-    // split_critical_edges(prog);
-    // verify(prog).unwrap();
+    // the register allocator requires us to split critical edges
+    // TODO merge edges without any moves again
+    split_critical_edges(prog);
+    verify(prog).unwrap();
 
     std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
 
