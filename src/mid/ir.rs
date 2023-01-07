@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
@@ -6,10 +6,11 @@ use derive_more::{Constructor, From};
 use itertools::Itertools;
 
 use crate::mid::util::bit_int::BitInt;
+use crate::util::{Never, NeverExt};
 use crate::util::arena::{Arena, ArenaSet};
 
 macro_rules! gen_node_and_program_accessors {
-    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $mul:ident],)*) => {
+    ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $single:ident, $mul:ident],)*) => {
         $(
         new_index_type!(pub $node);
         )*
@@ -34,28 +35,30 @@ macro_rules! gen_node_and_program_accessors {
             }
 
             #[allow(dead_code)]
-            pub fn $get(&self, node: $node) -> &$info {
-                &self.nodes.$mul[node]
+            pub fn $get(&self, $single: $node) -> &$info {
+                &self.nodes.$mul[$single]
             }
 
             #[allow(dead_code)]
-            pub fn $get_mut(&mut self, node: $node) -> &mut $info {
-                &mut self.nodes.$mul[node]
+            pub fn $get_mut(&mut self, $single: $node) -> &mut $info {
+                &mut self.nodes.$mul[$single]
             }
         )*
         }
     }
 }
 
+// TODO should expressions be stored as a deduplicating set as well?
+// TODO find a better name for expression, eg. "PureInstruction"
 gen_node_and_program_accessors![
-    [Function, FunctionInfo, define_func, get_func, get_func_mut, funcs],
-    [Parameter, ParameterInfo, define_param, get_param, get_param_mut, params],
-    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slots],
-    [Block, BlockInfo, define_block, get_block, get_block_mut, blocks],
-    [Phi, PhiInfo, define_phi, get_phi, get_phi_mut, phis],
-    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instrs],
-    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, exts],
-    [Data, DataInfo, define_data, get_data, get_data_mut, datas],
+    [Function, FunctionInfo, define_func, get_func, get_func_mut, func, funcs],
+    [StackSlot, StackSlotInfo, define_slot, get_slot, get_slot_mut, slot, slots],
+    [Block, BlockInfo, define_block, get_block, get_block_mut, block, blocks],
+    [Parameter, ParameterInfo, define_param, get_param, get_param_mut, param, params],
+    [Instruction, InstructionInfo, define_instr, get_instr, get_instr_mut, instr, instrs],
+    [Expression, ExpressionInfo, define_expr, get_expr, get_expr_mut, expr, exprs],
+    [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, ext, exts],
+    [Data, DataInfo, define_data, get_data, get_data_mut, data, datas],
 ];
 
 new_index_type!(pub Type);
@@ -80,16 +83,13 @@ pub struct Program {
     #[allow(dead_code)]
     ty_isize: Type,
 
-    //TODO change program to have multiple possible entries with arbitrary signatures instead
-    //  partly for elegance but also because this is too limiting, all extern functions should be considered entry points
-    pub main: Function,
+    pub root_functions: HashMap<String, Function>,
 }
 
 impl Default for Program {
     /// Return the program representing `fn main() -> void { unreachable(); }`
     fn default() -> Self {
         let mut types = ArenaSet::default();
-        let mut nodes = Arenas::default();
 
         let ty_void = types.push(TypeInfo::Void);
         let ty_ptr = types.push(TypeInfo::Pointer);
@@ -98,15 +98,7 @@ impl Default for Program {
         //   or just make this configurable?
         let ty_isize = types.push(TypeInfo::Integer { bits: 32 });
 
-        let main_func_ty = FunctionType { params: Vec::new(), ret: ty_void };
-        let main_ty = types.push(TypeInfo::Func(main_func_ty.clone()));
-
-        let block = nodes.blocks.push(BlockInfo::new());
-        let entry = Target { block, phi_values: vec![] };
-        let main_info = FunctionInfo::new_given_parts(main_func_ty, main_ty, entry, vec![]);
-        let main = nodes.funcs.push(main_info);
-
-        Program { nodes, types, ty_void, ty_ptr, ty_bool, ty_isize, main }
+        Program { nodes: Arenas::default(), types, ty_void, ty_ptr, ty_bool, ty_isize, root_functions: Default::default() }
     }
 }
 
@@ -180,10 +172,11 @@ impl Program {
                 match value {
                     Scoped::Param(param) => self.get_param(param).ty,
                     Scoped::Slot(_) => self.ty_ptr,
-                    Scoped::Phi(phi) => self.get_phi(phi).ty,
+
                     Scoped::Instr(instr) => self.get_instr(instr).ty(self),
                 }
             }
+            Value::Expr(expr) => self.get_expr(expr).ty(self),
         }
     }
 
@@ -214,6 +207,7 @@ pub enum TypeInfo {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionType {
     pub params: Vec<Type>,
+    // TODO allow multiple returns
     pub ret: Type,
 }
 
@@ -268,36 +262,38 @@ impl TypeInfo {
 pub struct FunctionInfo {
     pub ty: Type,
     pub func_ty: FunctionType,
-    pub global_name: Option<String>,
-    pub debug_name: Option<String>,
-    pub entry: Target,
-    pub params: Vec<Parameter>,
+
     pub slots: Vec<StackSlot>,
+    pub entry: Block,
+
+    pub debug_name: Option<String>,
 }
 
 impl FunctionInfo {
     /// Create a new function with the given type.
     /// * The params are automatically created.
-    /// * The entry blocks starts out empty and with an unreachable terminator.
+    /// * The entry block starts out empty and with an unreachable terminator.
     pub fn new(func_ty: FunctionType, prog: &mut Program) -> Self {
         let ty = prog.define_type_func(func_ty.clone());
-        let block = prog.define_block(BlockInfo::new());
-        let entry = Target { block, phi_values: vec![] };
         let params = func_ty.params.iter()
             .map(|&param_ty| prog.define_param(ParameterInfo { ty: param_ty }))
             .collect_vec();
 
-        Self::new_given_parts(func_ty, ty, entry, params)
+        let entry = prog.define_block(BlockInfo {
+            params,
+            instructions: vec![],
+            terminator: Terminator::Unreachable,
+        });
+
+        Self::new_given_parts(func_ty, ty, entry)
     }
 
-    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Target, params: Vec<Parameter>) -> Self {
+    fn new_given_parts(func_ty: FunctionType, ty: Type, entry: Block) -> Self {
         Self {
             ty,
             func_ty,
-            global_name: None,
             debug_name: None,
             entry,
-            params,
             slots: Vec::new(),
         }
     }
@@ -316,25 +312,20 @@ pub struct StackSlotInfo {
 
 #[derive(Debug, Clone)]
 pub struct BlockInfo {
-    pub phis: Vec<Phi>,
+    pub params: Vec<Parameter>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
 }
 
 impl BlockInfo {
-    /// Create a new empty block with unreachable terminator.
+    /// Create a new empty block without params and with an unreachable terminator.
     pub fn new() -> BlockInfo {
         BlockInfo {
-            phis: Vec::new(),
+            params: Vec::new(),
             instructions: Vec::new(),
             terminator: Terminator::Unreachable,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct PhiInfo {
-    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -353,8 +344,18 @@ pub enum InstructionInfo {
     /// Call `target` with arguments `args`.
     ///
     /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
+    // TODO add an expression variant of call that can't have have any side effects 
     Call { target: Value, args: Vec<Value> },
 
+    /// Return `value` as-is.
+    /// Optimizations should assume that:
+    /// * the operand value is actually used some some side-effect purpose
+    /// * the returned value is not known at compile time.
+    BlackBox { value: Value },
+}
+
+#[derive(Debug, Clone)]
+pub enum ExpressionInfo {
     ///Perform binary arithmetic operation `kind(left, right)`;
     ///
     /// `Arithmetic { kind, left: iN, right: iN } -> iN`
@@ -368,7 +369,7 @@ pub enum InstructionInfo {
     // TODO should this really be an instruction?
     //   kind of, otherwise we may as well switch to sea of nodes and make arithmetic no longer an instruction
     // TODO how does this fit into the untyped ptr story?
-    //   we can't really remove this since the layout is only decided in the backend... 
+    //   we can't really remove this since the layout is only decided in the backend...
     /// Compute the pointer to a tuple field at `index` in `tuple_ty` from a pointer to containing tuple `base`.
     ///
     /// `TupleFieldPtr { base: &, index=1, tuple_ty=(A, B, C) } -> &`
@@ -386,12 +387,6 @@ pub enum InstructionInfo {
     ///
     /// `Cast { after_ty: B, before_value: A } -> B`
     Cast { ty: Type, kind: CastKind, value: Value },
-
-    /// Return `value` as-is.
-    /// Optimizations should assume that:
-    /// * the operand value is actually used some some side-effect purpose
-    /// * the returned value is not known at compile time.
-    BlackBox { value: Value },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -452,11 +447,45 @@ pub enum CastKind {
     //   maybe call it bitwise? or is that something else?
 }
 
+impl ExpressionInfo {
+    //TODO this implementation is prone to infinite recursion!
+    pub fn ty(&self, prog: &Program) -> Type {
+        match *self {
+            ExpressionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
+            ExpressionInfo::Comparison { .. } => prog.ty_bool,
+            ExpressionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
+            ExpressionInfo::PointerOffSet { .. } => prog.ty_ptr,
+            ExpressionInfo::Cast { ty: after_ty, .. } => after_ty,
+        }
+    }
+
+    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
+        match self {
+            ExpressionInfo::Arithmetic { kind: _, left, right } => {
+                *left = f(*left);
+                *right = f(*right);
+            }
+            ExpressionInfo::Comparison { kind: _, left, right } => {
+                *left = f(*left);
+                *right = f(*right);
+            }
+            ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
+                *base = f(*base);
+            }
+            ExpressionInfo::PointerOffSet { ty: _, base, index } => {
+                *base = f(*base);
+                *index = f(*index);
+            }
+            ExpressionInfo::Cast { ty: _, kind: _, value } => {
+                *value = f(*value);
+            }
+        }
+    }
+}
+
 impl InstructionInfo {
     pub fn ty(&self, prog: &Program) -> Type {
         //TODO this implementation is prone to infinite recursion!
-        // eg a = add (a, a) or similar constructs
-        // maybe change InstructionInfo to always include the result type?
         match *self {
             InstructionInfo::Load { ty, .. } => ty,
             InstructionInfo::Store { .. } => prog.ty_ptr(),
@@ -465,11 +494,6 @@ impl InstructionInfo {
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
-            InstructionInfo::Comparison { .. } => prog.ty_bool,
-            InstructionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
-            InstructionInfo::PointerOffSet { .. } => prog.ty_ptr,
-            InstructionInfo::Cast { ty: after_ty, .. } => after_ty,
             InstructionInfo::BlackBox { value } => prog.type_of_value(value),
         }
     }
@@ -488,24 +512,6 @@ impl InstructionInfo {
                     *arg = f(*arg);
                 }
             }
-            InstructionInfo::Arithmetic { kind: _, left, right } => {
-                *left = f(*left);
-                *right = f(*right);
-            }
-            InstructionInfo::Comparison { kind: _, left, right } => {
-                *left = f(*left);
-                *right = f(*right);
-            }
-            InstructionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
-                *base = f(*base);
-            }
-            InstructionInfo::PointerOffSet { ty: _, base, index } => {
-                *base = f(*base);
-                *index = f(*index);
-            }
-            InstructionInfo::Cast { ty: _, kind: _, value } => {
-                *value = f(*value);
-            }
             InstructionInfo::BlackBox { value } => {
                 *value = f(*value);
             }
@@ -519,12 +525,13 @@ pub enum Terminator {
     Branch { cond: Value, true_target: Target, false_target: Target },
     Return { value: Value },
     Unreachable,
+    LoopForever,
 }
 
 #[derive(Debug, Clone)]
 pub struct Target {
     pub block: Block,
-    pub phi_values: Vec<Value>,
+    pub args: Vec<Value>,
 }
 
 impl Target {
@@ -533,7 +540,7 @@ impl Target {
     }
 
     pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
-        for value in &mut self.phi_values {
+        for value in &mut self.args {
             *value = f(*value);
         }
     }
@@ -551,6 +558,7 @@ impl Terminator {
             &Terminator::Branch { cond, true_target: _, false_target: _ } => f(cond)?,
             &Terminator::Return { value } => f(value)?,
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
 
         Ok(())
@@ -566,6 +574,7 @@ impl Terminator {
             }
             Terminator::Return { value } => *value = f(*value),
             Terminator::Unreachable => (),
+            Terminator::LoopForever => (),
         }
     }
 
@@ -584,6 +593,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
     }
 
@@ -596,6 +606,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
     }
 
@@ -608,6 +619,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
         Ok(())
     }
@@ -627,11 +639,13 @@ macro_rules! impl_nested_from {
     }
 }
 
+// TODO considering using .value() instead of the current .into() which is more vague
 #[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
     Immediate(Immediate),
     Global(Global),
     Scoped(Scoped),
+    Expr(Expression),
 }
 
 // TODO find a better name for these identity-less, immediate, instant, on-demand values
@@ -651,19 +665,17 @@ pub enum Global {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Scoped {
-    Param(Parameter),
     Slot(StackSlot),
-    Phi(Phi),
+    Param(Parameter),
     Instr(Instruction),
 }
 
+impl_nested_from!(Value::Immediate(Const));
 impl_nested_from!(Value::Global(Function));
 impl_nested_from!(Value::Global(Extern));
 impl_nested_from!(Value::Global(Data));
-impl_nested_from!(Value::Immediate(Const));
 impl_nested_from!(Value::Scoped(Parameter));
 impl_nested_from!(Value::Scoped(StackSlot));
-impl_nested_from!(Value::Scoped(Phi));
 impl_nested_from!(Value::Scoped(Instruction));
 
 impl Debug for Value {
@@ -673,6 +685,7 @@ impl Debug for Value {
             Value::Immediate(value) => value.fmt(f),
             Value::Global(value) => value.fmt(f),
             Value::Scoped(value) => value.fmt(f),
+            Value::Expr(value) => write!(f, "Expr({:?})", value),
         }
     }
 }
@@ -700,6 +713,10 @@ impl Value {
 
     pub fn as_instr(self) -> Option<Instruction> {
         option_match!(self, Value::Scoped(Scoped::Instr(instr)) => instr)
+    }
+
+    pub fn as_expr(self) -> Option<Expression> {
+        option_match!(self, Value::Expr(expr) => expr)
     }
 
     pub fn is_undef(self) -> bool {
@@ -752,16 +769,18 @@ impl Const {
     }
 }
 
-//Visitors
-//TODO think about how to structure this, right now it's kind of crappy and non consistent
+// Visits
 impl Program {
-    /// Collect the blocks reachable from `start` while staying within the same function.
     pub fn collect_blocks(&self, start: Block) -> Vec<Block> {
         let mut blocks = vec![];
-        self.visit_blocks(start, |block| blocks.push(block));
+        self.try_visit_blocks(start, |block| {
+            blocks.push(block);
+            Never::UNIT
+        }).no_err();
         blocks
     }
 
+    // TODO switch to using Try trait, or something custom that accepts (), Result and ControlFlow
     /// Visit the blocks reachable from `start` while staying within the same function.
     pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
         let mut blocks_left = VecDeque::new();
@@ -781,8 +800,6 @@ impl Program {
         Ok(())
     }
 
-    // TODO this is sketchy, what if the user changes the terminator right before we're visiting the block?
-    /// Visit the blocks reachable from `start` while staying within the same function
     pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, start: Block, mut f: F) -> Result<(), E> {
         let mut blocks_left = VecDeque::new();
         let mut blocks_seen = HashSet::new();
@@ -799,25 +816,6 @@ impl Program {
         }
 
         Ok(())
-    }
-
-    /// Visit the blocks reachable from `start` while staying within the same function.
-    pub fn visit_blocks<F: FnMut(Block)>(&self, start: Block, mut f: F) {
-        //change this to use ! once that's stable
-        self.try_visit_blocks::<(), _>(start, |block| {
-            f(block);
-            Ok(())
-        }).unwrap();
-    }
-
-    // TODO this is sketchy, what if the user changes the terminator right before we're visiting the block?
-    /// Visit the blocks reachable from `start` while staying within the same function.
-    pub fn visit_blocks_mut<F: FnMut(&mut Program, Block)>(&mut self, start: Block, mut f: F) {
-        //change this to use ! once that's stable
-        self.try_visit_blocks_mut::<(), _>(start, |prog, block| {
-            f(prog, block);
-            Ok(())
-        }).unwrap();
     }
 }
 
@@ -899,11 +897,11 @@ impl Program {
                             write!(f, "Param({:?}: {})", param.0, ty),
                         Scoped::Slot(slot) =>
                             write!(f, "Slot({:?}: {})", slot.0, ty),
-                        Scoped::Phi(phi) =>
-                            write!(f, "Phi({:?}: {})", phi.0, ty),
                         Scoped::Instr(instr) =>
                             write!(f, "Instr({:?}: {})", instr.0, ty),
                     }
+                    Value::Expr(expr) =>
+                        write!(f, "Expr({:?} : {})", expr.0, ty)
                 }
             }
         }
@@ -915,25 +913,27 @@ impl Program {
 impl Display for Program {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Program (nodes: {}) {{", self.nodes.total_node_count())?;
-        writeln!(f, "  main: {:?}", self.main)?;
 
+        match self.root_functions.iter().collect_vec().as_slice() {
+            &[] => writeln!(f, "  roots: []")?,
+            &[(name, func)] => writeln!(f, "  roots: {{{:?}: {:?}}}", name, func)?,
+            roots => {
+                writeln!(f, "  roots: {{")?;
+                for (name, func) in roots {
+                    writeln!(f, "    {:?}: {:?}", name, func)?;
+                }
+                writeln!(f, "  }}")?;
+            }
+        }
+
+        // TODO try to print in topological order
         for (func, func_info) in &self.nodes.funcs {
             writeln!(f, "\n  {:?}: {} {{", func, self.format_type(func_info.ty))?;
 
-            if let Some(global_name) = &func_info.global_name {
-                writeln!(f, "    global_name: {}", global_name)?;
-            }
             if let Some(debug_name) = &func_info.debug_name {
                 writeln!(f, "    debug_name: {:?}", debug_name)?;
             }
 
-            if !func_info.params.is_empty() {
-                writeln!(f, "    params:")?;
-                for &param in &func_info.params {
-                    let param_info = self.get_param(param);
-                    writeln!(f, "      {:?}: {}", param, self.format_type(param_info.ty))?;
-                }
-            }
             if !func_info.slots.is_empty() {
                 writeln!(f, "    slots:")?;
                 for &slot in &func_info.slots {
@@ -948,15 +948,15 @@ impl Display for Program {
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
-            self.try_visit_blocks(self.get_func(func).entry.block, |block| {
+            self.try_visit_blocks(self.get_func(func).entry, |block| {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
 
-                if !block_info.phis.is_empty() {
-                    writeln!(f, "      phis:")?;
-                    for &phi in &block_info.phis {
-                        let phi_info = self.get_phi(phi);
-                        writeln!(f, "        {:?}: {}", phi, self.format_type(phi_info.ty))?;
+                if !block_info.params.is_empty() {
+                    writeln!(f, "      params:")?;
+                    for &param in &block_info.params {
+                        let param_info = self.get_param(param);
+                        writeln!(f, "        {:?}: {}", param, self.format_type(param_info.ty))?;
                     }
                 }
 
@@ -982,11 +982,16 @@ impl Display for Program {
                 }
 
                 writeln!(f, "    }}")?;
-
                 Ok(())
             })?;
             writeln!(f, "  }}")?;
         };
+
+        // TODO can we do some simple scheduling to print these closer to their usage sites?
+        writeln!(f, "  expressions:")?;
+        for (expr, expr_info) in &self.nodes.exprs {
+            writeln!(f, "    {:?}: {:?}", expr, expr_info)?;
+        }
 
         writeln!(f, "  types:")?;
         for (ty, _) in &self.types {

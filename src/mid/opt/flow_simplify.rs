@@ -2,23 +2,23 @@ use std::collections::HashSet;
 
 use itertools::Itertools;
 
-use crate::mid::ir::{Block, BlockInfo, Immediate, Program, Target, Terminator, Value};
+use crate::mid::ir::{Block, Immediate, Program, Target, Terminator, Value};
 
 //TODO combine this with block_threading in a single pass?
 pub fn flow_simplify(prog: &mut Program) -> bool {
     let mut count_skipped = 0;
-    let mut count_branch_removed = 0;
+    let mut count_simplified = 0;
 
     // simplify function entries
     let funcs = prog.nodes.funcs.keys().collect_vec();
     for func in funcs {
-        let entry = &prog.get_func(func).entry;
-        let (delta, new_target) = EndPoint::find_target(prog, entry.clone(), None);
+        let entry = prog.get_func(func).entry;
 
-        // TODO is there a better way to avoid the "entry into inf loop" edge case?
-        if new_target.block != entry.block {
-            count_skipped += delta;
-            prog.get_func_mut(func).entry = new_target;
+        if prog.get_block(entry).params.is_empty() {
+            // convert to final entry
+            let (skipped, new_entry) = find_block(prog, entry);
+            count_skipped += skipped;
+            prog.get_func_mut(func).entry = new_entry;
         }
     }
 
@@ -28,130 +28,142 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
         let info = prog.get_block_mut(block);
         let old_term = std::mem::replace(&mut info.terminator, Terminator::Unreachable);
 
-        let new_term = match old_term.clone() {
-            Terminator::Jump { target } => {
-                // convert to the final terminator
-                let (delta, new_term) = EndPoint::find_terminator(prog, target.clone(), Some(block));
+        let (simplified, simple_term) = simplify_terminator(old_term.clone());
+        count_simplified += simplified as usize;
+
+        let new_term = match simple_term {
+            Terminator::Jump { .. } => {
+                // convert to final terminator
+                let (delta, new_term) = find_terminator(prog, block, simple_term);
                 count_skipped += delta;
                 new_term
             }
             Terminator::Branch { cond, true_target, false_target } => {
-                match &cond {
-                    Value::Immediate(Immediate::Undef(_)) => {
-                        // undefined condition, this is undefined behavior
-                        count_branch_removed += 1;
-                        Terminator::Unreachable
-                    }
-                    Value::Immediate(Immediate::Const(cst)) => {
-                        // const condition, remove the branch and replace with final terminator
-                        let target = if cst.as_bool().unwrap() { true_target } else { false_target };
-                        count_branch_removed += 1;
-
-                        let (delta, new_term) = EndPoint::find_terminator(prog, target, Some(block));
-                        count_skipped += delta;
-                        new_term
-                    }
-                    _ => {
-                        // general condition, we can still try to replace the targets
-                        let (true_delta, true_target) = EndPoint::find_target(prog, true_target, Some(block));
-                        let (false_delta, false_target) = EndPoint::find_target(prog, false_target, Some(block));
-                        count_skipped += true_delta + false_delta;
-                        Terminator::Branch { cond, true_target, false_target }
-                    }
-                }
+                // convert to final targets
+                let (true_delta, true_target) = find_target(prog, block, true_target);
+                let (false_delta, false_target) = find_target(prog, block, false_target);
+                count_skipped += true_delta + false_delta;
+                Terminator::Branch { cond, true_target, false_target }
             }
-            Terminator::Return { .. } => old_term,
-            Terminator::Unreachable => old_term,
+            Terminator::Return { .. } => simple_term,
+            Terminator::Unreachable => simple_term,
+            Terminator::LoopForever => simple_term,
         };
 
         let mut info = prog.get_block_mut(block);
         info.terminator = new_term;
     }
 
-    println!("flow_simplify skipped {} blocks and removed {} branches", count_skipped, count_branch_removed);
-    let count = count_skipped + count_branch_removed;
+    println!("flow_simplify skipped {} blocks and simplified {} terminators", count_skipped, count_simplified);
+    let count = count_skipped + count_simplified;
     count != 0
 }
 
-#[derive(Debug)]
-struct EndPoint {
-    count_skipped: usize,
-    fallback_target: Target,
-    terminator: Option<Terminator>,
+fn simplify_terminator(terminator: Terminator) -> (bool, Terminator) {
+    match terminator {
+        Terminator::Branch { cond, true_target, false_target } => {
+            match cond {
+                // undefined condition is undefined behaviour
+                Value::Immediate(Immediate::Undef(_)) => (true, Terminator::Unreachable),
+                // const condition means this is actually just a jump
+                Value::Immediate(Immediate::Const(cst)) => {
+                    let target = if cst.as_bool().unwrap() { true_target } else { false_target };
+                    (true, Terminator::Jump { target })
+                }
+                // otherwise it really is a branch
+                _ => (false, Terminator::Branch { cond, true_target, false_target })
+            }
+        }
+
+        Terminator::Jump { .. } | Terminator::Return { .. } | Terminator::Unreachable | Terminator::LoopForever =>
+            (false, terminator),
+    }
 }
 
-impl EndPoint {
-    fn find_target(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Target) {
-        Self::find(prog, start, start_block).into_target()
+// TODO is there a way to merge find_block, find_target and find_term? they're all pretty similar...
+fn find_block(prog: &Program, start: Block) -> (usize, Block) {
+    let mut skipped = 0;
+    let mut blocks_seen = HashSet::new();
+
+    let mut curr = start;
+    loop {
+        if !blocks_seen.insert(curr) {
+            break;
+        }
+
+        let curr_info = prog.get_block(curr);
+        assert!(curr_info.params.is_empty());
+        if !curr_info.instructions.is_empty() {
+            break;
+        }
+
+        match simplify_terminator(curr_info.terminator.clone()).1 {
+            Terminator::Jump { target: Target { block: next, args } } if args.is_empty() => {
+                skipped += 1;
+                curr = next;
+            }
+            _ => break,
+        }
     }
 
-    fn find_terminator(prog: &Program, start: Target, start_block: Option<Block>) -> (usize, Terminator) {
-        Self::find(prog, start, start_block).into_terminator()
+    (skipped, curr)
+}
+
+fn find_target(prog: &Program, start_block: Block, start_target: Target) -> (usize, Target) {
+    let mut skipped = 0;
+    let mut blocks_seen = HashSet::new();
+    blocks_seen.insert(start_block);
+
+    let mut curr = start_target;
+
+    loop {
+        let &Target { block: curr_block, ref args } = &curr;
+        if !args.is_empty() {
+            break;
+        }
+
+        let curr_info = prog.get_block(curr_block);
+        assert!(curr_info.params.is_empty());
+        if !curr_info.instructions.is_empty() {
+            break;
+        }
+
+        match simplify_terminator(curr_info.terminator.clone()).1 {
+            Terminator::Jump { target: next } => {
+                if !blocks_seen.insert(next.block) {
+                    break;
+                }
+
+                skipped += 1;
+                curr = next.clone();
+            }
+            _ => break,
+        }
     }
 
-    fn find(prog: &Program, start: Target, start_block: Option<Block>) -> Self {
-        let mut blocks_seen = HashSet::new();
-        blocks_seen.extend(start_block.iter());
-        let mut count_skipped = 0;
+    (skipped, curr)
+}
 
-        let Target { mut block, mut phi_values } = start;
+fn find_terminator(prog: &Program, start_block: Block, start_term: Terminator) -> (usize, Terminator) {
+    let mut skipped = 0;
+    let mut blocks_seen = HashSet::new();
+    blocks_seen.insert(start_block);
 
-        loop {
+    // this is always already simplified
+    let mut curr_simple = start_term;
+
+    while let Terminator::Jump { target: Target { block, ref args } } = curr_simple {
+        let block_info = prog.get_block(block);
+        if args.is_empty() && block_info.instructions.is_empty() {
             if !blocks_seen.insert(block) {
-                // prevent infinite loop
-                break;
+                return (skipped, Terminator::LoopForever);
             }
-            if !phi_values.is_empty() {
-                break;
-            }
-
-            let BlockInfo { phis, instructions, terminator }
-                = prog.get_block(block);
-            assert_eq!(phis.len(), phi_values.len());
-            if !instructions.is_empty() {
-                break;
-            }
-
-            count_skipped += 1;
-
-            match terminator {
-                Terminator::Jump { target } => {
-                    let Target { block: new_block, phi_values: new_phi_values } = target;
-                    block = *new_block;
-                    phi_values = new_phi_values.clone();
-                }
-                terminator => {
-                    return EndPoint {
-                        count_skipped,
-                        fallback_target: Target { block, phi_values },
-                        terminator: Some(terminator.clone()),
-                    };
-                }
-            }
-        }
-
-        EndPoint {
-            count_skipped,
-            fallback_target: Target { block, phi_values },
-            terminator: None,
-        }
-    }
-
-    fn into_target(self) -> (usize, Target) {
-        let count_skipped = if self.terminator.is_some() {
-            self.count_skipped - 1
+            curr_simple = simplify_terminator(block_info.terminator.clone()).1;
+            skipped += 1;
         } else {
-            self.count_skipped
-        };
-
-        (count_skipped, self.fallback_target)
+            break;
+        }
     }
 
-    fn into_terminator(self) -> (usize, Terminator) {
-        let terminator = match self.terminator {
-            None => Terminator::Jump { target: self.fallback_target },
-            Some(terminator) => terminator,
-        };
-        (self.count_skipped, terminator)
-    }
+    (skipped, curr_simple)
 }

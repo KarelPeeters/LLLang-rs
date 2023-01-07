@@ -1,116 +1,40 @@
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{ArithmeticOp, Const, InstructionInfo, ComparisonOp, Program, Value};
+use crate::mid::ir::{ArithmeticOp, ComparisonOp, Const, Expression, ExpressionInfo, InstructionInfo, Program, Value};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
-/// Simplify local (mostly per-instruction) patterns.
-/// We don't need to remove any useless instructions, we can leave that to DCE.
+/// Simplify local (mostly single instruction or single expression) patterns.
 pub fn instr_simplify(prog: &mut Program) -> bool {
     let mut count_replaced = 0;
 
     let use_info = UseInfo::new(prog);
     let ty_void = prog.ty_void();
-    let ty_bool = prog.ty_bool();
 
-    let mut replace = |prog: &mut Program, old: Value, new: Value| {
-        count_replaced += use_info.replace_value_usages(prog, old, new);
-    };
-
+    // simplify instructions
     for block in use_info.blocks() {
-        // We manually iterate over the instructions of the current block, since some optimizations
-        //   may change the number of instructions (and hopefully instr_index as well!)
-        //   `expected_instr_count` is used as an additional layer of checking.
-        let mut instr_index = 0;
-        let mut expected_instr_count =prog.nodes.blocks[block].instructions.len();
+        for instr_index in 0..prog.get_block(block).instructions.len() {
+            let instr = prog.get_block(block).instructions[instr_index];
+            let instr_info = prog.get_instr(instr);
 
-        while instr_index < expected_instr_count {
-            let instr = prog.nodes.blocks[block].instructions[instr_index];
-            let instr_info = &prog.nodes.instrs[instr];
-            let ty_instr = instr_info.ty(prog);
-
-            match instr_info {
+            match *instr_info {
                 // TODO replace load/store with undef addr with unreachable terminator
-                &InstructionInfo::Load { addr: _, ty } => {
+                InstructionInfo::Load { addr: _, ty } => {
                     if ty == ty_void {
-                        replace(prog, instr.into(), Value::void());
+                        count_replaced += use_info.replace_value_usages(prog, instr.into(), Value::void());
                     }
                 }
                 InstructionInfo::Store { .. } => {}
                 InstructionInfo::Call { .. } => {}
-
-                // most binary simplifications are already handled in SCCP, where they have more information
-                // TODO this may change when we add equality to the SCCP lattice (see "combining analysis")
-                &InstructionInfo::Arithmetic { kind, left, right } => {
-                    match kind {
-                        ArithmeticOp::Add => {}
-                        ArithmeticOp::Sub => {
-                            if left == right {
-                                let bits = prog.types[ty_instr].unwrap_int().unwrap();
-                                let zero = Const::new(ty_instr, BitInt::zero(bits));
-                                replace(prog, instr.into(), zero.into());
-                            }
-                        }
-                        ArithmeticOp::Mul => {}
-                        ArithmeticOp::Div(_) => {}
-                        ArithmeticOp::Mod(_) => {}
-                        ArithmeticOp::And => {}
-                        ArithmeticOp::Or => {}
-                        ArithmeticOp::Xor => {}
-                    };
-                }
-                &InstructionInfo::Comparison { kind, left, right } => {
-                    if left == right {
-                        let result = match kind {
-                            ComparisonOp::Eq => true,
-                            ComparisonOp::Neq => false,
-                            ComparisonOp::Gt(_) => false,
-                            ComparisonOp::Gte(_) => true,
-                            ComparisonOp::Lt(_) => false,
-                            ComparisonOp::Lte(_) => true,
-                        };
-
-                        let result_const = Const::new(ty_bool, BitInt::from_bool(result));
-                        replace(prog, instr.into(), result_const.into());
-                    }
-                }
-
-                InstructionInfo::TupleFieldPtr { .. } => {}
-                InstructionInfo::PointerOffSet { .. } => {}
-
-                &InstructionInfo::Cast { .. } => {
-                    let chain = extract_minimal_cast_chain(prog, instr.into());
-
-                    // if this chain is shorter than what we have right now
-                    if chain.ops.len() < chain.origin_cast_count {
-                        let prog_instrs = &mut prog.nodes.instrs;
-                        let prog_types = &mut prog.types;
-
-                        // this iterator construct is similar to scan, but we can get the final value out
-                        let mut new_value = chain.inner;
-                        let new_instructions = chain.ops.iter().map(|&op| {
-                            let instr = prog_instrs.push(op.to_instruction(prog_types, new_value));
-                            new_value = instr.into();
-                            instr
-                        });
-
-                        // insert new instructions
-                        let instructions = &mut prog.nodes.blocks[block].instructions;
-                        drop(instructions.splice(instr_index..instr_index, new_instructions));
-
-                        // account for newly inserted instructions
-                        instr_index += chain.ops.len();
-                        expected_instr_count += chain.ops.len();
-
-                        // actually replace the old cast with the outermost new one
-                        replace(prog, instr.into(), new_value);
-                    }
-                }
-
                 InstructionInfo::BlackBox { .. } => {}
             }
+        }
+    }
 
-            assert_eq!(expected_instr_count, prog.nodes.blocks[block].instructions.len());
-            instr_index += 1;
+    // simplify expressions
+    for &expr in use_info.expressions() {
+        let new = simplify_expression(prog, expr);
+        if new != expr.into() {
+            use_info.replace_value_usages(prog, expr.into(), new);
         }
     }
 
@@ -118,3 +42,58 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
     count_replaced != 0
 }
 
+fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
+    let ty_expr = prog.type_of_value(expr.into());
+
+    match *prog.get_expr(expr) {
+        // most binary simplifications are already handled in SCCP, where they have more information
+        // TODO this may change when we add equality to the SCCP lattice (see "combining analysis")
+        ExpressionInfo::Arithmetic { kind, left, right } => {
+            match kind {
+                ArithmeticOp::Add => {}
+                ArithmeticOp::Sub => {
+                    if left == right {
+                        let bits = prog.types[ty_expr].unwrap_int().unwrap();
+                        return Const::new(ty_expr, BitInt::zero(bits)).into();
+                    }
+                }
+                ArithmeticOp::Mul => {}
+                ArithmeticOp::Div(_) => {}
+                ArithmeticOp::Mod(_) => {}
+                ArithmeticOp::And => {}
+                ArithmeticOp::Or => {}
+                ArithmeticOp::Xor => {}
+            };
+        }
+        ExpressionInfo::Comparison { kind, left, right } => {
+            if left == right {
+                let result = match kind {
+                    ComparisonOp::Eq => true,
+                    ComparisonOp::Neq => false,
+                    ComparisonOp::Gt(_) => false,
+                    ComparisonOp::Gte(_) => true,
+                    ComparisonOp::Lt(_) => false,
+                    ComparisonOp::Lte(_) => true,
+                };
+
+                return prog.const_bool(result).into();
+            }
+        }
+        ExpressionInfo::Cast { .. } => {
+            let chain = extract_minimal_cast_chain(prog, expr.into());
+
+            // if this chain is shorter than what we have right now
+            if chain.ops.len() < chain.origin_cast_count {
+                let new_value = chain.ops.iter().fold(chain.inner, |curr, &op| {
+                    let expr_info = op.to_expression(&mut prog.types, curr);
+                    prog.define_expr(expr_info).into()
+                });
+                return new_value;
+            }
+        }
+        ExpressionInfo::TupleFieldPtr { .. } => {}
+        ExpressionInfo::PointerOffSet { .. } => {}
+    }
+
+    expr.into()
+}

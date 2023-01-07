@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use derive_more::Constructor;
 
-use crate::mid::ir::{CastKind, InstructionInfo, Program, ProgramTypes, Scoped, Signed, TypeInfo, Value};
+use crate::mid::ir::{CastKind, ExpressionInfo, Program, ProgramTypes, Signed, TypeInfo, Value};
 
 #[derive(Debug, Copy, Clone, Constructor, Eq, PartialEq)]
 pub struct CastOp {
@@ -18,9 +18,6 @@ pub struct CastChain {
 }
 
 /// Get an optimized version of the cast operations to apply.
-// TODO it appears the longest possible optimized chain has 3 operations in it:
-//   * truncate, extend(signed), extend(unsigned)
-//   can we rewrite this entire thing to make use of this fact, and end up with something a lot simpler and faster?
 pub fn extract_minimal_cast_chain(prog: &Program, value: Value) -> CastChain {
     let (stack, inner, depth) = extract_minimal_cast_chain_impl(prog, value);
 
@@ -32,10 +29,10 @@ pub fn extract_minimal_cast_chain(prog: &Program, value: Value) -> CastChain {
 }
 
 impl CastOp {
-    pub fn to_instruction(self, types: &mut ProgramTypes, input: Value) -> InstructionInfo {
+    pub fn to_expression(self, types: &mut ProgramTypes, input: Value) -> ExpressionInfo {
         let CastOp { kind, bits } = self;
 
-        InstructionInfo::Cast {
+        ExpressionInfo::Cast {
             ty: types.push(TypeInfo::Integer { bits }),
             kind,
             value: input,
@@ -63,8 +60,8 @@ pub struct Stack {
 }
 
 fn extract_minimal_cast_chain_impl(prog: &Program, value: Value) -> (Stack, Value, usize) {
-    if let Value::Scoped(Scoped::Instr(instr)) = value {
-        if let &InstructionInfo::Cast { ty, kind, value: next } = prog.get_instr(instr) {
+    if let Value::Expr(expr) = value {
+        if let &ExpressionInfo::Cast { ty, kind, value: next } = prog.get_expr(expr) {
             let (mut stack, inner, depth) = extract_minimal_cast_chain_impl(prog, next);
             let bits = prog.get_type(ty).unwrap_int().unwrap();
             stack.cast(CastOp::new(kind, bits));
@@ -140,7 +137,7 @@ mod test {
     use rand::{Rng, SeedableRng};
     use rand::rngs::StdRng;
 
-    use crate::mid::ir::{CastKind, InstructionInfo, ParameterInfo, Program, Signed, Value};
+    use crate::mid::ir::{CastKind, ExpressionInfo, ParameterInfo, Program, Signed, Value};
     use crate::mid::util::cast_chain::{CastOp, extract_minimal_cast_chain};
 
     fn build_chain(start_bits: u32, steps: &[CastOp]) -> (Program, Value, Value) {
@@ -153,7 +150,7 @@ mod test {
 
         for &CastOp { kind, bits } in steps {
             let ty = prog.define_type_int(bits);
-            curr = prog.define_instr(InstructionInfo::Cast {
+            curr = prog.define_expr(ExpressionInfo::Cast {
                 ty,
                 kind,
                 value: curr,

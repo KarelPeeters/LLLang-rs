@@ -54,37 +54,37 @@ impl BinaryArgType {
     }
 }
 
-fn binary_op_to_instr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, left: ir::Value, right: ir::Value) -> ir::InstructionInfo {
+fn binary_op_to_expr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, left: ir::Value, right: ir::Value) -> ir::ExpressionInfo {
     match ast_kind {
         ast::BinaryOp::Add => {
             arg_ty.unwrap_int();
-            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right }
         }
         ast::BinaryOp::Sub => {
             arg_ty.unwrap_int();
-            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right }
         }
         ast::BinaryOp::Mul => {
             arg_ty.unwrap_int();
-            ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right }
         }
-        ast::BinaryOp::Div => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Mod => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Gte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gte(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Gt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Gt(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Lte => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lte(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Lt => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Lt(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Div => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Mod => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Gte => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Gte(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Gt => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Gt(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Lte => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Lte(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Lt => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Lt(arg_ty.unwrap_int()), left, right },
 
-        ast::BinaryOp::Eq => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Eq, left, right },
-        ast::BinaryOp::Neq => ir::InstructionInfo::Comparison { kind: ir::ComparisonOp::Neq, left, right },
-        ast::BinaryOp::And => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::And, left, right },
-        ast::BinaryOp::Or => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, left, right },
-        ast::BinaryOp::Xor => ir::InstructionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, left, right },
+        ast::BinaryOp::Eq => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Eq, left, right },
+        ast::BinaryOp::Neq => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Neq, left, right },
+        ast::BinaryOp::And => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::And, left, right },
+        ast::BinaryOp::Or => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, left, right },
+        ast::BinaryOp::Xor => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, left, right },
     }
 }
 
 fn new_target(block: ir::Block) -> ir::Target {
-    ir::Target { block, phi_values: Vec::new() }
+    ir::Target { block, args: Vec::new() }
 }
 
 fn new_jump(block: ir::Block) -> ir::Terminator {
@@ -157,29 +157,27 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
-    fn append_negate(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
+    fn append_negate(&mut self, value: ir::Value) -> ir::Value {
         let ty_ir = self.prog.type_of_value(value);
         let bits = self.prog.get_type(ty_ir).unwrap_int().unwrap();
 
-        let instr = ir::InstructionInfo::Arithmetic {
+        self.prog.define_expr(ir::ExpressionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Sub,
             left: ir::Const { ty: ty_ir, value: BitInt::zero(bits) }.into(),
             right: value,
-        };
-        self.append_instr(block, instr).into()
+        }).into()
     }
 
     #[must_use]
-    fn append_not(&mut self, block: ir::Block, value: ir::Value) -> ir::Value {
+    fn append_not(&mut self, value: ir::Value) -> ir::Value {
         let ty_ir = self.prog.type_of_value(value);
         assert_eq!(ty_ir, self.prog.ty_bool());
 
-        let instr = ir::InstructionInfo::Arithmetic {
+        self.prog.define_expr(ir::ExpressionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Xor,
             left: value,
             right: self.prog.const_bool(true).into(),
-        };
-        self.append_instr(block, instr).into()
+        }).into()
     }
 
     fn append_store(&mut self, block: ir::Block, addr: ir::Value, value: ir::Value) {
@@ -218,7 +216,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::undef(ty_ptr_ir) })
     }
 
-    fn append_int_cast(&mut self, block: ir::Block, info_before: IntTypeInfo, info_after: IntTypeInfo, value_before: ir::Value) -> ir::Value {
+    fn append_int_cast(&mut self, info_before: IntTypeInfo, info_after: IntTypeInfo, value_before: ir::Value) -> ir::Value {
         // Conceptually all int casting follows the following steps:
         // * Infinitely extend the value from its original size and signedness.
         // * Truncate at the new size.
@@ -234,28 +232,27 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             Ordering::Greater => ir::CastKind::IntExtend(info_before.signed),
         };
 
-        let instr = self.append_instr(block, ir::InstructionInfo::Cast {
+        self.prog.define_expr(ir::ExpressionInfo::Cast {
             ty: ty_after_ir,
             kind: cast_kind,
             value: value_before,
-        });
-        instr.into()
+        }).into()
     }
 
-    fn append_cast(&mut self, expr: &'ast ast::Expression, block: ir::Block, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
+    fn append_cast(&mut self, expr: &'ast ast::Expression, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
         match (&self.types[value_before.ty], &self.types[ty_after]) {
             (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
                 // IR pointers are untyped, so this is a no-op
                 Ok(value_before.ir)
             }
             (&TypeInfo::Int(info_before), &TypeInfo::Int(info_after)) => {
-                Ok(self.append_int_cast(block, info_before, info_after, value_before.ir))
+                Ok(self.append_int_cast(info_before, info_after, value_before.ir))
             }
             (TypeInfo::Bool, &TypeInfo::Int(info_after)) => {
                 // We don't also have "int->bool" since that's just "!=".
                 // "bool->int" is just an unsigned int cast
                 let info_before = IntTypeInfo::new(Signed::Unsigned, 1);
-                Ok(self.append_int_cast(block, info_before, info_after, value_before.ir))
+                Ok(self.append_int_cast(info_before, info_after, value_before.ir))
             }
             _ => Err(Error::InvalidCastTypes {
                 expression: expr,
@@ -361,13 +358,16 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         ast::BinaryOp::Add =>
                             value_right.ir,
                         ast::BinaryOp::Sub =>
-                            self.append_negate(after_right.block, value_right.ir),
+                            self.append_negate(value_right.ir),
                         _ => panic!("Unexpected binary op kind for pointer result type, should be add or sub")
                     };
 
                     let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
-                    let instr = ir::InstructionInfo::PointerOffSet { base: value_left.ir, ty: inner_ty_ir, index: offset_ir };
-                    self.append_instr(after_right.block, instr).into()
+                    self.prog.define_expr(ir::ExpressionInfo::PointerOffSet {
+                        base: value_left.ir,
+                        ty: inner_ty_ir,
+                        index: offset_ir,
+                    }).into()
                 } else {
                     //basic binary operation
                     assert_eq!(value_left.ty, value_right.ty);
@@ -376,8 +376,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
                         _ => panic!(),
                     };
-                    let instr = binary_op_to_instr(*kind, arg_ty, value_left.ir, value_right.ir);
-                    self.append_instr(after_right.block, instr).into()
+                    self.prog.define_expr(binary_op_to_expr(
+                        *kind,
+                        arg_ty,
+                        value_left.ir,
+                        value_right.ir,
+                    )).into()
                 };
 
                 (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: result }))
@@ -407,7 +411,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                             self.append_expr_loaded(flow, scope, inner)?;
                         let ty = inner.ty;
 
-                        let result = self.append_negate(after_inner.block, inner.ir);
+                        let result = self.append_negate(inner.ir);
                         (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }
@@ -423,7 +427,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 let cond = match kind {
                     LogicalOp::And => left_value.ir,
-                    LogicalOp::Or => self.append_not(after_left.block, left_value.ir),
+                    LogicalOp::Or => self.append_not(left_value.ir),
                 };
 
                 let after_both = self.append_if(after_left, cond, |s, flow| {
@@ -497,14 +501,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let result_ty = self.expr_type(expr);
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
 
-                let struct_sub_ptr = ir::InstructionInfo::TupleFieldPtr {
+                let struct_sub_ptr = self.prog.define_expr(ir::ExpressionInfo::TupleFieldPtr {
                     tuple_ty: tuple_ty_ir,
                     base: target_value.ir,
                     index,
-                };
-                let struct_sub_ptr = self.append_instr(after_target.block, struct_sub_ptr);
+                }).into();
 
-                (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: struct_sub_ptr.into() }))
+                (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: struct_sub_ptr }))
             }
             ast::ExpressionKind::ArrayIndex { target, index } => {
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
@@ -514,20 +517,19 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let result_ty_ir = self.types.map_type(self.prog, result_ty);
                 let result_ty_ptr = self.types.define_type_ptr(result_ty);
 
-                let array_index_ptr = ir::InstructionInfo::PointerOffSet {
+                let array_index_ptr = self.prog.define_expr(ir::ExpressionInfo::PointerOffSet {
                     ty: result_ty_ir,
                     base: target_value.ir,
                     index: index.ir,
-                };
-                let array_index_ptr = self.append_instr(after_index.block, array_index_ptr);
+                }).into();
 
-                (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: array_index_ptr.into() }))
+                (after_index, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: array_index_ptr }))
             }
             ast::ExpressionKind::Cast { value, ty: _ } => {
                 let (after_value, value_before) = self.append_expr_loaded(flow, scope, value)?;
 
                 let ty_after = self.expr_type(expr);
-                let value_after_ir = self.append_cast(expr, after_value.block, value_before, ty_after)?;
+                let value_after_ir = self.append_cast(expr, value_before, ty_after)?;
 
                 (after_value, LRValue::Right(TypedValue { ty: ty_after, ir: value_after_ir }))
             }
@@ -563,14 +565,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                     let (after_value, field_value) = self.append_expr_loaded(flow, scope, field_value)?;
 
-                    let field_ptr = ir::InstructionInfo::TupleFieldPtr {
+                    let field_ptr = self.prog.define_expr(ir::ExpressionInfo::TupleFieldPtr {
                         tuple_ty: struct_ty_ir,
                         base: slot.into(),
                         index: field_index.try_into().unwrap(),
-                    };
-                    let field_ptr = self.append_instr(after_value.block, field_ptr);
+                    }).into();
 
-                    self.append_store(after_value.block, field_ptr.into(), field_value.ir);
+                    self.append_store(after_value.block, field_ptr, field_value.ir);
 
                     Ok(after_value)
                 })?;
@@ -840,14 +841,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let cond = |s: &mut Self, cond_start: Flow| {
                     let load = s.append_load(cond_start.block, index_slot, index_ty_ir);
 
-                    let cond = ir::InstructionInfo::Comparison {
+                    let cond = s.prog.define_expr(ir::ExpressionInfo::Comparison {
                         kind: ir::ComparisonOp::Lt(index_info.signed),
                         left: load,
                         right: end_value.ir,
-                    };
-                    let cond = s.append_instr(cond_start.block, cond);
+                    }).into();
 
-                    Ok((cond_start, cond.into()))
+                    Ok((cond_start, cond))
                 };
 
                 //body; index = index + 1
@@ -856,14 +856,13 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                     let load = s.append_load(body_end.block, index_slot, index_ty_ir);
 
-                    let inc = ir::InstructionInfo::Arithmetic {
+                    let inc = s.prog.define_expr(ir::ExpressionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
                         left: load,
                         right: const_one.into(),
-                    };
-                    let inc = s.append_instr(body_end.block, inc);
+                    }).into();
 
-                    s.append_store(body_end.block, index_slot, inc.into());
+                    s.append_store(body_end.block, index_slot, inc);
 
                     Ok(body_end)
                 };
@@ -890,10 +889,8 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     pub fn lower_func(&mut self, decl: &'cst cst::FunctionDecl<'ast>) -> Result<'ast, ()> {
-        let start = self.new_flow(true);
-        self.prog.get_func_mut(self.ir_func).entry = ir::Target { block: start.block, phi_values: vec![] };
-
         let mut scope = self.module_scope.nest();
+        let func_entry = self.prog.get_func(self.ir_func).entry;
 
         for (i, param) in decl.ast.params.iter().enumerate() {
             // get all of the types
@@ -901,25 +898,32 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             let ty_ir = self.prog.get_func(self.ir_func).func_ty.params[i];
             let ty_ptr = self.types.define_type_ptr(ty);
 
-            //get the corresponding param
-            let ir_param = self.prog.get_func(self.ir_func).params[i];
+            //get the corresponding param (which is the param of the entry block)
+            let ir_param = self.prog.get_block(func_entry).params.clone()[i];
 
             //allocate a slot for the parameter so its address can be taken
             let debug_name = self.maybe_id_debug_name(&param.id);
             let slot = self.define_slot(ty_ir, debug_name);
 
             //immediately copy the param into the slot
-            self.append_store(start.block, slot.into(), ir_param.into());
+            self.append_store(func_entry, slot.into(), ir_param.into());
 
             let slot_value = LRValue::Left(TypedValue { ty: ty_ptr, ir: slot.into() });
             let item = ScopedItem::Value(ScopedValue::Immediate(slot_value));
             scope.maybe_declare(&param.id, item)?;
         }
 
+        // jump from entry to start
+        let start = self.new_flow(true);
+        let entry_term = ir::Terminator::Jump { target: ir::Target { block: start.block, args: vec![] } };
+        self.prog.get_block_mut(func_entry).terminator = entry_term;
+
+        // append the block
         let body = decl.ast.body.as_ref().
             expect("can only generate code for functions with a body");
         let end = self.append_nested_block(start, &scope, body)?;
 
+        // check/insert the final return
         if end.reachable {
             if self.ret_ty == self.types.type_void() {
                 //automatically insert return
@@ -928,9 +932,9 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             } else {
                 return Err(Error::MissingReturn(&decl.ast.id));
             }
+        } else {
+            // TODO insert proper return for non-reachable end?
         }
-
-        // TODO insert proper return for non-reachable end?
 
         Ok(())
     }

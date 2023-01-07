@@ -1,13 +1,12 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Function, Program, Scoped, Value};
-use crate::util::{IndexMutTwice, VecExt};
+use crate::mid::ir::{Block, Function, Program};
+use crate::util::{IndexMutTwice, Never, NeverExt};
 
 #[derive(Debug)]
 pub struct DomInfo {
-    // TODO make these private with getters at some point
-    pub func: Function,
-    pub blocks: Vec<Block>,
+    func: Function,
+    blocks: Vec<Block>,
     successors: Vec<FixedBitSet>,
     dominates: Vec<FixedBitSet>,
     frontier: Vec<FixedBitSet>,
@@ -19,10 +18,13 @@ impl DomInfo {
     // also don't store all of this redundant state
     pub fn new(prog: &Program, func: Function) -> Self {
         let func_info = prog.get_func(func);
-        let entry_block = func_info.entry.block;
+        let entry_block = func_info.entry;
 
         let mut blocks = Vec::new();
-        prog.visit_blocks(prog.get_func(func).entry.block, |block| blocks.push(block));
+        prog.try_visit_blocks(entry_block, |block| {
+            blocks.push(block);
+            Never::UNIT
+        }).no_err();
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());
@@ -188,72 +190,25 @@ impl DomInfo {
             }
         }
     }
+
+    pub fn func(&self) -> Function {
+        self.func
+    }
+
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum DomPosition {
     Global,
     FuncEntry(Function),
-    InBlock(Function, Block, BlockPosition),
-}
-
-#[derive(Debug)]
-pub struct NoDefFound;
-
-impl DomPosition {
-    // TODO find a faster way to do this
-    //   maybe the only solution is to keep track of this for each value? that's pretty ugly and brittle...
-    pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, NoDefFound> {
-        let func_info = prog.get_func(func);
-
-        match value {
-            Value::Global(_) | Value::Immediate(_) => {
-                Ok(DomPosition::Global)
-            }
-            Value::Scoped(value) => {
-                match value {
-                    Scoped::Param(param) => {
-                        func_info.params.contains(&param).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-                    }
-                    Scoped::Slot(slot) => {
-                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
-                    }
-                    Scoped::Phi(phi) => {
-                        prog.try_visit_blocks(func_info.entry.block, |block| {
-                            let block_info = prog.get_block(block);
-                            if block_info.phis.contains(&phi) {
-                                Err(DomPosition::InBlock(func, block, BlockPosition::Entry))
-                            } else {
-                                Ok(())
-                            }
-                        }).err().ok_or(NoDefFound)
-                    }
-                    Scoped::Instr(instr) => {
-                        prog.try_visit_blocks(func_info.entry.block, |block| {
-                            let block_info = prog.get_block(block);
-                            if let Some(index) = block_info.instructions.index_of(&instr) {
-                                Err(DomPosition::InBlock(func, block, BlockPosition::Instruction(index)))
-                            } else {
-                                Ok(())
-                            }
-                        }).err().ok_or(NoDefFound)
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub enum BlockPosition {
-    // Ord is derived correctly, the top element is the lowest one
-    Entry,
-    Instruction(usize),
-    Terminator,
+    InBlock(Function, Block, InBlockPos),
 }
 
 impl DomPosition {
-    fn function(self) -> Option<Function> {
+    pub fn function(self) -> Option<Function> {
         match self {
             DomPosition::Global => None,
             DomPosition::FuncEntry(func) => Some(func),
@@ -261,3 +216,12 @@ impl DomPosition {
         }
     }
 }
+
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub enum InBlockPos {
+    // Ord is derived correctly, the top element is the lowest one
+    Entry,
+    Instruction(usize),
+    Terminator,
+}
+
