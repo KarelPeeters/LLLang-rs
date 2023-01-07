@@ -1,6 +1,6 @@
 use itertools::{Itertools, zip};
 
-use crate::mid::analyse::dom_info::{DomInfo, DomPosition};
+use crate::mid::analyse::dom_info::{DefError, DomInfo, DomPosition};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Immediate, Program, Value};
@@ -49,7 +49,12 @@ pub fn param_combine(prog: &mut Program) -> bool {
             for (&param, &arg) in zip(&params, &param_values) {
                 if let Some(value) = arg.as_value_of_type(prog, prog.get_param(param).ty) {
                     // TODO maybe store and look up the def position in use_info instead?
-                    let def_pos = DomPosition::find_def_slow(prog, func, value).unwrap();
+                    let def_pos = match DomPosition::find_def_slow(prog, func, value) {
+                        Ok(def_pos) => def_pos,
+                        Err(DefError::NoDefFound) => panic!("No def found for {:?} in {:?}", value, func),
+                        // TODO handle expressions properly
+                        Err(DefError::Expression(_)) => continue,
+                    };
 
                     let replacement_count = use_info.replace_value_usages_if(prog, param.into(), value, |usage| {
                         match usage.as_dom_pos() {

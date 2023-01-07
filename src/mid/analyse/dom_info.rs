@@ -1,6 +1,6 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Function, Program, Scoped, Value};
+use crate::mid::ir::{Block, Expression, Function, Program, Scoped, Value};
 use crate::util::{IndexMutTwice, Never, NeverExt, VecExt};
 
 #[derive(Debug)]
@@ -208,7 +208,10 @@ pub enum DomPosition {
 }
 
 #[derive(Debug)]
-pub struct NoDefFound;
+pub enum DefError {
+    NoDefFound,
+    Expression(Expression),
+}
 
 impl DomPosition {
     pub fn function(self) -> Option<Function> {
@@ -221,7 +224,7 @@ impl DomPosition {
     
     // TODO find a faster way to do this
     //   maybe the only solution is to keep track of this for each value? that's pretty ugly and brittle...
-    pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, NoDefFound> {
+    pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, DefError> {
         let func_info = prog.get_func(func);
 
         match value {
@@ -238,10 +241,10 @@ impl DomPosition {
                             } else {
                                 Ok(())
                             }
-                        }).err().ok_or(NoDefFound)
+                        }).err().ok_or(DefError::NoDefFound)
                     }
                     Scoped::Slot(slot) => {
-                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(NoDefFound)
+                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(DefError::NoDefFound)
                     }
                     Scoped::Instr(instr) => {
                         prog.try_visit_blocks(func_info.entry, |block| {
@@ -251,13 +254,12 @@ impl DomPosition {
                             } else {
                                 Ok(())
                             }
-                        }).err().ok_or(NoDefFound)
+                        }).err().ok_or(DefError::NoDefFound)
                     }
                 }
             }
-            Value::Expr(_) => {
-                todo!("find_def_slow for expression")
-            }
+            // TODO implement some infrastructure for expression domination, both in the use and def direction
+            Value::Expr(expr) => Err(DefError::Expression(expr)),
         }
     }
 }
