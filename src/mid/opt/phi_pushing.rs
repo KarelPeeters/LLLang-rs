@@ -78,5 +78,6 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
         }
     }
 
+    println!("changed_terminators changed {} terminators", changed_terminators);
     changed_terminators != 0
 }

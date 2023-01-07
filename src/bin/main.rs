@@ -2,6 +2,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::ffi::{OsStr, OsString};
+use std::fmt::Debug;
 use std::fs::{File, read_to_string};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -115,10 +116,12 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
     Ok(prog)
 }
 
-fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
+fn run_single_pass(prog: &mut mid::ir::Program, name: &str, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
     let nodes_before = prog.nodes.total_node_count();
     let str_before = prog.to_string();
+    println!("Running {:?}", name);
     let mut changed = pass(prog);
+    println!("Verifying after {:?}", name);
     verify(prog)?;
     let nodes_after = prog.nodes.total_node_count();
     let str_after = prog.to_string();
@@ -143,31 +146,31 @@ fn run_single_pass(prog: &mut mid::ir::Program, pass: impl FnOnce(&mut mid::ir::
 }
 
 fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
-    let changed = run_single_pass(prog, mid::opt::gc::gc)?;
+    let changed = run_single_pass(prog, "gc", mid::opt::gc::gc)?;
     // TODO maybe only do this in debug mode
-    assert!(!run_single_pass(prog, mid::opt::gc::gc)?, "GC has to be idempotent");
+    assert!(!run_single_pass(prog, "gc", mid::opt::gc::gc)?, "GC has to be idempotent");
     Ok(changed)
 }
 
 fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
-    let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
-        mid::opt::slot_to_param::slot_to_param,
-        mid::opt::inline::inline,
-        mid::opt::sccp::sccp,
-        mid::opt::instr_simplify::instr_simplify,
-        mid::opt::param_combine::param_combine,
-        mid::opt::dce::dce,
-        mid::opt::flow_simplify::flow_simplify,
-        mid::opt::block_threading::block_threading,
-        mid::opt::phi_pushing::phi_pushing,
-        mid::opt::mem_forwarding::mem_forwarding,
+    let passes: &[(&str, fn(&mut mid::ir::Program) -> bool)] = &[
+        ("slot_to_param", mid::opt::slot_to_param::slot_to_param),
+        ("inline", mid::opt::inline::inline),
+        ("sccp", mid::opt::sccp::sccp),
+        ("instr_simplify", mid::opt::instr_simplify::instr_simplify),
+        ("param_combine", mid::opt::param_combine::param_combine),
+        ("dce", mid::opt::dce::dce),
+        ("flow_simplify", mid::opt::flow_simplify::flow_simplify),
+        ("block_threading", mid::opt::block_threading::block_threading),
+        ("phi_pushing", mid::opt::phi_pushing::phi_pushing),
+        ("mem_forwarding", mid::opt::mem_forwarding::mem_forwarding),
     ];
     run_gc(prog)?;
     let mut prog_before = prog.clone();
     loop {
         let mut changed = false;
-        for pass in passes {
-            let result = run_single_pass(prog, pass);
+        for (name, pass) in passes {
+            let result = run_single_pass(prog, name, pass);
             if result.is_err() {
                 File::create(path_before).with_context(|| "creating before file")?
                     .write_fmt(format_args!("{}", prog_before)).with_context(|| "writing before file")?;
