@@ -152,7 +152,7 @@ fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
 fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
     let passes: &[fn(&mut mid::ir::Program) -> bool] = &[
         mid::opt::slot_to_param::slot_to_param,
-        // mid::opt::inline::inline,
+        mid::opt::inline::inline,
         mid::opt::sccp::sccp,
         // mid::opt::instr_simplify::instr_simplify,
         // mid::opt::phi_combine::phi_combine,

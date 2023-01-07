@@ -211,6 +211,14 @@ pub enum DomPosition {
 pub struct NoDefFound;
 
 impl DomPosition {
+    pub fn function(self) -> Option<Function> {
+        match self {
+            DomPosition::Global => None,
+            DomPosition::FuncEntry(func) => Some(func),
+            DomPosition::InBlock(func, _, _) => Some(func),
+        }
+    }
+    
     // TODO find a faster way to do this
     //   maybe the only solution is to keep track of this for each value? that's pretty ugly and brittle...
     pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, NoDefFound> {
@@ -262,12 +270,3 @@ pub enum InBlockPos {
     Terminator,
 }
 
-impl DomPosition {
-    fn function(self) -> Option<Function> {
-        match self {
-            DomPosition::Global => None,
-            DomPosition::FuncEntry(func) => Some(func),
-            DomPosition::InBlock(func, _, _) => Some(func),
-        }
-    }
-}

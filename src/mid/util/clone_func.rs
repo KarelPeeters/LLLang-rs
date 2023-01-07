@@ -10,6 +10,7 @@ use crate::util::arena::Arena;
 pub struct Recursive;
 
 impl Program {
+    // TODO remove replacement args, we can just use a target now
     pub fn deep_clone_function(&mut self, func: Function, replace_args: Option<&[Value]>) -> Result<FunctionInfo, Recursive> {
         let old_info = self.get_func(func);
         let old_entry = old_info.entry;

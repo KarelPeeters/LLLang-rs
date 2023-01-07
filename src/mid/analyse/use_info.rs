@@ -80,6 +80,17 @@ impl UseInfo {
     pub fn blocks(&self) -> impl Iterator<Item=Block> + '_ {
         self.block_usages.keys().copied()
     }
+
+    /// Whether `value` is used anywhere in `func`, including through expressions.
+    /// Can be used to check whether a function can directly call itself.
+    pub fn value_used_in_func(&self, prog: &Program, value: Value, func: Function) -> bool {
+        self[value].iter().any(|usage| {
+            match usage.as_dom_pos() {
+                Ok(pos) => pos.function() == Some(func),
+                Err(expr) => self.value_used_in_func(prog, expr.into(), func),
+            }
+        })
+    }
 }
 
 impl<T: Into<Value>> std::ops::Index<T> for UseInfo {
@@ -216,7 +227,7 @@ impl<'a> State<'a> {
                 |usage| match usage {
                     TermUsage::Value(value, usage) => {
                         self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
-                    },
+                    }
                     TermUsage::Block(succ, kind) => {
                         self.todo_blocks.push_back(BlockPos { func, block: succ });
                         self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
