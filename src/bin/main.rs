@@ -162,7 +162,7 @@ fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after
         ("dce", mid::opt::dce::dce),
         ("flow_simplify", mid::opt::flow_simplify::flow_simplify),
         ("block_threading", mid::opt::block_threading::block_threading),
-        ("phi_pushing", mid::opt::phi_pushing::phi_pushing),
+        // ("phi_pushing", mid::opt::phi_pushing::phi_pushing),
         ("mem_forwarding", mid::opt::mem_forwarding::mem_forwarding),
     ];
     run_gc(prog)?;
