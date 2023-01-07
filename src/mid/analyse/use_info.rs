@@ -16,6 +16,7 @@ pub struct UseInfo {
     func_blocks: IndexMap<Function, IndexSet<Block>>,
     value_usages: IndexMap<Value, Vec<Usage>>,
     block_usages: IndexMap<Block, Vec<BlockUsage>>,
+    expressions: IndexSet<Expression>,
 }
 
 // TODO use visitor here as well
@@ -154,6 +155,7 @@ impl<'a> State<'a> {
             func_blocks: Default::default(),
             value_usages: Default::default(),
             block_usages: Default::default(),
+            expressions: Default::default(),
         };
 
         Self {
@@ -238,6 +240,11 @@ impl<'a> State<'a> {
     }
 
     fn visit_expr(&mut self, expr: Expression) {
+        if !self.info.expressions.insert(expr) {
+            // we've already visited this expression
+            return;
+        }
+
         let prog = self.prog;
         let expr_info = prog.get_expr(expr);
 
@@ -317,7 +324,7 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
 fn repl<T: Eq + Debug>(field: &mut T, old: T, new: T) {
     assert!(
         *field == old,
-        "Tried replace {:?} -> {:?}, but was already replaced by {:?}",
+        "Tried to replace {:?} -> {:?}, but was already replaced by {:?}",
         old, new, field,
     );
     *field = new;
