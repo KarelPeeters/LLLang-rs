@@ -281,8 +281,8 @@ impl Selector<'_> {
         match value {
             Value::Immediate(value) => match value {
                 Immediate::Void => todo!("void to operand"),
-                Immediate::Undef(_) => todo!("undef to operand"),
-                Immediate::Const(cst) => VConst::Const(cst).into(),
+                Immediate::Undef(_) => VopRCM::Undef,
+                Immediate::Const(cst) => VConst::Const(cst.value).into(),
             },
             Value::Global(value) => {
                 let symbol = self.symbols.map_global(value);
@@ -318,6 +318,7 @@ impl Selector<'_> {
     #[must_use]
     fn force_rc(&mut self, value: VopRCM) -> VopRC {
         match value {
+            VopRCM::Undef => VopRC::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => cst.into(),
             VopRCM::Mem(mem) => self.force_reg(mem.into()).into(),
@@ -327,6 +328,7 @@ impl Selector<'_> {
     #[must_use]
     fn force_rm(&mut self, value: VopRCM) -> VopRM {
         match value {
+            VopRCM::Undef => VopRM::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => self.force_reg(cst.into()).into(),
             VopRCM::Mem(mem) => mem.into(),
@@ -336,6 +338,7 @@ impl Selector<'_> {
     #[must_use]
     fn force_reg(&mut self, value: VopRCM) -> VReg {
         match value {
+            VopRCM::Undef => self.dummy_reg(),
             VopRCM::Reg(reg) => reg,
             VopRCM::Mem(_) | VopRCM::Const(_) => {
                 let reg = self.vregs.new_vreg();

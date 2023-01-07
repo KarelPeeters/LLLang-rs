@@ -6,7 +6,8 @@ use derive_more::From;
 use regalloc2::{Operand, PReg, PRegSet, RegClass, VReg};
 
 use crate::back::x86_asm_select::Allocs;
-use crate::mid::ir::{Const, Signed};
+use crate::mid::ir::Signed;
+use crate::mid::util::bit_int::BitInt;
 
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
@@ -47,6 +48,7 @@ pub enum RegOperand {
 
 #[derive(Debug, Copy, Clone, From)]
 pub enum VopRCM {
+    Undef,
     Reg(VReg),
     Const(VConst),
     Mem(VMem),
@@ -54,28 +56,30 @@ pub enum VopRCM {
 
 #[derive(Debug, Copy, Clone, From)]
 pub enum VopRC {
+    Undef,
     Reg(VReg),
     Const(VConst),
 }
 
 #[derive(Debug, Copy, Clone, From)]
 pub enum VopRM {
+    Undef,
     Reg(VReg),
     Mem(VMem),
 }
 
 #[derive(Debug, Copy, Clone, From)]
 pub enum VConst {
-    Const(Const),
+    Const(BitInt),
     Symbol(VSymbol),
 }
 
 impl VConst {
     pub fn to_asm(&self) -> String {
         match self {
-            VConst::Const(cst) => min_by_key(
-                format!("{}", cst.value.unsigned()),
-                format!("{}", cst.value.signed()),
+            VConst::Const(value) => min_by_key(
+                format!("{}", value.unsigned()),
+                format!("{}", value.signed()),
                 |s| s.len(),
             ),
             VConst::Symbol(symbol) => format!("{}", symbol),
@@ -117,6 +121,7 @@ impl VMem {
 impl From<VopRM> for VopRCM {
     fn from(value: VopRM) -> Self {
         match value {
+            VopRM::Undef => VopRCM::Undef,
             VopRM::Reg(reg) => VopRCM::Reg(reg),
             VopRM::Mem(mem) => VopRCM::Mem(mem),
         }
@@ -126,6 +131,7 @@ impl From<VopRM> for VopRCM {
 impl From<VopRC> for VopRCM {
     fn from(value: VopRC) -> Self {
         match value {
+            VopRC::Undef => VopRCM::Undef,
             VopRC::Reg(reg) => VopRCM::Reg(reg),
             VopRC::Const(cst) => VopRCM::Const(cst),
         }
@@ -162,6 +168,7 @@ impl VOperand for VMem {
 impl VOperand for VopRCM {
     fn for_each_reg(&self, mut f: impl FnMut(RegOperand)) {
         match *self {
+            VopRCM::Undef => {},
             VopRCM::Reg(reg) => f(RegOperand::Adaptive(reg)),
             VopRCM::Const(_) => {}
             VopRCM::Mem(mem) => mem.for_each_reg(f)
@@ -170,6 +177,8 @@ impl VOperand for VopRCM {
 
     fn to_asm(&self, allocs: &Allocs) -> String {
         match *self {
+            // TODO this only works because all Vops accept a register, which is kind of brittle
+            VopRCM::Undef => preg_to_asm(PREG_A).to_string(),
             VopRCM::Reg(reg) => {
                 let preg = allocs.map_reg(reg);
                 preg_to_asm(preg).to_string()
@@ -181,6 +190,7 @@ impl VOperand for VopRCM {
 
     fn is_const_zero(&self) -> bool {
         match self {
+            VopRCM::Undef => false,
             VopRCM::Reg(_) => false,
             VopRCM::Const(VConst::Const(cst)) => cst.is_zero(),
             VopRCM::Const(VConst::Symbol(_)) => false,
