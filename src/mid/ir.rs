@@ -715,6 +715,10 @@ impl Value {
         option_match!(self, Value::Scoped(Scoped::Instr(instr)) => instr)
     }
 
+    pub fn as_expr(self) -> Option<Expression> {
+        option_match!(self, Value::Expr(expr) => expr)
+    }
+
     pub fn is_undef(self) -> bool {
         matches!(self, Value::Immediate(Immediate::Undef(_)))
     }
