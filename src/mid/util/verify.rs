@@ -7,6 +7,7 @@ use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
 use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_leaf_value, try_for_each_usage_in_instr, Usage};
 use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
 
+// TODO verify that there are no expression loops
 #[derive(Debug)]
 pub enum VerifyError {
     ValueDeclaredTwice(Value, DomPosition, DomPosition),
