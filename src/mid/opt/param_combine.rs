@@ -1,15 +1,13 @@
 use itertools::{Itertools, zip};
 
-use crate::mid::analyse::dom_info::{DefError, DomInfo, DomPosition};
+use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
+use crate::mid::analyse::value_dom::value_strictly_dominates_usage_slow;
 use crate::mid::ir::{Immediate, Program, Value};
 use crate::mid::util::lattice::Lattice;
 
 // TODO merge this with SCCP somehow (and make it more general, for all values not just params)
-// TODO it's kind of sad that we can't replace things with non-dominating values, could we maybe change the IR semantics
-//   to consider non-visited values as undef? -> that loses a lot of verify constraints, is that good or bad?
-// TODO otherwise add the "is_strict_dom" check to other passes that replace values
 // TODO combine duplicate param/arg pairs somewhere?
 /// Replace param values that can only have a single value with that value.
 pub fn param_combine(prog: &mut Program) -> bool {
@@ -48,21 +46,8 @@ pub fn param_combine(prog: &mut Program) -> bool {
             let params = block_info.params.clone();
             for (&param, &arg) in zip(&params, &param_values) {
                 if let Some(value) = arg.as_value_of_type(prog, prog.get_param(param).ty) {
-                    // TODO maybe store and look up the def position in use_info instead?
-                    let def_pos = match DomPosition::find_def_slow(prog, func, value) {
-                        Ok(def_pos) => def_pos,
-                        Err(DefError::NoDefFound) => panic!("No def found for {:?} in {:?}", value, func),
-                        // TODO handle expressions properly
-                        Err(DefError::Expression(_)) => continue,
-                    };
-
-                    let replacement_count = use_info.replace_value_usages_if(prog, param.into(), value, |usage| {
-                        match usage.as_dom_pos() {
-                            Ok(use_pos) => dom_info.pos_is_strict_dominator(def_pos, use_pos),
-                            // TODO properly check this for expressions and then allow replacing them
-                            //   this requires recursing through usages
-                            Err(_expr) => false,
-                        }
+                    let replacement_count = use_info.replace_value_usages_if(prog, param.into(), value, |prog, usage| {
+                        value_strictly_dominates_usage_slow(prog, &dom_info, &use_info, value, usage).unwrap()
                     });
 
                     replaced_usages += replacement_count;

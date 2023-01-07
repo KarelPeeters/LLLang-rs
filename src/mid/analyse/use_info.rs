@@ -26,14 +26,14 @@ impl UseInfo {
     }
 
     pub fn replace_value_usages(&self, prog: &mut Program, old: Value, new: Value) -> usize {
-        self.replace_value_usages_if(prog, old, new, |_| true)
+        self.replace_value_usages_if(prog, old, new, |_, _| true)
     }
 
-    pub fn replace_value_usages_if(&self, prog: &mut Program, old: Value, new: Value, mut filter: impl FnMut(&Usage) -> bool) -> usize {
+    pub fn replace_value_usages_if(&self, prog: &mut Program, old: Value, new: Value, mut filter: impl FnMut(&Program, &Usage) -> bool) -> usize {
         assert_ne!(old, new);
         let mut count = 0;
         for usage in &self[old] {
-            if filter(&usage) {
+            if filter(prog, &usage) {
                 repl_usage(prog, usage, old, new);
                 count += 1;
             }

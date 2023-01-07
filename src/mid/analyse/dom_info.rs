@@ -1,7 +1,7 @@
 use fixedbitset::FixedBitSet;
 
-use crate::mid::ir::{Block, Expression, Function, Program, Scoped, Value};
-use crate::util::{IndexMutTwice, Never, NeverExt, VecExt};
+use crate::mid::ir::{Block, Function, Program};
+use crate::util::{IndexMutTwice, Never, NeverExt};
 
 #[derive(Debug)]
 pub struct DomInfo {
@@ -207,59 +207,12 @@ pub enum DomPosition {
     InBlock(Function, Block, InBlockPos),
 }
 
-#[derive(Debug)]
-pub enum DefError {
-    NoDefFound,
-    Expression(Expression),
-}
-
 impl DomPosition {
     pub fn function(self) -> Option<Function> {
         match self {
             DomPosition::Global => None,
             DomPosition::FuncEntry(func) => Some(func),
             DomPosition::InBlock(func, _, _) => Some(func),
-        }
-    }
-    
-    // TODO find a faster way to do this
-    //   maybe the only solution is to keep track of this for each value? that's pretty ugly and brittle...
-    pub fn find_def_slow(prog: &Program, func: Function, value: Value) -> Result<Self, DefError> {
-        let func_info = prog.get_func(func);
-
-        match value {
-            Value::Global(_) | Value::Immediate(_) => {
-                Ok(DomPosition::Global)
-            }
-            Value::Scoped(value) => {
-                match value {
-                    Scoped::Param(param) => {
-                        prog.try_visit_blocks(func_info.entry, |block| {
-                            let block_info = prog.get_block(block);
-                            if block_info.params.contains(&param) {
-                                Err(DomPosition::InBlock(func, block, InBlockPos::Entry))
-                            } else {
-                                Ok(())
-                            }
-                        }).err().ok_or(DefError::NoDefFound)
-                    }
-                    Scoped::Slot(slot) => {
-                        func_info.slots.contains(&slot).then_some(DomPosition::FuncEntry(func)).ok_or(DefError::NoDefFound)
-                    }
-                    Scoped::Instr(instr) => {
-                        prog.try_visit_blocks(func_info.entry, |block| {
-                            let block_info = prog.get_block(block);
-                            if let Some(index) = block_info.instructions.index_of(&instr) {
-                                Err(DomPosition::InBlock(func, block, InBlockPos::Instruction(index)))
-                            } else {
-                                Ok(())
-                            }
-                        }).err().ok_or(DefError::NoDefFound)
-                    }
-                }
-            }
-            // TODO implement some infrastructure for expression domination, both in the use and def direction
-            Value::Expr(expr) => Err(DefError::Expression(expr)),
         }
     }
 }
