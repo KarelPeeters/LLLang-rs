@@ -8,4 +8,4 @@ pub mod param_combine;
 pub mod phi_pushing;
 pub mod mem_forwarding;
 pub mod block_threading;
-// pub mod instr_simplify;
+pub mod instr_simplify;

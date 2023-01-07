@@ -82,6 +82,10 @@ impl UseInfo {
         self.block_usages.keys().copied()
     }
 
+    pub fn expressions(&self) -> &IndexSet<Expression> {
+        &self.expressions
+    }
+    
     /// Whether `value` is used anywhere in `func`, including through expressions.
     /// Can be used to check whether a function can directly call itself.
     pub fn value_used_in_func(&self, prog: &Program, value: Value, func: Function) -> bool {

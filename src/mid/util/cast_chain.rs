@@ -29,7 +29,7 @@ pub fn extract_minimal_cast_chain(prog: &Program, value: Value) -> CastChain {
 }
 
 impl CastOp {
-    pub fn to_instruction(self, types: &mut ProgramTypes, input: Value) -> ExpressionInfo {
+    pub fn to_expression(self, types: &mut ProgramTypes, input: Value) -> ExpressionInfo {
         let CastOp { kind, bits } = self;
 
         ExpressionInfo::Cast {

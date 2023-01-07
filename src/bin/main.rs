@@ -154,7 +154,7 @@ fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after
         mid::opt::slot_to_param::slot_to_param,
         mid::opt::inline::inline,
         mid::opt::sccp::sccp,
-        // mid::opt::instr_simplify::instr_simplify,
+        mid::opt::instr_simplify::instr_simplify,
         mid::opt::param_combine::param_combine,
         mid::opt::dce::dce,
         mid::opt::flow_simplify::flow_simplify,

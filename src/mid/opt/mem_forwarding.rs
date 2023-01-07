@@ -9,6 +9,7 @@ use crate::mid::util::lattice::Lattice;
 /// Optimize load/store instructions:
 /// * replace loads with previously stored values
 /// * remove dead stores
+// TODO consider loads and stores with void type as dead?
 pub fn mem_forwarding(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
     let mut loads_replaced = 0;
