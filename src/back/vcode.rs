@@ -6,7 +6,7 @@ use derive_more::From;
 use regalloc2::{Operand, PReg, PRegSet, RegClass, VReg};
 
 use crate::back::x86_asm_select::Allocs;
-use crate::mid::ir::Const;
+use crate::mid::ir::{Const, Signed};
 
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
@@ -16,17 +16,19 @@ pub enum VInstruction {
     // set the given register to zero
     Clear(VReg),
 
-    // read as "move into .. from .."
+    /// read as "move into .. from .."
     MovReg(VReg, VopRCM),
     MovMem(VMem, VopRC),
 
-    // args are "target = left (+) right"
-    // target and left must be the same register, this is handled with a register allocation constraint
+    /// args are "target = left (+) right"
+    /// target and left must be the same register, this is handled with a register allocation constraint
     Binary(&'static str, VReg, VReg, VopRCM),
+
+    /// signed, high, low, div, quot, rem
+    DivMod(Signed, VReg, VReg, VopRM, VReg, VReg),
 
     Cmp(VReg, VopRCM),
     Test(VReg, VopRCM),
-
     // TODO allow mem operand here
     Setcc(&'static str, VReg, VReg),
 
@@ -187,6 +189,13 @@ impl VOperand for VopRCM {
     }
 }
 
+// TODO this is not really the right order, but do we care?
+const PREG_A: PReg = PReg::new(0, RegClass::Int);
+#[allow(dead_code)]
+const PREG_B: PReg = PReg::new(1, RegClass::Int);
+#[allow(dead_code)]
+const PREG_C: PReg = PReg::new(2, RegClass::Int);
+const PREG_D: PReg = PReg::new(3, RegClass::Int);
 const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx"];
 const REG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl"];
 
@@ -240,6 +249,13 @@ impl VInstruction {
                 operands.push(Operand::reg_reuse_def(dest, 1));
                 operands.push_use(left);
                 operands.push_use(right);
+            }
+            VInstruction::DivMod(_signed, high, low, div, quot, rem) => {
+                operands.push(Operand::reg_fixed_use(high, PREG_D));
+                operands.push(Operand::reg_fixed_use(low, PREG_A));
+                operands.push_use(div);
+                operands.push(Operand::reg_fixed_def(quot, PREG_A));
+                operands.push(Operand::reg_fixed_def(rem, PREG_D));
             }
             VInstruction::Cmp(left, right) | VInstruction::Test(left, right) => {
                 operands.push_use(left);
@@ -298,6 +314,19 @@ impl VInstruction {
             VInstruction::Binary(instr, dest, left, right) => {
                 assert_eq!(allocs.map_reg(dest), allocs.map_reg(left));
                 format!("{} {}, {}", instr, left.to_asm(allocs), right.to_asm(allocs))
+            }
+            VInstruction::DivMod(signed, high, low, div, quot, rem) => {
+                assert_eq!(allocs.map_reg(high), PREG_D);
+                assert_eq!(allocs.map_reg(low), PREG_A);
+                assert_eq!(allocs.map_reg(quot), PREG_A);
+                assert_eq!(allocs.map_reg(rem), PREG_D);
+
+                let instr = match signed {
+                    Signed::Signed => "idiv",
+                    Signed::Unsigned => "div",
+                };
+
+                format!("{} {}", instr, div.to_asm(allocs))
             }
             VInstruction::Cmp(left, right) =>
                 format!("cmp {}, {}", left.to_asm(allocs), right.to_asm(allocs)),

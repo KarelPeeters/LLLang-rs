@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
 
-use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VSymbol, VTarget};
+use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, Target, Terminator, Value};
 
 #[derive(Default)]
@@ -148,6 +148,7 @@ impl Selector<'_> {
     }
 
     pub fn append_terminator(&mut self, term: &Terminator) {
+        self.expr_cache.clear();
         let prog = self.prog;
 
         match *term {
@@ -176,11 +177,12 @@ impl Selector<'_> {
             Terminator::LoopForever => {
                 let label = self.symbols.new_label();
                 self.push(VInstruction::LoopForever(label));
-            },
+            }
         }
     }
 
     fn append_target(&mut self, target: &Target) -> VTarget {
+        self.expr_cache.clear();
         let &Target { block, ref args } = target;
         let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
 
@@ -192,6 +194,40 @@ impl Selector<'_> {
         }
     }
 
+    fn append_div_mod(&mut self, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
+        let low = self.append_value_to_reg(left);
+        let div = self.append_value_to_rm(right);
+
+        let high = self.vregs.new_vreg();
+        let quot = self.vregs.new_vreg();
+        let rem = self.vregs.new_vreg();
+
+        self.push(VInstruction::Clear(high));
+        self.push(VInstruction::DivMod(signed, high, low, div, quot, rem));
+
+        (quot, rem)
+    }
+
+    fn append_arithmetic(&mut self, kind: ArithmeticOp, left: Value, right: Value) -> VReg {
+        let instr = match kind {
+            ArithmeticOp::Add => "add",
+            ArithmeticOp::Sub => "sub",
+            ArithmeticOp::Mul => "mul",
+            ArithmeticOp::And => "and",
+            ArithmeticOp::Or => "or",
+            ArithmeticOp::Xor => "xor",
+
+            ArithmeticOp::Div(signed) => return self.append_div_mod(signed, left, right).0,
+            ArithmeticOp::Mod(signed) => return self.append_div_mod(signed, left, right).1,
+        };
+
+        let result = self.vregs.new_vreg();
+        let left = self.append_value_to_reg(left);
+        let right = self.append_value_to_rcm(right);
+        self.push(VInstruction::Binary(instr, result, left, right));
+        result
+    }
+
     #[must_use]
     fn append_expr(&mut self, expr: Expression) -> VReg {
         if let Some(&result) = self.expr_cache.get(&expr) {
@@ -200,22 +236,7 @@ impl Selector<'_> {
 
         let result = match *self.prog.get_expr(expr) {
             ExpressionInfo::Arithmetic { kind, left, right } => {
-                let instr = match kind {
-                    ArithmeticOp::Add => "add",
-                    ArithmeticOp::Sub => "sub",
-                    ArithmeticOp::Mul => "mul",
-                    ArithmeticOp::Div(_) => todo!("Arithmetic div"),
-                    ArithmeticOp::Mod(_) => todo!("Arithmetic mod"),
-                    ArithmeticOp::And => "and",
-                    ArithmeticOp::Or => "or",
-                    ArithmeticOp::Xor => "xor",
-                };
-
-                let result = self.vregs.new_vreg();
-                let left = self.append_value_to_reg(left);
-                let right = self.append_value_to_rcm(right);
-                self.push(VInstruction::Binary(instr, result, left, right));
-                result
+                self.append_arithmetic(kind, left, right)
             }
             ExpressionInfo::Comparison { kind, left, right } => {
                 // TODO use "test" when comparing with zero
@@ -283,6 +304,12 @@ impl Selector<'_> {
     }
 
     #[must_use]
+    fn append_value_to_rm(&mut self, value: Value) -> VopRM {
+        let operand = self.append_value_to_rcm(value);
+        self.force_rm(operand)
+    }
+
+    #[must_use]
     fn append_value_to_reg(&mut self, value: Value) -> VReg {
         let operand = self.append_value_to_rcm(value);
         self.force_reg(operand)
@@ -294,6 +321,15 @@ impl Selector<'_> {
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => cst.into(),
             VopRCM::Mem(mem) => self.force_reg(mem.into()).into(),
+        }
+    }
+
+    #[must_use]
+    fn force_rm(&mut self, value: VopRCM) -> VopRM {
+        match value {
+            VopRCM::Reg(reg) => reg.into(),
+            VopRCM::Const(cst) => self.force_reg(cst.into()).into(),
+            VopRCM::Mem(mem) => mem.into(),
         }
     }
 
