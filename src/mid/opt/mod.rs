@@ -1,7 +1,7 @@
 pub mod gc;
 pub mod slot_to_param;
 pub mod sccp;
-// pub mod flow_simplify;
+pub mod flow_simplify;
 pub mod inline;
 pub mod dce;
 // pub mod phi_combine;

@@ -212,6 +212,7 @@ pub fn try_for_each_usage_in_term<E>(
             f(TermUsage::Value(value, TermOperand::ReturnValue))?;
         }
         Terminator::Unreachable => {}
+        Terminator::LoopForever => {}
     }
     Ok(())
 }

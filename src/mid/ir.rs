@@ -525,6 +525,7 @@ pub enum Terminator {
     Branch { cond: Value, true_target: Target, false_target: Target },
     Return { value: Value },
     Unreachable,
+    LoopForever,
 }
 
 #[derive(Debug, Clone)]
@@ -557,6 +558,7 @@ impl Terminator {
             &Terminator::Branch { cond, true_target: _, false_target: _ } => f(cond)?,
             &Terminator::Return { value } => f(value)?,
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
 
         Ok(())
@@ -572,6 +574,7 @@ impl Terminator {
             }
             Terminator::Return { value } => *value = f(*value),
             Terminator::Unreachable => (),
+            Terminator::LoopForever => (),
         }
     }
 
@@ -590,6 +593,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
     }
 
@@ -602,6 +606,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
     }
 
@@ -614,6 +619,7 @@ impl Terminator {
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
         Ok(())
     }

@@ -217,9 +217,8 @@ impl<'a> State<'a> {
                 let value = self.eval(value);
                 self.merge_func_return(block_pos.func, value);
             }
-            Terminator::Unreachable => {
-                // nothing to do
-            }
+            Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
     }
 

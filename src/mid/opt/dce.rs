@@ -203,6 +203,7 @@ impl Visitor for DceVisitor<'_> {
                 self.add_value(state, value);
             }
             Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
         }
 
         terminator.for_each_target(|target| {

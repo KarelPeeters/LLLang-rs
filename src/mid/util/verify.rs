@@ -133,6 +133,7 @@ pub fn verify(prog: &Program) -> Result {
                     ctx.check_value_usage(value, return_usage)?;
                 }
                 Terminator::Unreachable => {}
+                Terminator::LoopForever => {}
             }
         }
     }

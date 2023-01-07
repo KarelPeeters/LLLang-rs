@@ -120,7 +120,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     for block in cloned_blocks {
         let block_info = prog.get_block_mut(block);
         match block_info.terminator {
-            Terminator::Jump { .. } | Terminator::Branch { .. } | Terminator::Unreachable { .. } => {}
+            Terminator::Jump { .. } | Terminator::Branch { .. } | Terminator::Unreachable | Terminator::LoopForever => {}
             Terminator::Return { value } => {
                 block_info.terminator = Terminator::Jump {
                     target: Target {
