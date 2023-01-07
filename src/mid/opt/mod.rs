@@ -7,5 +7,5 @@ pub mod dce;
 // pub mod phi_combine;
 // pub mod phi_pushing;
 // pub mod mem_forwarding;
-// pub mod block_threading;
+pub mod block_threading;
 // pub mod instr_simplify;
