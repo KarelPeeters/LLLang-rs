@@ -133,6 +133,7 @@ impl From<VopRC> for VopRCM {
 pub trait VOperand {
     fn for_each_reg(&self, f: impl FnMut(RegOperand));
     fn to_asm(&self, allocs: &Allocs) -> String;
+    fn is_const_zero(&self) -> bool;
 }
 
 impl VOperand for VMem {
@@ -149,6 +150,10 @@ impl VOperand for VMem {
         } else {
             format!("[{}{:+}]", reg, offset)
         }
+    }
+
+    fn is_const_zero(&self) -> bool {
+        false
     }
 }
 
@@ -171,6 +176,15 @@ impl VOperand for VopRCM {
             VopRCM::Mem(mem) => mem.to_asm(allocs),
         }
     }
+
+    fn is_const_zero(&self) -> bool {
+        match self {
+            VopRCM::Reg(_) => false,
+            VopRCM::Const(VConst::Const(cst)) => cst.is_zero(),
+            VopRCM::Const(VConst::Symbol(_)) => false,
+            VopRCM::Mem(_) => false,
+        }
+    }
 }
 
 const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx"];
@@ -188,6 +202,9 @@ macro_rules! impl_vop_for {
             }
             fn to_asm(&self, allocs: &Allocs) -> String {
                 VopRCM::from(*self).to_asm(allocs)
+            }
+            fn is_const_zero(&self) -> bool {
+                VopRCM::from(*self).is_const_zero()
             }
         }
     };
@@ -268,8 +285,14 @@ impl VInstruction {
                 let dest = dest.to_asm(allocs);
                 format!("xor {}, {}", dest, dest)
             }
-            VInstruction::MovReg(dest, source) =>
-                format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
+            VInstruction::MovReg(dest, source) => {
+                let dest = dest.to_asm(allocs);
+                if source.is_const_zero() {
+                    format!("xor {}, {}", dest, dest)
+                } else {
+                    format!("mov {}, {}", dest, source.to_asm(allocs))
+                }
+            }
             VInstruction::MovMem(dest, source) =>
                 format!("mov {}, {}", dest.to_asm(allocs), source.to_asm(allocs)),
             VInstruction::Binary(instr, dest, left, right) => {

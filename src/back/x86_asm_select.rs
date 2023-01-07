@@ -8,8 +8,8 @@ use log::LevelFilter;
 use regalloc2::{Allocation, Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
-use crate::back::selector::{Selector, Symbols, VRegMapper};
 
+use crate::back::selector::{Selector, Symbols, VRegMapper};
 use crate::back::vcode::{InstInfo, preg_to_asm, VInstruction};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;

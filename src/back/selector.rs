@@ -200,6 +200,8 @@ impl Selector<'_> {
 
         let result = match *self.prog.get_expr(expr) {
             ExpressionInfo::Arithmetic { kind, left, right } => {
+                let (kind, left, right) = normalize_arithmetic(kind, left, right);
+
                 let instr = match kind {
                     ArithmeticOp::Add => "add",
                     ArithmeticOp::Sub => "sub",
@@ -220,6 +222,9 @@ impl Selector<'_> {
             ExpressionInfo::Comparison { kind, left, right } => {
                 // TODO use "test" when comparing with zero
                 //   see https://stackoverflow.com/questions/33721204/test-whether-a-register-is-zero-with-cmp-reg-0-vs-or-reg-reg/33724806#33724806
+
+                let (kind, left, right) = normalize_comparison(kind, left, right);
+
                 let set_instr = match kind {
                     ComparisonOp::Eq => "sete",
                     ComparisonOp::Neq => "setne",
@@ -308,4 +313,23 @@ impl Selector<'_> {
             }
         }
     }
+}
+
+// TODO move these to some general normalization pass
+fn normalize_arithmetic(op: ArithmeticOp, left: Value, right: Value) -> (ArithmeticOp, Value, Value) {
+    if let Some(commuted) = op.properties().commuted {
+        if left.is_const() && !right.is_const() {
+            return (commuted, left, right)
+        }
+    }
+
+    (op, left, right)
+}
+
+fn normalize_comparison(op: ComparisonOp, left: Value, right: Value) -> (ComparisonOp, Value, Value) {
+    if left.is_const() && !right.is_const() {
+        return (op.properties().commuted, left, right)
+    }
+
+    (op, left, right)
 }

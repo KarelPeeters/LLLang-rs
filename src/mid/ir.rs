@@ -418,11 +418,38 @@ pub enum ComparisonOp {
     Lte(Signed),
 }
 
+#[derive(Debug, Constructor)]
+pub struct ArithmeticProperties {
+    pub commuted: Option<ArithmeticOp>,
+    pub associative: bool,
+}
+
+#[derive(Debug, Constructor)]
+pub struct ComparisonProperties {
+    pub commuted: ComparisonOp,
+    pub negated: ComparisonOp,
+}
+
 impl ArithmeticOp {
     pub fn signed(self) -> Option<Signed> {
         match self {
             ArithmeticOp::Add | ArithmeticOp::Sub | ArithmeticOp::Mul | ArithmeticOp::And | ArithmeticOp::Or | ArithmeticOp::Xor => None,
             ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
+        }
+    }
+
+    pub fn properties(self) -> ArithmeticProperties {
+        use ArithmeticOp as Op;
+        use ArithmeticProperties as Props;
+        match self {
+            Op::Add => Props::new(Some(Op::Add), true),
+            Op::Sub => Props::new(None, false),
+            Op::Mul => Props::new(Some(Op::Mul), true),
+            Op::Div(_) => Props::new(None, false),
+            Op::Mod(_) => Props::new(None, false),
+            Op::And => Props::new(Some(Op::And), true),
+            Op::Or => Props::new(Some(Op::Or), true),
+            Op::Xor => Props::new(Some(Op::Xor), true),
         }
     }
 }
@@ -432,6 +459,19 @@ impl ComparisonOp {
         match self {
             ComparisonOp::Eq | ComparisonOp::Neq => None,
             ComparisonOp::Gt(s) | ComparisonOp::Gte(s) | ComparisonOp::Lt(s) | ComparisonOp::Lte(s) => Some(s),
+        }
+    }
+
+    pub fn properties(self) -> ComparisonProperties {
+        use ComparisonProperties as Props;
+        use ComparisonOp as Op;
+        match self {
+            Op::Eq => Props::new(Op::Eq, Op::Neq),
+            Op::Neq => Props::new(Op::Neq, Op::Eq),
+            Op::Gt(signed) => Props::new(Op::Lt(signed), Op::Lte(signed)),
+            Op::Gte(signed) => Props::new(Op::Lte(signed), Op::Lt(signed)),
+            Op::Lt(signed) => Props::new(Op::Gt(signed), Op::Gte(signed)),
+            Op::Lte(signed) => Props::new(Op::Gte(signed), Op::Gt(signed)),
         }
     }
 }
@@ -722,6 +762,10 @@ impl Value {
 
     pub fn is_undef(self) -> bool {
         matches!(self, Value::Immediate(Immediate::Undef(_)))
+    }
+
+    pub fn is_const(self) -> bool {
+        self.as_const().is_some()
     }
 
     pub fn is_const_zero(self) -> bool {
