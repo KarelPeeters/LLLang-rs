@@ -2,7 +2,7 @@ use itertools::Itertools;
 
 use crate::mid::analyse::usage::{InstrOperand, InstructionPos, Usage};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{BlockInfo, Function, ParameterInfo, Program, Target, Terminator};
+use crate::mid::ir::{BlockInfo, Function, FunctionInfo, ParameterInfo, Program, Target, Terminator};
 use crate::mid::ir::InstructionInfo;
 use crate::util::{Never, NeverExt, VecExt};
 
@@ -79,9 +79,10 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     let call_pos = inlined_call.pos;
 
     // TODO rewrite to enforce fixing slots, using entry, ... with destructing
-    let cloned_func = prog.deep_clone_function(inlined_call.target)
-        .expect("Recursive functions should have been filtered out already");
-    let cloned_blocks = prog.collect_blocks(cloned_func.entry);
+    let FunctionInfo { ty: _, func_ty: _, slots: cloned_slots, entry: cloned_entry, debug_name: _ } =
+        prog.deep_clone_function(inlined_call.target)
+            .expect("Recursive functions should have been filtered out already");
+    let cloned_blocks = prog.collect_blocks(cloned_entry);
 
     let return_param = prog.define_param(ParameterInfo { ty: return_ty });
 
@@ -99,7 +100,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
 
     // replace old terminator
     let term_before = Terminator::Jump {
-        target: Target { block: cloned_func.entry, args }
+        target: Target { block: cloned_entry, args }
     };
     let term_after = std::mem::replace(&mut block_before_info.terminator, term_before);
 
@@ -131,12 +132,15 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
         }
     }
 
-    // take slots into new function
+    // take slots into new function, after adding info to the debug name
     let calling_func = call_pos.func;
-    prog.get_func_mut(calling_func).slots.extend(cloned_func.slots);
-
-    // TODO deconstruct cloned_func to make sure we've used everything
-    // TODO all done?
+    let calling_name = prog.get_func(calling_func).debug_name.as_ref().map_or("_", |s| s).to_owned();
+    for &slot in &cloned_slots {
+        if let Some(slot_name) = &mut prog.get_slot_mut(slot).debug_name {
+            *slot_name = format!("{}.{}", calling_name, slot_name)
+        }
+    }
+    prog.get_func_mut(calling_func).slots.extend(cloned_slots);
 }
 
 fn fn_instruction_count(prog: &Program, func: Function) -> usize {
