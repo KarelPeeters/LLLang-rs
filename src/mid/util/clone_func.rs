@@ -1,19 +1,16 @@
 use std::collections::HashMap;
-use std::iter::zip;
 
 use itertools::Itertools;
 
-use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, FunctionInfo, FunctionType, Instruction, Parameter, ParameterInfo, Program, Scoped, StackSlot, StackSlotInfo, Value};
+use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, FunctionInfo, Instruction, Parameter, ParameterInfo, Program, Scoped, StackSlot, StackSlotInfo, Value};
 use crate::util::arena::Arena;
 
 #[derive(Debug)]
 pub struct Recursive;
 
 impl Program {
-    // TODO remove replacement args, we can just use a target now
-    pub fn deep_clone_function(&mut self, func: Function, replace_args: Option<&[Value]>) -> Result<FunctionInfo, Recursive> {
+    pub fn deep_clone_function(&mut self, func: Function) -> Result<FunctionInfo, Recursive> {
         let old_info = self.get_func(func);
-        let old_entry = old_info.entry;
 
         let old_slots = old_info.slots.clone();
         let old_blocks = self.collect_blocks(self.get_func(func).entry);
@@ -30,7 +27,6 @@ impl Program {
         let mut map_instr = HashMap::new();
 
         let map_block: HashMap<_, _> = old_blocks.iter().map(|&old_block| {
-            let is_entry = old_block == old_entry;
             let old_block_info = self.get_block(old_block);
 
             let old_params = old_block_info.params.clone();
@@ -38,20 +34,12 @@ impl Program {
             // we don't need to do anything extra for terminator, this is already a deep clone
             let new_terminator = old_block_info.terminator.clone();
 
-            let new_params = if let Some(args) = replace_args.filter(|_| is_entry) {
-                assert_eq!(args.len(), old_params.len());
-                for (old_param, &arg) in zip(old_params, args) {
-                    assert!(map_param.insert(old_param, arg).is_none());
-                }
-                vec![]
-            } else {
-                old_params.iter().map(|&old_param| {
-                    let &ParameterInfo { ty } = self.get_param(old_param);
-                    let new_param = self.define_param(ParameterInfo { ty });
-                    assert!(map_param.insert(old_param, new_param.into()).is_none());
-                    new_param
-                }).collect_vec()
-            };
+            let new_params = old_params.iter().map(|&old_param| {
+                let &ParameterInfo { ty } = self.get_param(old_param);
+                let new_param = self.define_param(ParameterInfo { ty });
+                assert!(map_param.insert(old_param, new_param.into()).is_none());
+                new_param
+            }).collect_vec();
 
             let new_instructions = old_instrs.iter().map(|&old_instr| {
                 let old_instr_info = self.get_instr(old_instr);
@@ -103,18 +91,11 @@ impl Program {
         let old_info = self.get_func(func);
         let new_entry = map_block(old_info.entry);
 
-        let new_func_ty = if replace_args.is_some() {
-            FunctionType { params: vec![], ret: old_info.func_ty.ret }
-        } else {
-            old_info.func_ty.clone()
-        };
-
         let debug_name = old_info.debug_name.clone();
-        let new_ty = self.define_type_func(new_func_ty.clone());
 
         let new_info = FunctionInfo {
-            ty: new_ty,
-            func_ty: new_func_ty,
+            ty: old_info.ty,
+            func_ty: old_info.func_ty.clone(),
             debug_name,
             entry: new_entry,
             slots: new_slots,

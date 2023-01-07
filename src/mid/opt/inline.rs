@@ -79,7 +79,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     let call_pos = inlined_call.pos;
 
     // TODO rewrite to enforce fixing slots, using entry, ... with destructing
-    let cloned_func = prog.deep_clone_function(inlined_call.target, None)
+    let cloned_func = prog.deep_clone_function(inlined_call.target)
         .expect("Recursive functions should have been filtered out already");
     let cloned_blocks = prog.collect_blocks(cloned_func.entry);
 
