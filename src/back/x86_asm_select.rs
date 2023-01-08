@@ -10,7 +10,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{InstInfo, PREG_COUNT, preg_to_asm, VInstruction};
+use crate::back::vcode::{ABI_PARAM_REGS, InstInfo, PREG_COUNT, preg_to_asm, VInstruction};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -78,7 +78,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             if block == func_info.entry {
                 for (index, &param) in params.iter().enumerate() {
                     // TODO use the proper ABI registers
-                    let preg = PReg::new(index, RegClass::Int);
+                    let preg = ABI_PARAM_REGS[index];
                     builder.push(VInstruction::DefFixedReg(param, preg));
                 }
                 params.clear();

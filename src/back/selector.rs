@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use itertools::Itertools;
 
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
@@ -139,7 +140,12 @@ impl Selector<'_> {
                 let value = self.append_value_to_rc(value);
                 self.push(VInstruction::MovMem(VMem::at(addr), value));
             }
-            InstructionInfo::Call { .. } => todo!("call"),
+            InstructionInfo::Call { target, ref args } => {
+                let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
+                let target = self.append_value_to_rcm(target);
+                let result = self.vregs.map_instr(instr);
+                self.push(VInstruction::Call(result, target, args));
+            },
             InstructionInfo::BlackBox { value } => {
                 let value = self.append_value_to_reg(value);
                 let result = self.vregs.map_instr(instr);

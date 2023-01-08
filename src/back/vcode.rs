@@ -29,6 +29,9 @@ pub enum VInstruction {
     /// signed, high, low, div, quot, rem
     DivMod(Signed, VReg, VReg, VopRM, VReg, VReg),
 
+    /// result, target, args
+    Call(VReg, VopRCM, Vec<VReg>),
+
     Cmp(VReg, VopRCM),
     Test(VReg, VopRCM),
     // TODO allow mem operand here
@@ -204,14 +207,18 @@ pub const PREG_COUNT: usize = 6;
 
 // TODO this is not really the right order, but do we care?
 const PREG_A: PReg = PReg::new(0, RegClass::Int);
-#[allow(dead_code)]
 const PREG_B: PReg = PReg::new(1, RegClass::Int);
-#[allow(dead_code)]
 const PREG_C: PReg = PReg::new(2, RegClass::Int);
 const PREG_D: PReg = PReg::new(3, RegClass::Int);
+const PREG_SI: PReg = PReg::new(4, RegClass::Int);
+const PREG_DI: PReg = PReg::new(5, RegClass::Int);
 
 const REG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx", "esi", "edi"];
 const REG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl", "sil", "dil"];
+
+// TODO use some proper ABI settings, maybe depending on the platform?
+pub const ABI_PARAM_REGS: &[PReg] = &[PREG_A, PREG_B, PREG_C, PREG_D, PREG_SI, PREG_DI];
+pub const ABI_RETURN_REG: PReg = PREG_A;
 
 pub fn preg_to_asm(preg: PReg) -> &'static str {
     REG_NAMES[preg.index()]
@@ -274,6 +281,14 @@ impl VInstruction {
                 operands.push(Operand::reg_fixed_def(quot, PREG_A));
                 operands.push(Operand::reg_fixed_def(rem, PREG_D));
             }
+            VInstruction::Call(result, target, ref args) => {
+                for (index, &arg) in args.iter().enumerate() {
+                    let preg = ABI_PARAM_REGS[index];
+                    operands.push(Operand::reg_fixed_use(arg, preg));
+                }
+                operands.push_use(target);
+                operands.push(Operand::reg_fixed_def(result, ABI_RETURN_REG));
+            }
             VInstruction::Cmp(left, right) | VInstruction::Test(left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
@@ -298,8 +313,7 @@ impl VInstruction {
             }
             VInstruction::Return(value) => {
                 if let Some(value) = value {
-                    let eax = PReg::new(0, RegClass::Int);
-                    operands.push(Operand::reg_fixed_use(value, eax));
+                    operands.push(Operand::reg_fixed_use(value, ABI_RETURN_REG));
                 }
                 return InstInfo::ret(operands);
             }
@@ -318,7 +332,7 @@ impl VInstruction {
         match *self {
             VInstruction::DefAnyReg(dest) =>
                 format!("; def any {}", dest.to_asm(allocs)),
-            VInstruction::DefFixedReg(dest, preg) =>{
+            VInstruction::DefFixedReg(dest, preg) => {
                 assert_eq!(allocs.map_reg(dest), preg);
                 format!("; def fixed {}", dest.to_asm(allocs))
             }
@@ -352,6 +366,9 @@ impl VInstruction {
                 };
 
                 format!("{} {}", instr, div.to_asm(allocs))
+            }
+            VInstruction::Call(_result, target, ref _args) => {
+                format!("call {}", target.to_asm(allocs))
             }
             VInstruction::Cmp(left, right) =>
                 format!("cmp {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
