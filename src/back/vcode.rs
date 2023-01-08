@@ -12,9 +12,10 @@ use crate::mid::util::bit_int::BitInt;
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
 pub enum VInstruction {
-    DummyDef(VReg),
+    DefAnyReg(VReg),
+    DefFixedReg(VReg, PReg),
 
-    // set the given register to zero
+    /// set the given register to zero
     Clear(VReg),
 
     /// read as "move into .. from .."
@@ -168,7 +169,7 @@ impl VOperand for VMem {
 impl VOperand for VopRCM {
     fn for_each_reg(&self, mut f: impl FnMut(RegOperand)) {
         match *self {
-            VopRCM::Undef => {},
+            VopRCM::Undef => {}
             VopRCM::Reg(reg) => f(RegOperand::Adaptive(reg)),
             VopRCM::Const(_) => {}
             VopRCM::Mem(mem) => mem.for_each_reg(f)
@@ -240,8 +241,11 @@ impl VInstruction {
         let mut operands = Operands::default();
 
         match *self {
-            VInstruction::DummyDef(dest) => {
+            VInstruction::DefAnyReg(dest) => {
                 operands.push_def(dest);
+            }
+            VInstruction::DefFixedReg(dest, preg) => {
+                operands.push(Operand::reg_fixed_def(dest, preg));
             }
             VInstruction::Clear(dest) => {
                 operands.push_def(dest);
@@ -312,8 +316,12 @@ impl VInstruction {
 
     pub fn to_asm(&self, allocs: &Allocs) -> String {
         match *self {
-            VInstruction::DummyDef(reg) =>
-                format!("; dummy {:?}", reg.to_asm(allocs)),
+            VInstruction::DefAnyReg(dest) =>
+                format!("; def any {}", dest.to_asm(allocs)),
+            VInstruction::DefFixedReg(dest, preg) =>{
+                assert_eq!(allocs.map_reg(dest), preg);
+                format!("; def fixed {}", dest.to_asm(allocs))
+            }
             VInstruction::Clear(dest) => {
                 let dest = dest.to_asm(allocs);
                 format!("xor {}, {}", dest, dest)

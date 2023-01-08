@@ -19,6 +19,8 @@ use crate::mid::util::verify::verify;
 use crate::util::{Never, NeverExt};
 
 pub fn lower_new(prog: &mut Program) -> String {
+    Builder::new().filter_level(LevelFilter::Trace).init();
+
     // the register allocator requires us to split critical edges
     // TODO merge edges without any moves again
     split_critical_edges(prog);
@@ -60,7 +62,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
             // setup builder
-            let params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
+            let mut params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
             println!("    params {:?}", params);
 
             let range_start = v_instructions.len();
@@ -71,6 +73,16 @@ pub fn lower_new(prog: &mut Program) -> String {
                 instructions: &mut v_instructions,
                 expr_cache: &mut Default::default(),
             };
+
+            // define function params for entry block as instructions, not as block params
+            if block == func_info.entry {
+                for (index, &param) in params.iter().enumerate() {
+                    // TODO use the proper ABI registers
+                    let preg = PReg::new(index, RegClass::Int);
+                    builder.push(VInstruction::DefFixedReg(param, preg));
+                }
+                params.clear();
+            }
 
             // convert instructions to vcode
             for &instr in instructions {
@@ -112,7 +124,6 @@ pub fn lower_new(prog: &mut Program) -> String {
             validate_ssa: true,
         };
 
-        Builder::new().filter_level(LevelFilter::Trace).init();
         println!();
         println!();
         println!();

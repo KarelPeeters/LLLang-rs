@@ -13,7 +13,7 @@ pub struct Symbols {
     next_ext: usize,
     next_data: usize,
 
-    blocks: HashMap<Block, usize>,
+    blocks: HashMap<Block, (usize, usize)>,
     next_label: usize,
 }
 
@@ -36,15 +36,16 @@ impl Symbols {
         build(id)
     }
 
-    pub fn define_block(&mut self, block: Block, index: usize) {
+    pub fn define_block(&mut self, block: Block, func_index: usize) {
+        let index = self.blocks.len();
         println!("  Defining {:?} -> {:?}", block, index);
-        let prev = self.blocks.insert(block, index);
+        let prev = self.blocks.insert(block, (index, func_index));
         assert!(prev.is_none());
     }
 
     pub fn map_block(&mut self, block: Block) -> (VSymbol, r2::Block) {
-        let id = *self.blocks.get(&block).unwrap();
-        let result = (VSymbol::Block(id), r2::Block(id as u32));
+        let (symbol_index, func_index) = *self.blocks.get(&block).unwrap();
+        let result = (VSymbol::Block(symbol_index), r2::Block(func_index as u32));
         result
     }
 
@@ -105,7 +106,7 @@ pub struct Selector<'a> {
 }
 
 impl Selector<'_> {
-    fn push(&mut self, instr: VInstruction) {
+    pub fn push(&mut self, instr: VInstruction) {
         let info = instr.to_inst_info();
         println!("    push {:?}", instr);
         println!("      as    {:?}", Inst::new(self.instructions.len()));
@@ -116,9 +117,9 @@ impl Selector<'_> {
 
     #[allow(dead_code)]
     fn dummy_reg(&mut self) -> VReg {
-        let vreg = self.vregs.new_vreg();
-        self.push(VInstruction::DummyDef(vreg));
-        vreg
+        let reg = self.vregs.new_vreg();
+        self.push(VInstruction::DefAnyReg(reg));
+        reg
     }
 
     pub fn append_instr(&mut self, instr: Instruction) {
