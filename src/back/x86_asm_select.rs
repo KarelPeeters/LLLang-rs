@@ -1,16 +1,16 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Write};
 use std::iter::zip;
 
 use env_logger::Builder;
-use indexmap::IndexMap;
 use itertools::Itertools;
 use log::LevelFilter;
-use regalloc2::{Allocation, Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
+use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{ABI_PARAM_REGS, InstInfo, PREG_COUNT, StackLayout, VInstruction, VRegPos};
+use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, StackLayout, VInstruction, VRegPos};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -70,6 +70,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                 prog,
                 symbols: &mut symbols,
                 vregs: &mut mapper,
+                slots: HashMap::new(),
                 instructions: &mut v_instructions,
                 expr_cache: &mut Default::default(),
             };
@@ -121,7 +122,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             vregs: mapper.vreg_count(),
         };
 
-        let env = build_env(PREG_COUNT);
+        let env = build_env(GENERAL_PREGS.len());
         let options = RegallocOptions {
             verbose_log: true,
             validate_ssa: true,
@@ -133,19 +134,19 @@ pub fn lower_new(prog: &mut Program) -> String {
         let result = r2::run(&func_wrapper, &env, &options).unwrap();
         println!("{:?}", result);
 
-        // TODO all of this depends on the calling convention
-        // TODO calculate param_bytes properly
-        let spill_bytes = result.num_spillslots * 4;
-        let param_bytes = 0;
+        // TODO do all of this properly, depending on the calling convention
         let stack_layout = StackLayout {
-            alloc_bytes: spill_bytes,
-            free_bytes: spill_bytes + param_bytes,
+            slot_bytes: 0,
+            spill_bytes: result.num_spillslots,
+            param_bytes: 0,
+        };
+        let mut ctx = AsmContext {
+            allocs: Default::default(),
+            stack_layout,
         };
 
         // actually generate code
         output.appendln(format_args!("{}:", symbols.map_global(func)));
-
-        let mut allocs = Allocs::default();
 
         for &block in &blocks_ordered {
             let block_mapped = symbols.map_block(block);
@@ -160,12 +161,12 @@ pub fn lower_new(prog: &mut Program) -> String {
                         let inst_operands = &func_wrapper.inst_infos[inst.index()].operands;
                         assert_eq!(inst_allocs.len(), inst_operands.len());
 
-                        allocs.inner.clear();
+                        ctx.allocs.clear();
                         for (&operand, &alloc) in zip(inst_operands, inst_allocs) {
-                            allocs.inner.insert(operand.vreg(), alloc);
+                            ctx.allocs.insert(operand.vreg(), alloc);
                         }
 
-                        output.append_v_inst(v_inst, &allocs, &stack_layout);
+                        output.append_v_inst(v_inst, &ctx);
                     }
                     InstOrEdit::Edit(edit) => {
                         let &Edit::Move { from, to } = edit;
@@ -204,18 +205,6 @@ struct Output {
     comments: bool,
 }
 
-#[derive(Default)]
-pub struct Allocs {
-    // TODO maybe just replace this with a vec, it's going to be tiny anyways
-    inner: IndexMap<VReg, Allocation>,
-}
-
-impl Allocs {
-    pub fn map_reg(&self, reg: VReg) -> VRegPos {
-        (*self.inner.get(&reg).unwrap()).into()
-    }
-}
-
 impl Output {
     fn new(comments: bool) -> Self {
         Output {
@@ -235,17 +224,17 @@ impl Output {
         writeln!(&mut self.text, "{}", f).unwrap();
     }
 
-    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &Allocs, layout: &StackLayout) {
-        self.comment(format_args!("    ; {:?} {:?}", v_inst, allocs.inner));
+    fn append_v_inst(&mut self, v_inst: &VInstruction, ctx: &AsmContext) {
+        self.comment(format_args!("    ; {:?} {:?}", v_inst, ctx.allocs));
 
         // moves that should be skipped get "none" as operands
-        if allocs.inner.values().any(|a| a.is_none()) {
+        if ctx.allocs.values().any(|a| a.is_none()) {
             assert!(v_inst.to_inst_info().is_move.is_some());
             return;
         }
 
         // append the actual code
-        let result = v_inst.to_asm(allocs, layout);
+        let result = v_inst.to_asm(ctx);
         for line in result.lines() {
             self.appendln(format_args!("    {}", line.trim()));
         }
@@ -257,8 +246,7 @@ impl Output {
 }
 
 fn build_env(reg_count: usize) -> MachineEnv {
-    let regs = (0..reg_count).map(|i| PReg::new(i, RegClass::Int)).collect();
-
+    let regs = GENERAL_PREGS[..reg_count].to_vec();
     MachineEnv {
         preferred_regs_by_class: [regs, vec![]],
         non_preferred_regs_by_class: [vec![], vec![]],
