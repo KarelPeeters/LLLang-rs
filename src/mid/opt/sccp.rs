@@ -304,7 +304,7 @@ impl<'a> State<'a> {
     }
 
     /// Evaluate the given expression. Should only be used in `visit_expr` or for debugging.
-    fn eval_expr(&mut self, expr: Expression) -> Lattice{
+    fn eval_expr(&mut self, expr: Expression) -> Lattice {
         let prog = self.prog;
         let expr_info = prog.get_expr(expr);
 
@@ -320,8 +320,6 @@ impl<'a> State<'a> {
             ExpressionInfo::Arithmetic { kind, left, right } => {
                 // TODO test whether this correct handles all of the edge cases in mul and div
                 self.eval_binary(left, right, |ty, left, right| {
-                    let left_signed = Wrapping(left.signed());
-                    let right_signed = Wrapping(right.signed());
                     let left_unsigned = Wrapping(left.unsigned());
                     let right_unsigned = Wrapping(right.unsigned());
 
@@ -333,19 +331,13 @@ impl<'a> State<'a> {
                         ArithmeticOp::And => (left_unsigned & right_unsigned).0,
                         ArithmeticOp::Or => (left_unsigned | right_unsigned).0,
                         ArithmeticOp::Xor => (left_unsigned ^ right_unsigned).0,
-
-                        // TODO should x/0 and x%0 be undefined?
-                        ArithmeticOp::Div(Signed::Signed) => (left_signed / right_signed).0 as UStorage,
-                        ArithmeticOp::Mod(Signed::Signed) => (left_signed % right_signed).0 as UStorage,
-
-                        ArithmeticOp::Div(Signed::Unsigned) => (left_unsigned / right_unsigned).0,
-                        ArithmeticOp::Mod(Signed::Unsigned) => (left_unsigned % right_unsigned).0,
+                        ArithmeticOp::Div(signed) => return eval_div_mod(ty, signed, left, right).0,
+                        ArithmeticOp::Mod(signed) => return eval_div_mod(ty, signed, left, right).1,
                     };
 
-                    // TODO is this masking right? Especially for signed mul and div it's not so clear
                     let bits = left.bits();
                     let result = BitInt::from_unsigned(bits, result_full & BitInt::mask(bits)).unwrap();
-                    Const::new(ty, result)
+                    Lattice::Known(Const::new(ty, result).into())
                 })
             }
             ExpressionInfo::Comparison { kind, left, right } => {
@@ -366,7 +358,7 @@ impl<'a> State<'a> {
                     };
 
                     let result = BitInt::from_bool(result_bool);
-                    Const::new(prog.ty_bool(), result)
+                    Lattice::Known(Const::new(prog.ty_bool(), result).into())
                 })
             }
             ExpressionInfo::Cast { ty, kind, value } => {
@@ -403,18 +395,16 @@ impl<'a> State<'a> {
         &mut self,
         left: Value,
         right: Value,
-        handle_const: impl Fn(Type, BitInt, BitInt) -> Const,
+        handle_const: impl Fn(Type, BitInt, BitInt) -> Lattice,
     ) -> Lattice {
         match (self.eval(left), self.eval(right)) {
             (Lattice::Undef, _) | (_, Lattice::Undef) => Lattice::Undef,
 
             (Lattice::Known(Value::Immediate(Immediate::Const(left))), Lattice::Known(Value::Immediate(Immediate::Const(right)))) => {
                 assert_eq!(left.ty, right.ty);
-                assert_eq!(left.value.bits(), right.value.bits());
                 let ty = left.ty;
-
-                let result = handle_const(ty, left.value, right.value);
-                Lattice::Known(result.into())
+                assert_eq!(left.value.bits(), right.value.bits());
+                handle_const(ty, left.value, right.value)
             }
 
             // TODO sometimes this can be inferred as well, eg "0 * x" or "x == x"
@@ -480,7 +470,7 @@ impl<'a> State<'a> {
                     self.visit_expr(expr)
                 }
                 *self.values.get(&value).unwrap()
-            },
+            }
         }
     }
 
@@ -544,4 +534,29 @@ fn evaluate_branch_condition(cond: Lattice) -> (bool, bool) {
             (true, true)
         }
     }
+}
+
+fn eval_div_mod(ty: Type, signed: Signed, left: BitInt, right: BitInt) -> (Lattice, Lattice) {
+    if right.is_zero() {
+        return (Lattice::Undef, Lattice::Undef);
+    }
+
+    let left_signed = Wrapping(left.signed());
+    let left_unsigned = Wrapping(left.unsigned());
+    let right_signed = Wrapping(right.signed());
+    let right_unsigned = Wrapping(right.unsigned());
+
+    let result_full = match signed {
+        Signed::Signed => ((left_signed / right_signed).0 as UStorage, (left_signed % right_signed).0 as UStorage),
+        Signed::Unsigned => ((left_unsigned / right_unsigned).0, (left_unsigned % right_unsigned).0),
+    };
+
+    let bits = left.bits();
+    let mask = BitInt::mask(bits);
+    let map = |x: UStorage| -> Lattice {
+        let bit_int = BitInt::from_unsigned(bits, x & mask).unwrap();
+        Lattice::Known(Const::new(ty, bit_int).into())
+    };
+
+    (map(result_full.0), map(result_full.1))
 }
