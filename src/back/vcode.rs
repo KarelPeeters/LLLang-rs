@@ -67,6 +67,9 @@ pub enum VopRCM {
     Mem(VMem),
 }
 
+// TODO figure out the right slot abstraction
+//   it's basically the expression "esp + const", can be used as memory
+
 #[derive(Debug, Copy, Clone, From)]
 pub enum VopRC {
     Undef,
@@ -79,6 +82,7 @@ pub enum VopRM {
     Undef,
     Reg(VReg),
     Mem(VMem),
+    Slot(usize),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -148,16 +152,15 @@ pub enum VSymbol {
     Label(usize),
 }
 
-#[derive(Debug, Copy, Clone, From)]
-pub enum VPReg {
-    V(VReg),
-    // PReg should not be part of the normally allocated registers
-    P(PReg),
+#[derive(Debug, Copy, Clone)]
+pub enum VMem {
+    VMemReg(VMemReg),
+    Slot(usize),
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct VMem {
-    reg: VPReg,
+pub struct VMemReg {
+    reg: VReg,
     offset: isize,
 }
 
@@ -167,22 +170,19 @@ pub struct VTarget {
     pub args: Vec<VReg>,
 }
 
-impl VPReg {
-    fn to_asm(self, ctx: &AsmContext) -> String {
-        match self {
-            VPReg::V(vreg) => vreg.to_asm(ctx),
-            VPReg::P(preg) => preg_to_asm(preg).to_string(),
-        }
+impl VMemReg {
+    pub fn at_offset(reg: VReg, offset: isize) -> Self {
+        VMemReg { reg: reg.into(), offset }
+    }
+
+    pub fn at(reg: VReg) -> Self {
+        VMemReg { reg: reg.into(), offset: 0 }
     }
 }
 
-impl VMem {
-    pub fn at_offset(reg: impl Into<VPReg>, offset: isize) -> Self {
-        VMem { reg: reg.into(), offset }
-    }
-
-    pub fn at(reg: impl Into<VPReg>) -> Self {
-        VMem { reg: reg.into(), offset: 0 }
+impl From<VMemReg> for VMem {
+    fn from(value: VMemReg) -> Self {
+        VMem::VMemReg(value)
     }
 }
 
@@ -212,16 +212,14 @@ pub trait VOperand {
     fn is_const_zero(&self) -> bool;
 }
 
-impl VOperand for VMem {
+impl VOperand for VMemReg {
     fn for_each_reg(&self, mut f: impl FnMut(RegOperand)) {
-        match self.reg {
-            VPReg::V(reg) => f(RegOperand::Use(reg)),
-            VPReg::P(_) => {}
-        }
+        let &VMemReg { reg, offset } = self;
+        f(RegOperand::Use(reg))
     }
 
     fn to_asm(&self, ctx: &AsmContext) -> String {
-        let &VMem { reg, offset } = self;
+        let &VMemReg { reg, offset } = self;
 
         let reg = reg.to_asm(ctx);
         if offset == 0 {
@@ -240,7 +238,6 @@ impl VOperand for VopRCM {
     fn for_each_reg(&self, mut f: impl FnMut(RegOperand)) {
         match *self {
             VopRCM::Undef => {}
-            VopRCM::Slot(_) => {}
             VopRCM::Reg(reg) => f(RegOperand::Adaptive(reg)),
             VopRCM::Const(_) => {}
             VopRCM::Mem(mem) => mem.for_each_reg(f)
@@ -251,10 +248,6 @@ impl VOperand for VopRCM {
         match *self {
             // TODO this only works because all Vops accept a register, which is kind of brittle
             VopRCM::Undef => preg_to_asm(PREG_A).to_string(),
-            VopRCM::Slot(index) => {
-                let offset = ctx.stack_layout.slot_offset(index);
-                format!("[esp+{}]", offset)
-            }
             VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(),
             VopRCM::Const(cst) => cst.to_asm(),
             VopRCM::Mem(mem) => mem.to_asm(ctx),
@@ -265,7 +258,6 @@ impl VOperand for VopRCM {
         match self {
             VopRCM::Undef => false,
             VopRCM::Reg(_) => false,
-            VopRCM::Slot(_) => false,
             VopRCM::Const(VConst::Const(cst)) => cst.is_zero(),
             VopRCM::Const(VConst::Symbol(_)) => false,
             VopRCM::Mem(_) => false,
@@ -315,6 +307,9 @@ macro_rules! impl_vop_for {
 impl_vop_for!(VopRC);
 impl_vop_for!(VopRM);
 impl_vop_for!(VReg);
+
+impl_from_chain!(VopRCM::Mem(VMemReg));
+impl_from_chain!(VopRM::Mem(VMemReg));
 
 #[derive(Debug, Clone)]
 pub struct AsmContext {

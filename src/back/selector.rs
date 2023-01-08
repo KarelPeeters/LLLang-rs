@@ -4,7 +4,7 @@ use itertools::Itertools;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
 
-use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
+use crate::back::vcode::{VConst, VInstruction, VMem, VMemReg, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
 
 #[derive(Default)]
@@ -134,12 +134,12 @@ impl Selector<'_> {
             InstructionInfo::Load { addr, ty: _ } => {
                 let addr = self.append_value_to_reg(addr);
                 let result = self.vregs.map_instr(instr);
-                self.push(VInstruction::MovReg(result, VMem::at(addr).into()));
+                self.push(VInstruction::MovReg(result, VMemReg::at(addr).into()));
             }
             InstructionInfo::Store { addr, ty: _, value } => {
                 let addr = self.append_value_to_reg(addr);
                 let value = self.append_value_to_rc(value);
-                self.push(VInstruction::MovMem(VMem::at(addr), value));
+                self.push(VInstruction::MovMem(VMemReg::at(addr).into(), value));
             }
             InstructionInfo::Call { target, ref args } => {
                 let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
@@ -299,7 +299,7 @@ impl Selector<'_> {
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => {
                     let index = self.map_slot(slot);
-                    VopRCM::Slot(index)
+                    VMem::Slot(index).into()
                 },
                 Scoped::Param(param) => self.vregs.map_param(param).into(),
                 Scoped::Instr(instr) => self.vregs.map_instr(instr).into(),
@@ -332,7 +332,7 @@ impl Selector<'_> {
             VopRCM::Undef => VopRC::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => cst.into(),
-            VopRCM::Slot(_) | VopRCM::Mem(_) => self.force_reg(value).into(),
+            VopRCM::Mem(_) => self.force_reg(value).into(),
         }
     }
 
@@ -342,7 +342,7 @@ impl Selector<'_> {
             VopRCM::Undef => VopRM::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Mem(mem) => mem.into(),
-            VopRCM::Slot(_) | VopRCM::Const(_) => self.force_reg(value).into(),
+            VopRCM::Const(_) => self.force_reg(value).into(),
         }
     }
 
@@ -351,11 +351,6 @@ impl Selector<'_> {
         match value {
             VopRCM::Undef => self.dummy_reg(),
             VopRCM::Reg(reg) => reg,
-            VopRCM::Slot(index) => {
-                let reg = self.vregs.new_vreg();
-                self.push(VInstruction::SlotPtr(reg, index));
-                reg
-            }
             VopRCM::Mem(_) | VopRCM::Const(_) => {
                 let reg = self.vregs.new_vreg();
                 self.push(VInstruction::MovReg(reg, value));

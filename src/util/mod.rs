@@ -65,6 +65,17 @@ macro_rules! option_match {
     };
 }
 
+#[allow(unused_macros)]
+macro_rules! impl_from_chain {
+    ($outer:ident::$variant:ident($inner:ty)) => {
+        impl From<$inner> for $outer {
+            fn from(value: $inner) -> Self {
+                <$outer>::$variant(value.into())
+            }
+        }
+    }
+}
+
 pub trait VecExt {
     type T;
     fn index_of(&self, value: &Self::T) -> Option<usize>;

@@ -669,16 +669,6 @@ impl Terminator {
     }
 }
 
-macro_rules! impl_nested_from {
-    ($outer:ident::$variant:ident($inner:ty)) => {
-        impl From<$inner> for $outer {
-            fn from(value: $inner) -> Self {
-                <$outer>::$variant(value.into())
-            }
-        }
-    }
-}
-
 // TODO considering using .value() instead of the current .into() which is more vague
 #[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
@@ -711,13 +701,13 @@ pub enum Scoped {
     Instr(Instruction),
 }
 
-impl_nested_from!(Value::Immediate(Const));
-impl_nested_from!(Value::Global(Function));
-impl_nested_from!(Value::Global(Extern));
-impl_nested_from!(Value::Global(Data));
-impl_nested_from!(Value::Scoped(Parameter));
-impl_nested_from!(Value::Scoped(StackSlot));
-impl_nested_from!(Value::Scoped(Instruction));
+impl_from_chain!(Value::Immediate(Const));
+impl_from_chain!(Value::Global(Function));
+impl_from_chain!(Value::Global(Extern));
+impl_from_chain!(Value::Global(Data));
+impl_from_chain!(Value::Scoped(Parameter));
+impl_from_chain!(Value::Scoped(StackSlot));
+impl_from_chain!(Value::Scoped(Instruction));
 
 impl Debug for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
