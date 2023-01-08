@@ -10,7 +10,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{ABI_PARAM_REGS, InstInfo, PREG_COUNT, preg_to_asm, VInstruction};
+use crate::back::vcode::{ABI_PARAM_REGS, InstInfo, PREG_COUNT, StackLayout, VInstruction, VRegPos};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -74,8 +74,11 @@ pub fn lower_new(prog: &mut Program) -> String {
                 expr_cache: &mut Default::default(),
             };
 
-            // define function params for entry block as instructions, not as block params
             if block == func_info.entry {
+                // allocate stack at the start of the function
+                builder.push(VInstruction::StackAlloc);
+
+                // define function params for entry block as defs instead of block params
                 for (index, &param) in params.iter().enumerate() {
                     // TODO use the proper ABI registers
                     let preg = ABI_PARAM_REGS[index];
@@ -130,6 +133,15 @@ pub fn lower_new(prog: &mut Program) -> String {
         let result = r2::run(&func_wrapper, &env, &options).unwrap();
         println!("{:?}", result);
 
+        // TODO all of this depends on the calling convention
+        // TODO calculate param_bytes properly
+        let spill_bytes = result.num_spillslots * 4;
+        let param_bytes = 0;
+        let stack_layout = StackLayout {
+            alloc_bytes: spill_bytes,
+            free_bytes: spill_bytes + param_bytes,
+        };
+
         // actually generate code
         output.appendln(format_args!("{}:", symbols.map_global(func)));
 
@@ -153,14 +165,16 @@ pub fn lower_new(prog: &mut Program) -> String {
                             allocs.inner.insert(operand.vreg(), alloc);
                         }
 
-                        output.append_v_inst(v_inst, &allocs);
+                        output.append_v_inst(v_inst, &allocs, &stack_layout);
                     }
                     InstOrEdit::Edit(edit) => {
-                        let Edit::Move { from, to } = edit;
-                        let to = preg_to_asm(to.as_reg().unwrap());
-                        let from = preg_to_asm(from.as_reg().unwrap());
+                        let &Edit::Move { from, to } = edit;
+
+                        let to = VRegPos::from(to);
+                        let from = VRegPos::from(from);
+
                         output.comment(format_args!("    ; {:?}", edit));
-                        output.appendln(format_args!("    mov {}, {}", to, from));
+                        output.appendln(format_args!("    mov {}, {}", to.to_asm(), from.to_asm()));
                     }
                 }
             }
@@ -197,8 +211,8 @@ pub struct Allocs {
 }
 
 impl Allocs {
-    pub fn map_reg(&self, reg: VReg) -> PReg {
-        self.inner.get(&reg).unwrap().as_reg().unwrap()
+    pub fn map_reg(&self, reg: VReg) -> VRegPos {
+        (*self.inner.get(&reg).unwrap()).into()
     }
 }
 
@@ -221,7 +235,7 @@ impl Output {
         writeln!(&mut self.text, "{}", f).unwrap();
     }
 
-    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &Allocs) {
+    fn append_v_inst(&mut self, v_inst: &VInstruction, allocs: &Allocs, layout: &StackLayout) {
         self.comment(format_args!("    ; {:?} {:?}", v_inst, allocs.inner));
 
         // moves that should be skipped get "none" as operands
@@ -231,7 +245,7 @@ impl Output {
         }
 
         // append the actual code
-        let result = v_inst.to_asm(allocs);
+        let result = v_inst.to_asm(allocs, layout);
         for line in result.lines() {
             self.appendln(format_args!("    {}", line.trim()));
         }

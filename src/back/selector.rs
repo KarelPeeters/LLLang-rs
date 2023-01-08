@@ -176,7 +176,7 @@ impl Selector<'_> {
                     Some(self.append_value_to_reg(value))
                 };
 
-                self.push(VInstruction::Return(value));
+                self.push(VInstruction::ReturnAndStackFree(value));
             }
             Terminator::Unreachable => {
                 self.push(VInstruction::Unreachable);

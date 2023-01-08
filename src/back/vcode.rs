@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fmt::Write;
 
 use derive_more::From;
-use regalloc2::{Operand, PReg, PRegSet, RegClass, VReg};
+use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
 
 use crate::back::x86_asm_select::Allocs;
 use crate::mid::ir::Signed;
@@ -12,13 +12,14 @@ use crate::mid::util::bit_int::BitInt;
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
 pub enum VInstruction {
+    // utilities for marking registers as defined
     DefAnyReg(VReg),
     DefFixedReg(VReg, PReg),
 
     /// set the given register to zero
     Clear(VReg),
 
-    /// read as "move into .. from .."
+    // read as "move into .. from .."
     MovReg(VReg, VopRCM),
     MovMem(VMem, VopRC),
 
@@ -32,17 +33,22 @@ pub enum VInstruction {
     /// result, target, args
     Call(VReg, VopRCM, Vec<VReg>),
 
+    // compare instructions
     Cmp(VReg, VopRCM),
     Test(VReg, VopRCM),
     // TODO allow mem operand here
     Setcc(&'static str, VReg, VReg),
 
+    // terminators
     Jump(VTarget),
     // TODO make sure we end up generating good branch code
     Branch(VReg, VTarget, VTarget),
-    Return(Option<VReg>),
+    ReturnAndStackFree(Option<VReg>),
     Unreachable,
     LoopForever(VSymbol),
+
+    /// increase the stack size at the start of the function
+    StackAlloc,
 }
 
 pub enum RegOperand {
@@ -78,6 +84,13 @@ pub enum VConst {
     Symbol(VSymbol),
 }
 
+// TODO merge this with VopRM? it's the same except it has a PReg instead of VReg
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum VRegPos {
+    PReg(PReg),
+    Slot(usize),
+}
+
 impl VConst {
     pub fn to_asm(&self) -> String {
         match self {
@@ -87,6 +100,38 @@ impl VConst {
                 |s| s.len(),
             ),
             VConst::Symbol(symbol) => format!("{}", symbol),
+        }
+    }
+}
+
+impl From<Allocation> for VRegPos {
+    fn from(value: Allocation) -> Self {
+        match value.kind() {
+            AllocationKind::None => unreachable!(),
+            AllocationKind::Reg => VRegPos::PReg(value.as_reg().unwrap()),
+            AllocationKind::Stack => {
+                let slot = value.as_stack().unwrap();
+                assert!(slot.is_valid());
+                VRegPos::Slot(slot.index())
+            }
+        }
+    }
+}
+
+impl VRegPos {
+    fn is_preg(self, preg: PReg) -> bool {
+        self == VRegPos::PReg(preg)
+    }
+
+    fn as_preg(self) -> Option<PReg> {
+        option_match!(self, VRegPos::PReg(preg) => preg)
+    }
+
+    pub fn to_asm(self) -> String {
+        match self {
+            VRegPos::PReg(preg) => preg_to_asm(preg).to_string(),
+            // TODO change this 4 when moving to x64
+            VRegPos::Slot(index) => format!("[esp+{}]", 4 * index + 4),
         }
     }
 }
@@ -183,10 +228,7 @@ impl VOperand for VopRCM {
         match *self {
             // TODO this only works because all Vops accept a register, which is kind of brittle
             VopRCM::Undef => preg_to_asm(PREG_A).to_string(),
-            VopRCM::Reg(reg) => {
-                let preg = allocs.map_reg(reg);
-                preg_to_asm(preg).to_string()
-            }
+            VopRCM::Reg(reg) => allocs.map_reg(reg).to_asm(),
             VopRCM::Const(cst) => cst.to_asm(),
             VopRCM::Mem(mem) => mem.to_asm(allocs),
         }
@@ -242,6 +284,12 @@ macro_rules! impl_vop_for {
 impl_vop_for!(VopRC);
 impl_vop_for!(VopRM);
 impl_vop_for!(VReg);
+
+#[derive(Debug, Clone)]
+pub struct StackLayout {
+    pub alloc_bytes: usize,
+    pub free_bytes: usize,
+}
 
 impl VInstruction {
     pub fn to_inst_info(&self) -> InstInfo {
@@ -311,7 +359,7 @@ impl VInstruction {
                 let params = vec![true_target.args.clone(), false_target.args.clone()];
                 return InstInfo::branch(operands, params);
             }
-            VInstruction::Return(value) => {
+            VInstruction::ReturnAndStackFree(value) => {
                 if let Some(value) = value {
                     operands.push(Operand::reg_fixed_use(value, ABI_RETURN_REG));
                 }
@@ -323,17 +371,18 @@ impl VInstruction {
             VInstruction::LoopForever(_label) => {
                 return InstInfo::ret(operands);
             }
+            VInstruction::StackAlloc => {}
         }
 
         InstInfo::simple(operands)
     }
 
-    pub fn to_asm(&self, allocs: &Allocs) -> String {
+    pub fn to_asm(&self, allocs: &Allocs, layout: &StackLayout) -> String {
         match *self {
             VInstruction::DefAnyReg(dest) =>
                 format!("; def any {}", dest.to_asm(allocs)),
             VInstruction::DefFixedReg(dest, preg) => {
-                assert_eq!(allocs.map_reg(dest), preg);
+                assert!(allocs.map_reg(dest).is_preg(preg));
                 format!("; def fixed {}", dest.to_asm(allocs))
             }
             VInstruction::Clear(dest) => {
@@ -355,10 +404,10 @@ impl VInstruction {
                 format!("{} {}, {}", instr, left.to_asm(allocs), right.to_asm(allocs))
             }
             VInstruction::DivMod(signed, high, low, div, quot, rem) => {
-                assert_eq!(allocs.map_reg(high), PREG_D);
-                assert_eq!(allocs.map_reg(low), PREG_A);
-                assert_eq!(allocs.map_reg(quot), PREG_A);
-                assert_eq!(allocs.map_reg(rem), PREG_D);
+                assert!(allocs.map_reg(high).is_preg(PREG_D));
+                assert!(allocs.map_reg(low).is_preg(PREG_A));
+                assert!(allocs.map_reg(quot).is_preg(PREG_A));
+                assert!(allocs.map_reg(rem).is_preg(PREG_D));
 
                 let instr = match signed {
                     Signed::Signed => "idiv",
@@ -376,7 +425,8 @@ impl VInstruction {
                 format!("test {}, {}", left.to_asm(allocs), right.to_asm(allocs)),
             VInstruction::Setcc(instr, dest, source) => {
                 assert_eq!(allocs.map_reg(dest), allocs.map_reg(source));
-                format!("{} {}", instr, REG_NAMES_BYTE[allocs.map_reg(dest).index()])
+                let preg = allocs.map_reg(dest).as_preg().unwrap();
+                format!("{} {}", instr, REG_NAMES_BYTE[preg.index()])
             }
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", target.block),
@@ -391,10 +441,23 @@ impl VInstruction {
 
                 s
             }
-            VInstruction::Return(_value) => "ret 0".to_string(),
+            VInstruction::ReturnAndStackFree(_value) => {
+                if layout.free_bytes != 0 {
+                    format!("sub esp, {}\nret 0", layout.free_bytes)
+                } else {
+                    "ret 0".to_owned()
+                }
+            },
             VInstruction::Unreachable => "hlt".to_string(),
             VInstruction::LoopForever(label) => {
                 format!("{}: jmp {}", label, label)
+            }
+            VInstruction::StackAlloc => {
+                if layout.alloc_bytes != 0 {
+                    format!("add esp, {}", layout.alloc_bytes)
+                } else {
+                    "".to_owned()
+                }
             }
         }
     }
