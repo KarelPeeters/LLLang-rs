@@ -59,6 +59,9 @@ pub enum VInstruction {
     MovReg(Size, VReg, VopRCM),
     MovMem(Size, VMem, VopRC),
 
+    /// target = base + index * size
+    Lea(VReg, VReg, VReg, Size),
+
     /// args are "target = left (+) right"
     /// target and left must be the same register, this is handled with a register allocation constraint
     Binary(Size, &'static str, VReg, VReg, VopRCM),
@@ -431,6 +434,11 @@ impl VInstruction {
                 operands.push_use(source);
                 operands.push_def(dest);
             }
+            VInstruction::Lea(dest, base, index, _scale) => {
+                operands.push_def(dest);
+                operands.push_use(base);
+                operands.push_use(index);
+            }
             VInstruction::Binary(_size, _instr, dest, left, right) => {
                 operands.push(Operand::reg_reuse_def(dest, 1));
                 operands.push_use(left);
@@ -533,6 +541,13 @@ impl VInstruction {
                 } else {
                     format!("mov {} {}, {}", size.keyword(), dest_str, source_str)
                 }
+            }
+            VInstruction::Lea(dest, base, index, scale) => {
+                let dest = dest.to_asm(ctx, Size::FULL);
+                let base = base.to_asm(ctx, Size::FULL);
+                let index = index.to_asm(ctx, Size::FULL);
+                let scale = scale.bits();
+                format!("lea {dest}, [{base} + {index} * {scale}]")
             }
             VInstruction::Binary(size, instr, dest, left, right) => {
                 assert_eq!(ctx.map_reg(dest), ctx.map_reg(left));

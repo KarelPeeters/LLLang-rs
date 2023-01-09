@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
+use crate::back::layout::TupleLayout;
 
 use crate::back::vcode::{Size, VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::util::bit_int::{BitInt, UStorage};
 
 #[derive(Default)]
 pub struct Symbols {
@@ -235,7 +237,9 @@ impl Selector<'_> {
             return result;
         }
 
-        let result = match *self.prog.get_expr(expr) {
+        let prog = self.prog;
+
+        let result = match *prog.get_expr(expr) {
             ExpressionInfo::Arithmetic { kind, left, right } => {
                 self.append_arithmetic(kind, left, right)
             }
@@ -270,8 +274,27 @@ impl Selector<'_> {
 
                 after
             }
-            ExpressionInfo::TupleFieldPtr { .. } => todo!("TupleFieldPtr"),
-            ExpressionInfo::PointerOffSet { .. } => todo!("PointerOffSet"),
+            ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } => {
+                let tuple_ty = prog.get_type(tuple_ty).unwrap_tuple().unwrap();
+                let layout = TupleLayout::for_types(prog, tuple_ty.fields.iter().copied());
+
+                let offset = layout.offsets[index as usize];
+                let offset = BitInt::from_unsigned(Size::FULL.bits(), offset as UStorage).unwrap();
+                let offset = VConst::Const(offset).into();
+
+                let base = self.append_value_to_reg(base);
+                let dest = self.vregs.new_vreg();
+                self.push(VInstruction::Binary(Size::FULL, "add", dest, base, offset));
+                dest
+            },
+            ExpressionInfo::PointerOffSet { ty, base, index } => {
+                let dest =self.vregs.new_vreg();
+                let base = self.append_value_to_reg(base);
+                let index = self.append_value_to_reg(index);
+                let scale = self.size_of_ty(ty);
+                self.push(VInstruction::Lea(dest, base, index, scale));
+                dest
+            },
             ExpressionInfo::Cast { ty, kind, value } => {
                 let size_before = self.size_of_value(value);
                 let size_after = self.size_of_ty(ty);
