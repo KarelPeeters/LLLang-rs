@@ -2,19 +2,33 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::marker::PhantomData;
 
+use derive_more::From;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
-use crate::mid::analyse::usage::{try_for_each_expr_tree_operand, try_for_each_usage_in_expr};
+use crate::mid::analyse::usage::try_for_each_expr_tree_operand;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
 
-type Result = std::io::Result<()>;
+type Result<T=()> = std::result::Result<T, Error>;
 
-pub fn render(prog: &Program, mut f: impl Write) -> Result {
-    Renderer::new(prog).render(&mut f)
+// trick to avoid having to unwrap every fmt error when writing to string
+#[derive(From)]
+enum Error {
+    IO(std::io::Error),
+    Fmt(std::fmt::Error),
+}
+
+pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
+    let result = Renderer::new(prog).render(&mut f);
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(Error::IO(e)) => Err(e),
+        Err(Error::Fmt(_)) => unreachable!(),
+    }
 }
 
 struct Renderer<'a, W: Write> {
@@ -59,6 +73,10 @@ impl<'a, W: Write> Renderer<'a, W> {
         let prog = self.prog;
 
         writeln!(f, "digraph {{")?;
+        writeln!(f, r#"fontname="Arial,sans-serif""#)?;
+        writeln!(f, r#"node [fontname="Arial,sans-serif"]"#)?;
+        writeln!(f, r#"edge [fontname="Arial,sans-serif"]"#)?;
+
         writeln!(f)?;
 
         for func in prog.nodes.funcs.keys() {
@@ -101,7 +119,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         let block_info = prog.get_block(block);
 
         let rows = &mut String::new();
-        write!(rows, "<tr><td align=\"center\" colspan=\"3\">block_{}</td></tr>", block.index()).unwrap();
+        write!(rows, "<tr><td align=\"center\" colspan=\"3\">block_{}</td></tr>", block.index())?;
 
         // TODO block params as first table row
 
@@ -113,10 +131,10 @@ impl<'a, W: Write> Renderer<'a, W> {
                 rows,
                 "<tr><td port=\"instr_{}\" align=\"left\">instr_{}</td><td align=\"left\">{}</td><td align=\"left\">{}</td></tr>",
                 instr.index(), instr.index(), quote_html(&ty_str), quote_html(&self.instr_to_str(instr))
-            ).unwrap();
+            )?;
         }
 
-        write!(rows, "{}", self.terminator_to_table_str(&block_info.terminator)).unwrap();
+        write!(rows, "{}", self.terminator_to_table_str(&block_info.terminator)?)?;
 
         let label = format!("<<table border=\"0\">{}</table>>", rows);
         writeln!(f, "block_{} [label={}, shape=\"box\"];", block.index(), label)?;
@@ -129,29 +147,29 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
-    fn terminator_to_table_str(&self, terminator: &Terminator) -> String {
+    fn terminator_to_table_str(&self, terminator: &Terminator) -> Result<String> {
         let mut result = String::new();
         let f = &mut result;
         match *terminator {
             Terminator::Jump { ref target } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">jump</td><td align=\"left\">{}</td></tr>", self.target_to_str(target)).unwrap();
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">jump</td><td align=\"left\">{}</td></tr>", self.target_to_str(target))?;
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">branch</td><td align=\"left\">{}</td></tr>", self.value_to_str(cond)).unwrap();
-                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(true_target)).unwrap();
-                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(false_target)).unwrap();
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">branch</td><td align=\"left\">{}</td></tr>", self.value_to_str(cond))?;
+                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(true_target))?;
+                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(false_target))?;
             }
             Terminator::Return { value } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">return</td><td align=\"left\">{}</td></tr>", self.value_to_str(value)).unwrap();
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">return</td><td align=\"left\">{}</td></tr>", self.value_to_str(value))?;
             }
             Terminator::Unreachable => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">unreachable</td></tr>").unwrap();
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">unreachable</td></tr>")?;
             }
             Terminator::LoopForever => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">loopforever</td></tr>").unwrap();
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">loopforever</td></tr>")?;
             }
         }
-        result
+        Ok(result)
     }
 
     fn target_to_str(&self, target: &Target) -> String {
@@ -182,10 +200,10 @@ impl<'a, W: Write> Renderer<'a, W> {
                 <td align=\"left\" port=\"expr_{index}_use\">{}</td>\
                 </tr>",
                 quote_html(&ty_str), quote_html(&expr_info_str)
-            ).unwrap();
+            )?;
         }
 
-        writeln!(f, "{}_expressions [label=<<table border=\"0\">{}</table>> shape=\"box\" style=\"rounded\"];", prefix, &rows).unwrap();
+        writeln!(f, "{}_expressions [label=<<table border=\"0\">{}</table>> shape=\"box\" style=\"rounded\"];", prefix, &rows)?;
 
         Ok(())
     }
@@ -223,21 +241,6 @@ impl<'a, W: Write> Renderer<'a, W> {
         }
     }
 
-    fn value_to_node(&self, value: Value) -> Option<String> {
-        match value {
-            Value::Immediate(_) => None,
-            Value::Global(_) => None,
-            Value::Scoped(value) => match value {
-                Scoped::Slot(_) => None,
-                Scoped::Param(_) => None,
-                Scoped::Instr(_) => None,
-            }
-            Value::Expr(expr) => {
-                Some(format!("expr_{}", expr.index()))
-            }
-        }
-    }
-
     fn value_to_str(&self, value: Value) -> String {
         match value {
             Value::Immediate(value) => match value {
@@ -256,14 +259,6 @@ impl<'a, W: Write> Renderer<'a, W> {
                 Scoped::Instr(instr) => format!("instr_{}", instr.index()),
             }
             Value::Expr(expr) => format!("expr_{}", expr.index()),
-        }
-    }
-
-    fn write_edge(f: &mut W, from: Option<String>, to: Option<String>) -> Result {
-        if let (Some(from), Some(to)) = (from, to) {
-            writeln!(f, "{} -> {};", from, to)
-        } else {
-            Ok(())
         }
     }
 }
