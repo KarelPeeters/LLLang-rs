@@ -20,10 +20,14 @@ impl Size {
     pub const FULL: Size = Size::S32;
 
     pub fn bits(self) -> u32 {
+        self.bytes() * 8
+    }
+
+    pub fn bytes(self) -> u32 {
         match self {
-            Size::S8 => 8,
-            Size::S16 => 16,
-            Size::S32 => 32,
+            Size::S8 => 1,
+            Size::S16 => 2,
+            Size::S32 => 4,
         }
     }
 
@@ -59,7 +63,7 @@ pub enum VInstruction {
     MovMem(Size, VMem, VopRC),
 
     /// target = base + index * size
-    Lea(VReg, VReg, VReg, Size),
+    Lea(VReg, VopRC, VReg, Size),
 
     /// args are "target = left (+) right"
     /// target and left must be the same register, this is handled with a register allocation constraint
@@ -546,8 +550,13 @@ impl VInstruction {
                 let dest = dest.to_asm(ctx, Size::FULL);
                 let base = base.to_asm(ctx, Size::FULL);
                 let index = index.to_asm(ctx, Size::FULL);
-                let scale = scale.bits();
-                format!("lea {dest}, [{base} + {index} * {scale}]")
+                let scale = scale.bytes();
+
+                if scale == 1 {
+                    format!("lea {dest}, [{base} + {index}]")
+                } else {
+                    format!("lea {dest}, [{base} + {index} * {scale}]")
+                }
             }
             VInstruction::Binary(size, instr, dest, left, right) => {
                 assert_eq!(ctx.map_reg(dest), ctx.map_reg(left));

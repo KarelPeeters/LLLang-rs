@@ -289,7 +289,7 @@ impl Selector<'_> {
             },
             ExpressionInfo::PointerOffSet { ty, base, index } => {
                 let dest =self.vregs.new_vreg();
-                let base = self.append_value_to_reg(base);
+                let base = self.append_value_to_rc(base);
                 let index = self.append_value_to_reg(index);
                 let scale = self.size_of_ty(ty);
                 self.push(VInstruction::Lea(dest, base, index, scale));
