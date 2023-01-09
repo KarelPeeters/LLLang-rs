@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Display, Write};
 use std::iter::zip;
 
@@ -57,6 +56,9 @@ pub fn lower_new(prog: &mut Program) -> String {
             Never::UNIT
         }).no_err();
 
+        // map slots
+        let slots = func_info.slots.iter().enumerate().map(|(i, &slot)| (slot, i)).collect();
+
         for &block in &blocks_ordered {
             println!("  Block {:?} -> {:?}", block, symbols.map_block(block).0);
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
@@ -70,7 +72,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                 prog,
                 symbols: &mut symbols,
                 vregs: &mut mapper,
-                slots: HashMap::new(),
+                slots: &slots,
                 instructions: &mut v_instructions,
                 expr_cache: &mut Default::default(),
             };
@@ -136,7 +138,7 @@ pub fn lower_new(prog: &mut Program) -> String {
 
         // TODO do all of this properly, depending on the calling convention
         let stack_layout = StackLayout {
-            slot_bytes: 0,
+            slot_bytes: slots.len() * 4,
             spill_bytes: result.num_spillslots,
             param_bytes: 0,
         };

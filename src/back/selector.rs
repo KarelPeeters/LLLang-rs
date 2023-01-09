@@ -75,7 +75,7 @@ pub struct Selector<'a> {
 
     pub symbols: &'a mut Symbols,
     pub vregs: &'a mut VRegMapper,
-    pub slots: HashMap<StackSlot, usize>,
+    pub slots: &'a HashMap<StackSlot, usize>,
 
     pub instructions: &'a mut Vec<VInstruction>,
     pub expr_cache: &'a mut HashMap<Expression, VReg>,
@@ -266,7 +266,7 @@ impl Selector<'_> {
             }
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => {
-                    let index = self.map_slot(slot);
+                    let index = self.map_slot_to_index(slot);
                     VopRCM::Slot(index)
                 }
                 Scoped::Param(param) => self.vregs.map_param(param).into(),
@@ -332,8 +332,7 @@ impl Selector<'_> {
         }
     }
 
-    fn map_slot(&mut self, slot: StackSlot) -> usize {
-        let next = self.slots.len();
-        *self.slots.entry(slot).or_insert(next)
+    fn map_slot_to_index(&mut self, slot: StackSlot) -> usize {
+        *self.slots.get(&slot).unwrap()
     }
 }

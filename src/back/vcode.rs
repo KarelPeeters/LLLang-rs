@@ -336,8 +336,9 @@ pub struct StackLayout {
 }
 
 impl StackLayout {
+    // TODO this depends on the calling convention
     pub fn alloc_bytes(&self) -> usize {
-        self.param_bytes + self.slot_bytes + self.spill_bytes
+        self.slot_bytes + self.spill_bytes
     }
 
     pub fn free_bytes(&self) -> usize {
@@ -345,11 +346,11 @@ impl StackLayout {
     }
 
     pub fn spill_offset(&self, index: usize) -> usize {
-        index * 4 + 4
+        index * 4
     }
 
     pub fn slot_offset(&self, index: usize) -> usize {
-        index * 4 + self.spill_bytes + 4
+        index * 4 + self.spill_bytes
     }
 }
 
@@ -509,7 +510,7 @@ impl VInstruction {
             VInstruction::ReturnAndStackFree(_value) => {
                 let bytes = ctx.stack_layout.free_bytes();
                 if bytes != 0 {
-                    format!("sub esp, {}\nret 0", bytes)
+                    format!("add esp, {}\nret 0", bytes)
                 } else {
                     "ret 0".to_owned()
                 }
@@ -521,7 +522,7 @@ impl VInstruction {
             VInstruction::StackAlloc => {
                 let bytes = ctx.stack_layout.alloc_bytes();
                 if bytes != 0 {
-                    format!("add esp, {}", bytes)
+                    format!("sub esp, {}", bytes)
                 } else {
                     "".to_owned()
                 }
