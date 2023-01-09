@@ -1,12 +1,11 @@
 use std::cmp::min_by_key;
-use std::fmt::{Display, Formatter};
 use std::fmt::Write;
 
 use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
 
-use crate::mid::ir::{Block, Global, Signed};
+use crate::mid::ir::{Block, Global, Program, Signed};
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::IndexType;
 
@@ -139,7 +138,7 @@ pub enum VRegPos {
 }
 
 impl VConst {
-    pub fn to_asm(&self, size: Size) -> String {
+    pub fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
         match self {
             VConst::Const(value) => {
                 assert_eq!(value.bits(), size.bits(), "Tried to store {:?} in {:?}", value, size);
@@ -148,8 +147,8 @@ impl VConst {
                     format!("{}", value.signed()),
                     |s| s.len(),
                 )
-            },
-            VConst::Symbol(symbol) => format!("{}", symbol),
+            }
+            VConst::Symbol(symbol) => symbol.to_asm(ctx),
         }
     }
 }
@@ -302,7 +301,7 @@ impl VOperand for VopRCM {
                 format!("[esp+{}]", offset)
             }
             VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(size),
-            VopRCM::Const(cst) => cst.to_asm(size),
+            VopRCM::Const(cst) => cst.to_asm(ctx, size),
             VopRCM::Mem(mem) => mem.to_asm(ctx, size),
         }
     }
@@ -370,13 +369,14 @@ impl_vop_for!(VopRM);
 impl_vop_for!(VReg);
 
 #[derive(Debug, Clone)]
-pub struct AsmContext {
+pub struct AsmContext<'a> {
+    pub prog: &'a Program,
     // TODO maybe change this to be a vec, it's tiny anyways
     pub allocs: IndexMap<VReg, Allocation>,
     pub stack_layout: StackLayout,
 }
 
-impl AsmContext {
+impl AsmContext<'_> {
     pub fn map_reg(&self, reg: VReg) -> VRegPos {
         (*self.allocs.get(&reg).unwrap()).into()
     }
@@ -604,15 +604,15 @@ impl VInstruction {
                 format!("{} {}", instr, preg_to_asm(preg, Size::S8))
             }
             VInstruction::Jump(ref target) =>
-                format!("jmp {}", VSymbol::Block(target.block)),
+                format!("jmp {}", VSymbol::Block(target.block).to_asm(ctx)),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
                 let cond = cond.to_asm(ctx, Size::FULL);
 
                 let mut s = String::new();
                 let f = &mut s;
                 writeln!(f, "test {}, {}", cond, cond).unwrap();
-                writeln!(f, "jnz {}", VSymbol::Block(true_target.block)).unwrap();
-                writeln!(f, "jmp {}", VSymbol::Block(false_target.block)).unwrap();
+                writeln!(f, "jnz {}", VSymbol::Block(true_target.block).to_asm(ctx)).unwrap();
+                writeln!(f, "jmp {}", VSymbol::Block(false_target.block).to_asm(ctx)).unwrap();
 
                 s
             }
@@ -626,7 +626,7 @@ impl VInstruction {
             }
             VInstruction::Unreachable => "hlt".to_string(),
             VInstruction::LoopForever(label) => {
-                format!("{}: jmp {}", label, label)
+                format!("{}: jmp {}", label.to_asm(ctx), label.to_asm(ctx))
             }
             VInstruction::StackAlloc => {
                 let bytes = ctx.stack_layout.alloc_bytes();
@@ -746,16 +746,16 @@ impl InstInfo {
     }
 }
 
-impl Display for VSymbol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl VSymbol {
+    pub fn to_asm(&self, ctx: &AsmContext) -> String {
         match *self {
             VSymbol::Global(global) => match global {
-                Global::Func(func) => write!(f, "func_{}", func.index()),
-                Global::Extern(ext) => write!(f, "ext_{}", ext.index()),
-                Global::Data(data) => write!(f, "data_{}", data.index()),
+                Global::Func(func) => format!("func_{}", func.index()),
+                Global::Extern(ext) => ctx.prog.get_ext(ext).name.clone(),
+                Global::Data(data) => format!("data_{}", data.index()),
             }
-            VSymbol::Block(block) => write!(f, "block_{}", block.index()),
-            VSymbol::Label(index) => write!(f, "label_{}", index),
+            VSymbol::Block(block) => format!("block_{}", block.index()),
+            VSymbol::Label(index) => format!("label_{}", index),
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::{Display, Write};
 use std::iter::zip;
 
@@ -16,6 +17,7 @@ use crate::mid::ir::{BlockInfo, Program};
 use crate::mid::normalize::split_critical_edges::split_critical_edges;
 use crate::mid::util::verify::verify;
 use crate::util::{Never, NeverExt};
+use crate::util::arena::IndexType;
 
 pub fn lower_new(prog: &mut Program) -> String {
     Builder::new().filter_level(LevelFilter::Trace).init();
@@ -34,7 +36,7 @@ pub fn lower_new(prog: &mut Program) -> String {
 
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("_main:");
-    output.appendln(format_args!("    call {}", VSymbol::Global(main_func.into())));
+    output.appendln(format_args!("    call func_{}", main_func.index()));
     output.appendln(format_args!("    push eax"));
     output.appendln(format_args!("    call _ExitProcess@4"));
     output.appendln("");
@@ -143,16 +145,17 @@ pub fn lower_new(prog: &mut Program) -> String {
             param_bytes: 0,
         };
         let mut ctx = AsmContext {
+            prog,
             allocs: Default::default(),
             stack_layout,
         };
 
         // actually generate code
-        output.appendln(format_args!("{}:", VSymbol::Global(func.into())));
+        output.appendln(format_args!("{}:", VSymbol::Global(func.into()).to_asm(&ctx)));
 
         for &block in &blocks_ordered {
             let block_r2 = symbols.map_block(block);
-            output.appendln(format_args!("  {}:", VSymbol::Block(block)));
+            output.appendln(format_args!("  {}:", VSymbol::Block(block).to_asm(&ctx)));
 
             for inst in result.block_insts_and_edits(&func_wrapper, block_r2) {
                 match inst {
@@ -183,7 +186,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             }
         }
 
-        output.appendln("\n");
+        output.appendln("");
     }
 
     // TODO extern symbols
@@ -198,11 +201,10 @@ pub fn lower_new(prog: &mut Program) -> String {
     // TODO managing larger-than reg values
     // => everything should be working
 
-    output.finish()
+    output.finish(prog).unwrap()
 }
 
 struct Output {
-    header: String,
     text: String,
     comments: bool,
 }
@@ -210,7 +212,6 @@ struct Output {
 impl Output {
     fn new(comments: bool) -> Self {
         Output {
-            header: String::new(),
             text: String::new(),
             comments,
         }
@@ -242,8 +243,34 @@ impl Output {
         }
     }
 
-    fn finish(self) -> String {
-        format!("global _main\nextern _ExitProcess@4\n{}\n\nsection .text\n{}", self.header, self.text)
+    fn finish(self, prog: &Program) -> Result<String, std::fmt::Error> {
+        let mut ext_set: BTreeSet<&str> = prog.nodes.exts.iter().map(|(_, ext_info)| ext_info.name.as_str()).collect();
+        ext_set.insert("_ExitProcess@4");
+
+        let mut result = String::new();
+        let f = &mut result;
+
+        writeln!(f, "global _main")?;
+
+        for ext in ext_set {
+            writeln!(f, "extern {}", ext)?;
+        }
+        writeln!(f, "\n")?;
+
+        writeln!(f, "section .text")?;
+        writeln!(f, "{}", self.text)?;
+
+        writeln!(f, "section .data")?;
+        for (data, data_info) in &prog.nodes.datas {
+            write!(f, "data_{}:\n  db ", data.index())?;
+            for (i, b) in data_info.bytes.iter().enumerate() {
+                if i != 0 { write!(f, ", ")? }
+                write!(f, "{}", b)?;
+            }
+            writeln!(f)?;
+        }
+
+        Ok(result)
     }
 }
 
