@@ -176,7 +176,14 @@ impl<'a, W: Write> Renderer<'a, W> {
         let rows = &mut String::new();
         write!(rows, r#"<tr><td align="center" colspan="3"><b>block_{}</b></td></tr>"#, block.index())?;
 
-        // TODO block params as first table row
+        for &param in &block_info.params {
+            let ty = prog.type_of_value(param.into());
+            write!(
+                rows,
+                r#"<tr><td align="left">param_{}</td><td align="left">{}</td></tr>"#,
+                param.index(), quote_html(&prog.format_type(ty).to_string()),
+            )?;
+        }
 
         for &instr in &block_info.instructions {
             let ty = prog.type_of_value(instr.into());
@@ -318,6 +325,7 @@ impl<'a, W: Write> Renderer<'a, W> {
     }
 }
 
+#[allow(dead_code)]
 fn invis_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
     writeln!(f, "{} [style=invis];", name.as_ref())?;
     Ok(())
