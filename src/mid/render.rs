@@ -94,8 +94,8 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         // render root pointers
         for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
-            dummy_node(f, format!("root_{}", i))?;
-            writeln!(f, r#"root_{} -> func_{}_entry [lhead=cluster_func_{}, label="{}"];"#, i, func.index(), func.index(), name)?;
+            writeln!(f, r#"root_{} [label=<{:?}>, shape=diamond];"#, func.index(), name)?;
+            writeln!(f, r#"root_{} -> func_{}_entry [lhead=cluster_func_{}];"#, i, func.index(), func.index())?;
         }
 
         writeln!(f)?;
@@ -131,7 +131,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         })?;
 
         // entry
-        dummy_node(f, format!("func_{}_entry", func.index()))?;
+        writeln!(f, r#"func_{}_entry [label="", shape=diamond];"#, func.index())?;
         writeln!(f, "func_{}_entry -> block_{};", func.index(), func_info.entry.index())?;
 
         // expressions
@@ -318,7 +318,7 @@ impl<'a, W: Write> Renderer<'a, W> {
     }
 }
 
-fn dummy_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
+fn invis_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
     writeln!(f, "{} [style=invis];", name.as_ref())?;
     Ok(())
 }
