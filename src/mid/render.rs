@@ -47,17 +47,20 @@ impl<'a, W: Write> Renderer<'a, W> {
         let mut func_expressions: IndexMap<Function, IndexSet<Expression>> = IndexMap::new();
         let mut other_expressions: IndexSet<Expression> = use_info.values().filter_map(|v| v.as_expr()).collect();
 
+        let mut mark_expr = |func, expr| {
+            let set = func_expressions.entry(func).or_default();
+            set.insert(expr);
+            other_expressions.remove(&expr);
+        };
+
         for value in use_info.values() {
             if let Value::Expr(expr) = value {
                 for usage in &use_info[value] {
                     if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
-                        let set = func_expressions.entry(func).or_default();
-                        set.insert(expr);
-                        other_expressions.remove(&expr);
+                        mark_expr(func, expr);
                         try_for_each_expr_tree_operand(prog, expr, |value, _, _| {
                             if let Value::Expr(value) = value {
-                                set.insert(value);
-                                other_expressions.remove(&expr);
+                                mark_expr(func, value);
                             }
                             Never::UNIT
                         }).no_err();
@@ -73,9 +76,12 @@ impl<'a, W: Write> Renderer<'a, W> {
         let prog = self.prog;
 
         writeln!(f, "digraph {{")?;
+
         writeln!(f, r#"fontname="Arial,sans-serif""#)?;
         writeln!(f, r#"node [fontname="Arial,sans-serif"]"#)?;
         writeln!(f, r#"edge [fontname="Arial,sans-serif"]"#)?;
+
+        writeln!(f, "compound=true;")?;
 
         writeln!(f)?;
 
@@ -85,6 +91,12 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         // render expressions that aren't used in any function
         self.render_expressions(f, "global", &self.other_expressions)?;
+
+        // render root pointers
+        for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
+            dummy_node(f, format!("root_{}", i))?;
+            writeln!(f, "root_{} -> func_{}_entry [lhead=cluster_func_{}, label=\"{}\"];", i, func.index(), func.index(), name)?;
+        }
 
         writeln!(f)?;
         writeln!(f, "}}")?;
@@ -97,6 +109,14 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         writeln!(f, "subgraph cluster_func_{} {{", func.index())?;
 
+        let mut rows = String::new();
+        let r = &mut rows;
+
+        write!(r, "<tr><td><b>func_{}</b></td></tr>", func.index())?;
+        write!(r, "<tr><td>{}</td></tr>", quote_html(&prog.format_type(func_info.ty).to_string()))?;
+
+        writeln!(f, r#"label = <<table border="0">{}</table>>;"#, rows)?;
+
         // TODO func name
         // TODO func signature
         // TODO func slots
@@ -104,6 +124,9 @@ impl<'a, W: Write> Renderer<'a, W> {
         prog.try_visit_blocks(func_info.entry, |block| {
             self.render_block(f, block)
         })?;
+
+        dummy_node(f, format!("func_{}_entry", func.index()))?;
+        writeln!(f, "func_{}_entry -> block_{};", func.index(), func_info.entry.index())?;
 
         // render expressions used in this function
         if let Some(expressions) = self.func_expressions.get(&func) {
@@ -119,7 +142,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         let block_info = prog.get_block(block);
 
         let rows = &mut String::new();
-        write!(rows, "<tr><td align=\"center\" colspan=\"3\">block_{}</td></tr>", block.index())?;
+        write!(rows, "<tr><td align=\"center\" colspan=\"3\"><b>block_{}</b></td></tr>", block.index())?;
 
         // TODO block params as first table row
 
@@ -178,6 +201,10 @@ impl<'a, W: Write> Renderer<'a, W> {
     }
 
     fn render_expressions(&self, f: &mut W, prefix: &str, expressions: &IndexSet<Expression>) -> Result {
+        if expressions.is_empty() {
+            return Ok(());
+        }
+
         let prog = self.prog;
 
         let mut rows = String::new();
@@ -261,6 +288,11 @@ impl<'a, W: Write> Renderer<'a, W> {
             Value::Expr(expr) => format!("expr_{}", expr.index()),
         }
     }
+}
+
+fn dummy_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
+    writeln!(f, "{} [style=invis];", name.as_ref())?;
+    Ok(())
 }
 
 fn quote_html(s: &str) -> String {
