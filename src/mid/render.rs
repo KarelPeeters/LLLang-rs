@@ -8,11 +8,11 @@ use itertools::Itertools;
 
 use crate::mid::analyse::usage::try_for_each_expr_tree_operand;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Value};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, StackSlot, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
 
-type Result<T=()> = std::result::Result<T, Error>;
+type Result<T = ()> = std::result::Result<T, Error>;
 
 // trick to avoid having to unwrap every fmt error when writing to string
 #[derive(From)]
@@ -95,7 +95,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         // render root pointers
         for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
             dummy_node(f, format!("root_{}", i))?;
-            writeln!(f, "root_{} -> func_{}_entry [lhead=cluster_func_{}, label=\"{}\"];", i, func.index(), func.index(), name)?;
+            writeln!(f, r#"root_{} -> func_{}_entry [lhead=cluster_func_{}, label="{}"];"#, i, func.index(), func.index(), name)?;
         }
 
         writeln!(f)?;
@@ -112,23 +112,27 @@ impl<'a, W: Write> Renderer<'a, W> {
         let mut rows = String::new();
         let r = &mut rows;
 
+        // header
         write!(r, "<tr><td><b>func_{}</b></td></tr>", func.index())?;
+        if let Some(name) = &func_info.debug_name {
+            write!(r, "<tr><td><b>{:?}</b></td></tr>", quote_html(name))?;
+        }
         write!(r, "<tr><td>{}</td></tr>", quote_html(&prog.format_type(func_info.ty).to_string()))?;
-
         writeln!(f, r#"label = <<table border="0">{}</table>>;"#, rows)?;
 
-        // TODO func name
-        // TODO func signature
-        // TODO func slots
+        // slots
+        self.render_slots(f, func, &func_info.slots)?;
 
+        // blocks
         prog.try_visit_blocks(func_info.entry, |block| {
             self.render_block(f, block)
         })?;
 
+        // entry
         dummy_node(f, format!("func_{}_entry", func.index()))?;
         writeln!(f, "func_{}_entry -> block_{};", func.index(), func_info.entry.index())?;
 
-        // render expressions used in this function
+        // expressions
         if let Some(expressions) = self.func_expressions.get(&func) {
             self.render_expressions(f, &format!("func_{}", func.index()), expressions)?;
         }
@@ -137,12 +141,38 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
+    fn render_slots(&self, f: &mut W, func: Function, slots: &[StackSlot]) -> Result {
+        let prog = self.prog;
+
+        let mut rows = String::new();
+        let r = &mut rows;
+
+        for &slot in slots {
+            let slot_info = prog.get_slot(slot);
+            let ty = slot_info.inner_ty;
+            let slot_name = slot_info.debug_name.as_ref().map_or("", |s| s);
+
+            write!(
+                r,
+                "<tr><td>slot_{}</td><td>{}</td><td>{:?}</td></tr>",
+                slot.index(), prog.format_type(ty), quote_html(slot_name),
+            )?;
+        }
+
+        write!(
+            f,
+            r#"func_{}_slots [label=<<table border="0">{}</table>>, shape="box"]"#,
+            func.index(), rows
+        )?;
+        Ok(())
+    }
+
     fn render_block(&self, f: &mut W, block: Block) -> Result {
         let prog = self.prog;
         let block_info = prog.get_block(block);
 
         let rows = &mut String::new();
-        write!(rows, "<tr><td align=\"center\" colspan=\"3\"><b>block_{}</b></td></tr>", block.index())?;
+        write!(rows, r#"<tr><td align="center" colspan="3"><b>block_{}</b></td></tr>"#, block.index())?;
 
         // TODO block params as first table row
 
@@ -152,15 +182,15 @@ impl<'a, W: Write> Renderer<'a, W> {
 
             write!(
                 rows,
-                "<tr><td port=\"instr_{}\" align=\"left\">instr_{}</td><td align=\"left\">{}</td><td align=\"left\">{}</td></tr>",
-                instr.index(), instr.index(), quote_html(&ty_str), quote_html(&self.instr_to_str(instr))
+                r#"<tr><td align="left">instr_{}</td><td align="left">{}</td><td align="left">{}</td></tr>"#,
+                instr.index(), quote_html(&ty_str), quote_html(&self.instr_to_str(instr))
             )?;
         }
 
         write!(rows, "{}", self.terminator_to_table_str(&block_info.terminator)?)?;
 
-        let label = format!("<<table border=\"0\">{}</table>>", rows);
-        writeln!(f, "block_{} [label={}, shape=\"box\"];", block.index(), label)?;
+        let label = format!(r#"<<table border="0">{}</table>>"#, rows);
+        writeln!(f, r#"block_{} [label={}, shape="box"];"#, block.index(), label)?;
 
         // TODO targets with edge colors: blue jump, green true branch, red false branch
         block_info.terminator.try_for_each_target(|target| {
@@ -175,21 +205,21 @@ impl<'a, W: Write> Renderer<'a, W> {
         let f = &mut result;
         match *terminator {
             Terminator::Jump { ref target } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">jump</td><td align=\"left\">{}</td></tr>", self.target_to_str(target))?;
+                write!(f, r#"<tr><td colspan="2" align="left">jump</td><td align="left">{}</td></tr>"#, self.target_to_str(target))?;
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">branch</td><td align=\"left\">{}</td></tr>", self.value_to_str(cond))?;
-                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(true_target))?;
-                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(false_target))?;
+                write!(f, r#"<tr><td colspan="2" align="left">branch</td><td align="left">{}</td></tr>"#, self.value_to_str(cond))?;
+                write!(f, r#"<tr><td></td><td></td><td align="left">{}</td></tr>"#, self.target_to_str(true_target))?;
+                write!(f, r#"<tr><td></td><td></td><td align="left">{}</td></tr>"#, self.target_to_str(false_target))?;
             }
             Terminator::Return { value } => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">return</td><td align=\"left\">{}</td></tr>", self.value_to_str(value))?;
+                write!(f, r#"<tr><td colspan="2" align="left">return</td><td align="left">{}</td></tr>"#, self.value_to_str(value))?;
             }
             Terminator::Unreachable => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">unreachable</td></tr>")?;
+                write!(f, r#"<tr><td colspan="2" align="left">unreachable</td></tr>"#)?;
             }
             Terminator::LoopForever => {
-                write!(f, "<tr><td colspan=\"2\" align=\"left\">loopforever</td></tr>")?;
+                write!(f, r#"<tr><td colspan="2" align="left">loopforever</td></tr>"#)?;
             }
         }
         Ok(result)
@@ -221,16 +251,12 @@ impl<'a, W: Write> Renderer<'a, W> {
 
             write!(
                 r,
-                "<tr>\
-                <td align=\"left\" port=\"expr_{index}_def\">expr_{index}</td>\
-                <td align=\"left\">{}</td>\
-                <td align=\"left\" port=\"expr_{index}_use\">{}</td>\
-                </tr>",
+                r#"<tr><td align="left">expr_{index}</td><td align="left">{}</td><td align="left">{}</td></tr>"#,
                 quote_html(&ty_str), quote_html(&expr_info_str)
             )?;
         }
 
-        writeln!(f, "{}_expressions [label=<<table border=\"0\">{}</table>> shape=\"box\" style=\"rounded\"];", prefix, &rows)?;
+        writeln!(f, r#"{}_expressions [label=<<table border="0">{}</table>> shape="box" style="rounded"];"#, prefix, &rows)?;
 
         Ok(())
     }
