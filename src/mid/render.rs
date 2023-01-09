@@ -212,7 +212,13 @@ impl<'a, W: Write> Renderer<'a, W> {
                 TargetKind::BranchFalse => "red",
             };
 
-            writeln!(f, "block_{} -> block_{} [color={}];", block.index(), target.block.index(), color)
+            let dir = if target.block == block {
+                "back"
+            } else {
+                "forward"
+            };
+
+            writeln!(f, "block_{} -> block_{} [color={color}, dir={dir}];", block.index(), target.block.index())
         })?;
 
         Ok(())
