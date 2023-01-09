@@ -744,6 +744,10 @@ impl Value {
         option_match!(self, Value::Expr(expr) => expr)
     }
 
+    pub fn as_slot(self) -> Option<StackSlot> {
+        option_match!(self, Value::Scoped(Scoped::Slot(slot)) => slot)
+    }
+
     pub fn is_undef(self) -> bool {
         matches!(self, Value::Immediate(Immediate::Undef(_)))
     }
@@ -758,6 +762,10 @@ impl Value {
 
     pub fn is_expr(self) -> bool {
         self.as_expr().is_some()
+    }
+
+    pub fn is_slot(self) -> bool {
+        self.as_slot().is_some()
     }
 }
 

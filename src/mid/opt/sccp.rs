@@ -45,7 +45,22 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
-            count += use_info.replace_value_usages(prog, value, lattice_value)
+            // TODO properly check for dominance (and everywhere else we're replacing things)
+            // TODO remove this quick slot check
+            count += use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {
+                if let Some(slot) = lattice_value.as_slot() {
+                    if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
+                        // only replace if this slot belongs to this func
+                        prog.get_func(func).slots.contains(&slot)
+                    } else {
+                        // if we don't know where this slot usage is, fail same
+                        false
+                    }
+                } else {
+                    // replace all non-slot values
+                    true
+                }
+            });
         }
     }
 
