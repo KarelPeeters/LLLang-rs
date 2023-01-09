@@ -215,6 +215,14 @@ impl DomPosition {
             DomPosition::InBlock(func, _, _) => Some(func),
         }
     }
+
+    pub fn block(self) -> Option<Block> {
+        match self {
+            DomPosition::Global => None,
+            DomPosition::FuncEntry(_) => None,
+            DomPosition::InBlock(_, block, _) => Some(block),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]

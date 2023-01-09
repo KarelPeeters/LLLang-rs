@@ -1,5 +1,5 @@
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{try_for_each_expr_leaf_value, Usage};
+use crate::mid::analyse::usage::{try_for_each_expr_tree_operand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Expression, Function, Program, Scoped, Value};
 use crate::util::VecExt;
@@ -71,7 +71,7 @@ pub fn value_strictly_dominates_usage_slow(
     dom_info: &DomInfo,
     use_info: &UseInfo,
     value: Value,
-    usage: &Usage
+    usage: &Usage,
 ) -> Result<bool, NoDefFound> {
     let use_pos = usage.as_dom_pos();
 
@@ -88,8 +88,12 @@ pub fn value_strictly_dominates_usage_slow(
                 }
                 Err(DefError::NoDefFound) => Err(NoDefFound),
                 Err(DefError::Expression(expr)) => {
-                    let result = try_for_each_expr_leaf_value(prog, expr, |leaf, _| {
-                        assert!(leaf.as_expr().is_none());
+                    let result = try_for_each_expr_tree_operand(prog, expr, |leaf, _, _| {
+                        // we only care about leaf operands
+                        if leaf.is_expr() {
+                            return Ok(());
+                        }
+
                         let result = value_strictly_dominates_usage_slow(prog, dom_info, use_info, leaf, usage);
                         match result {
                             Ok(true) => Ok(()),

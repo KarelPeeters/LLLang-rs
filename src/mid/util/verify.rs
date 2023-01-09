@@ -4,7 +4,7 @@ use std::iter::zip;
 use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_leaf_value, try_for_each_usage_in_instr, Usage};
+use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_tree_operand, try_for_each_usage_in_instr, Usage};
 use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
 
 // TODO verify that there are no expression loops
@@ -222,9 +222,12 @@ impl<'a> Context<'a> {
             Value::Expr(expr) => {
                 assert!(root.is_none());
                 self.expressions.insert(expr);
-                try_for_each_expr_leaf_value(self.prog, expr, |inner, _| {
-                    assert!(!matches!(inner, Value::Expr(_)));
-                    self.check_value_usage_impl(inner, usage.clone(), Some(expr))
+                try_for_each_expr_tree_operand(self.prog, expr, |inner, _, _| {
+                    if inner.is_expr() {
+                        Ok(())
+                    } else {
+                        self.check_value_usage_impl(inner, usage.clone(), Some(expr))
+                    }
                 })
             }
         }

@@ -17,6 +17,7 @@ use lllang::{back, front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
+use lllang::mid::render::render;
 use lllang::mid::util::verify::{verify, VerifyError};
 
 #[derive(Debug, From)]
@@ -218,6 +219,24 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     run_gc(&mut ir_program)?;
     write_ir(&ir_program)?;
     verify(&ir_program)?;
+
+    let render_file = ll_path.with_extension("gv");
+    let mut render_writer = File::create(&render_file)
+        .with_context(|| format!("Creating render file {:?}", render_file))?;
+    render(&ir_program, &mut render_writer)
+        .with_context(|| "Writing to render file")?;
+
+    let dot_output = Command::new("dot").arg(render_file).arg("-Tsvg").output()
+        .with_context(|| "Running dot")?;
+
+    eprintln!("{}", std::str::from_utf8(&dot_output.stderr).unwrap());
+
+    let render_file = ll_path.with_extension("svg");
+    std::fs::write(render_file, dot_output.stdout)
+        .with_context(|| "Writing svg")?;
+
+    // TODO remove exit
+    std::process::exit(0);
 
     println!("----Optimize---");
     let ir_opt_file = ll_path.with_extension("ir_opt");

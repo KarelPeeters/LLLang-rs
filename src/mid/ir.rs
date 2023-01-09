@@ -172,7 +172,6 @@ impl Program {
                 match value {
                     Scoped::Param(param) => self.get_param(param).ty,
                     Scoped::Slot(_) => self.ty_ptr,
-
                     Scoped::Instr(instr) => self.get_instr(instr).ty(self),
                 }
             }
@@ -770,6 +769,10 @@ impl Value {
 
     pub fn is_const_zero(self) -> bool {
         self.as_const().map_or(false, |cst| cst.is_zero())
+    }
+
+    pub fn is_expr(self) -> bool {
+        self.as_expr().is_some()
     }
 }
 
