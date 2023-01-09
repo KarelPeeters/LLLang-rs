@@ -63,8 +63,11 @@ pub enum VInstruction {
     /// target and left must be the same register, this is handled with a register allocation constraint
     Binary(Size, &'static str, VReg, VReg, VopRCM),
 
+    /// result_high, result_low, left, right
+    Mul(Size, VReg, VReg, VReg, VopRM),
     /// signed, high, low, div, quot, rem
     DivMod(Size, Signed, VReg, VReg, VopRM, VReg, VReg),
+
     /// signed, size after, size before, after, before
     Extend(Signed, Size, Size, VReg, VReg),
 
@@ -433,6 +436,12 @@ impl VInstruction {
                 operands.push_use(left);
                 operands.push_use(right);
             }
+            VInstruction::Mul(_size, result_high, result_low, left, right) => {
+                operands.push(Operand::reg_fixed_use(left, PREG_A));
+                operands.push_use(right);
+                operands.push(Operand::reg_fixed_def(result_high, PREG_D));
+                operands.push(Operand::reg_fixed_def(result_low, PREG_A));
+            }
             VInstruction::DivMod(_size, _signed, high, low, div, quot, rem) => {
                 operands.push(Operand::reg_fixed_use(high, PREG_D));
                 operands.push(Operand::reg_fixed_use(low, PREG_A));
@@ -529,10 +538,20 @@ impl VInstruction {
                 assert_eq!(ctx.map_reg(dest), ctx.map_reg(left));
                 format!("{} {}, {}", instr, left.to_asm(ctx, size), right.to_asm(ctx, size))
             }
-            VInstruction::DivMod(size, signed, high, low, div, quot, rem) => {
-                // TODO implement this, but the regs are annoying
-                assert!(size != Size::S8, "div for size 8 not implemented yet");
+            VInstruction::Mul(size, result_high, result_low, left, right) => {
+                assert!(size != Size::S8);
+                assert!(ctx.map_reg(result_high).is_preg(PREG_D));
+                assert!(ctx.map_reg(result_low).is_preg(PREG_A));
+                assert!(ctx.map_reg(left).is_preg(PREG_A));
 
+                if let VopRM::Reg(_) = right {
+                    format!("mul {}", right.to_asm(ctx, size))
+                } else {
+                    format!("mul {} {}", size.keyword(), right.to_asm(ctx, size))
+                }
+            }
+            VInstruction::DivMod(size, signed, high, low, div, quot, rem) => {
+                assert!(size != Size::S8);
                 assert!(ctx.map_reg(high).is_preg(PREG_D));
                 assert!(ctx.map_reg(low).is_preg(PREG_A));
                 assert!(ctx.map_reg(quot).is_preg(PREG_A));

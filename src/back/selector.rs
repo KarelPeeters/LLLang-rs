@@ -174,6 +174,21 @@ impl Selector<'_> {
         VTarget { block, args }
     }
 
+    fn append_mul(&mut self, left: Value, right: Value) -> VReg {
+        let size = self.size_of_value(left);
+        // TODO handle this case, the registers are different and annoying
+        assert!(size != Size::S8, "Mul for byte not implemented yet");
+
+        let result_high = self.vregs.new_vreg();
+        let result_low = self.vregs.new_vreg();
+        let left = self.append_value_to_reg(left);
+        let right = self.append_value_to_rm(right);
+
+        self.push(VInstruction::Mul(size, result_high, result_low, left, right));
+
+        result_low
+    }
+
     fn append_div_mod(&mut self, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
         let size = self.size_of_value(left);
 
@@ -197,7 +212,7 @@ impl Selector<'_> {
         let instr = match kind {
             ArithmeticOp::Add => "add",
             ArithmeticOp::Sub => "sub",
-            ArithmeticOp::Mul => "mul",
+            ArithmeticOp::Mul => return self.append_mul(left, right),
             ArithmeticOp::And => "and",
             ArithmeticOp::Or => "or",
             ArithmeticOp::Xor => "xor",
