@@ -7,7 +7,7 @@ use itertools::Itertools;
 
 use crate::mid::analyse::usage::{try_for_each_expr_tree_operand, try_for_each_usage_in_expr};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, Expression, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Value};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
 
@@ -66,9 +66,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         }
 
         // render expressions that aren't used in any function
-        for &expr in &self.other_expressions {
-            self.render_expr(f, expr)?;
-        }
+        self.render_expressions(f, "global", &self.other_expressions)?;
 
         writeln!(f)?;
         writeln!(f, "}}")?;
@@ -90,8 +88,8 @@ impl<'a, W: Write> Renderer<'a, W> {
         })?;
 
         // render expressions used in this function
-        for &expr in self.func_expressions.get(&func).unwrap_or(&IndexSet::new()) {
-            self.render_expr(f, expr)?;
+        if let Some(expressions) = self.func_expressions.get(&func) {
+            self.render_expressions(f, &format!("func_{}", func.index()), expressions)?;
         }
 
         writeln!(f, "}}")?;
@@ -102,8 +100,8 @@ impl<'a, W: Write> Renderer<'a, W> {
         let prog = self.prog;
         let block_info = prog.get_block(block);
 
-        let mut rows = String::new();
-        write!(&mut rows, "<tr><td align=\"center\" colspan=\"3\">block_{}</td></tr>", block.index()).unwrap();
+        let rows = &mut String::new();
+        write!(rows, "<tr><td align=\"center\" colspan=\"3\">block_{}</td></tr>", block.index()).unwrap();
 
         // TODO block params as first table row
 
@@ -112,21 +110,18 @@ impl<'a, W: Write> Renderer<'a, W> {
             let ty_str = if ty == prog.ty_void() { "".to_owned() } else { prog.format_type(ty).to_string() };
 
             write!(
-                &mut rows,
+                rows,
                 "<tr><td port=\"instr_{}\" align=\"left\">instr_{}</td><td align=\"left\">{}</td><td align=\"left\">{}</td></tr>",
                 instr.index(), instr.index(), quote_html(&ty_str), quote_html(&self.instr_to_str(instr))
             ).unwrap();
         }
 
-        // TODO term kind and value
-        // TODO targets with edge colors: blue jump, green true branch, red false branch
-        // TODO target args as last table row
+        write!(rows, "{}", self.terminator_to_table_str(&block_info.terminator)).unwrap();
 
-        write!(&mut rows, "<tr><td>term</td></tr>").unwrap();
         let label = format!("<<table border=\"0\">{}</table>>", rows);
-
         writeln!(f, "block_{} [label={}, shape=\"box\"];", block.index(), label)?;
 
+        // TODO targets with edge colors: blue jump, green true branch, red false branch
         block_info.terminator.try_for_each_target(|target| {
             writeln!(f, "block_{} -> block_{};", block.index(), target.block.index())
         })?;
@@ -134,23 +129,63 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
-    fn render_expr(&self, f: &mut W, expr: Expression) -> Result {
+    fn terminator_to_table_str(&self, terminator: &Terminator) -> String {
+        let mut result = String::new();
+        let f = &mut result;
+        match *terminator {
+            Terminator::Jump { ref target } => {
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">jump</td><td align=\"left\">{}</td></tr>", self.target_to_str(target)).unwrap();
+            }
+            Terminator::Branch { cond, ref true_target, ref false_target } => {
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">branch</td><td align=\"left\">{}</td></tr>", self.value_to_str(cond)).unwrap();
+                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(true_target)).unwrap();
+                write!(f, "<tr><td></td><td></td><td align=\"left\">{}</td></tr>", self.target_to_str(false_target)).unwrap();
+            }
+            Terminator::Return { value } => {
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">return</td><td align=\"left\">{}</td></tr>", self.value_to_str(value)).unwrap();
+            }
+            Terminator::Unreachable => {
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">unreachable</td></tr>").unwrap();
+            }
+            Terminator::LoopForever => {
+                write!(f, "<tr><td colspan=\"2\" align=\"left\">loopforever</td></tr>").unwrap();
+            }
+        }
+        result
+    }
+
+    fn target_to_str(&self, target: &Target) -> String {
+        let args = target.args.iter().map(|&arg| self.value_to_str(arg)).join(", ");
+        format!("block_{} ({})", target.block.index(), args)
+    }
+
+    fn render_expressions(&self, f: &mut W, prefix: &str, expressions: &IndexSet<Expression>) -> Result {
         let prog = self.prog;
-        let expr_info = prog.get_expr(expr);
 
-        // let symbol = match expr_info {
-        //     ExpressionInfo::Arithmetic { .. } => "arithmetic",
-        //     ExpressionInfo::Comparison { .. } => "comparison",
-        //     ExpressionInfo::TupleFieldPtr { .. } => "tuplefieldptr",
-        //     ExpressionInfo::PointerOffSet { .. } => "pointeroffset",
-        //     ExpressionInfo::Cast { .. } => "cast",
-        // };
+        let mut rows = String::new();
+        let r = &mut rows;
 
-        writeln!(f, "expr_{} [label=expr_{}];", expr.index(), expr.index())?;
+        for &expr in expressions {
+            let expr_info = prog.get_expr(expr);
+            let expr_info_str = self.expr_info_to_str(expr_info);
 
-        try_for_each_usage_in_expr(expr_info, |value, _| {
-            Self::write_edge(f, Some(format!("expr_{}", expr.index())), self.value_to_node(value))
-        })?;
+            let ty = prog.type_of_value(expr.into());
+            let ty_str = prog.format_type(ty).to_string();
+
+            let index = expr.index();
+
+            write!(
+                r,
+                "<tr>\
+                <td align=\"left\" port=\"expr_{index}_def\">expr_{index}</td>\
+                <td align=\"left\">{}</td>\
+                <td align=\"left\" port=\"expr_{index}_use\">{}</td>\
+                </tr>",
+                quote_html(&ty_str), quote_html(&expr_info_str)
+            ).unwrap();
+        }
+
+        writeln!(f, "{}_expressions [label=<<table border=\"0\">{}</table>> shape=\"box\" style=\"rounded\"];", prefix, &rows).unwrap();
 
         Ok(())
     }
@@ -168,6 +203,23 @@ impl<'a, W: Write> Renderer<'a, W> {
             }
             InstructionInfo::BlackBox { value } =>
                 format!("blackbox {}", self.value_to_str(value)),
+        }
+    }
+
+    fn expr_info_to_str(&self, expr_info: &ExpressionInfo) -> String {
+        let prog = self.prog;
+
+        match *expr_info {
+            ExpressionInfo::Arithmetic { kind, left, right } =>
+                format!("{:?} {}, {}", kind, self.value_to_str(left), self.value_to_str(right)),
+            ExpressionInfo::Comparison { kind, left, right } =>
+                format!("{:?} {}, {}", kind, self.value_to_str(left), self.value_to_str(right)),
+            ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } =>
+                format!("TupleFieldPtr {}, {}, {}", self.value_to_str(base), index, prog.format_type(tuple_ty)),
+            ExpressionInfo::PointerOffSet { ty, base, index } =>
+                format!("PointerOffSet {}, {}, {}", self.value_to_str(base), self.value_to_str(index), prog.format_type(ty)),
+            ExpressionInfo::Cast { ty, kind, value } =>
+                format!("Cast {} as {}, {:?}", self.value_to_str(value), self.prog.format_type(ty), kind),
         }
     }
 
