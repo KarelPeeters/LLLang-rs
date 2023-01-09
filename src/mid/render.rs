@@ -260,17 +260,21 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         for &expr in expressions {
             let expr_info = prog.get_expr(expr);
-            let expr_info_str = self.expr_info_to_str(expr_info);
+
+            let parts = self.expr_info_to_parts(expr_info)
+                .iter()
+                .map(|p| format!(r#"<td align="left">{}</td>"#, quote_html(p)))
+                .join("");
+
+            let index = expr.index();
 
             let ty = prog.type_of_value(expr.into());
             let ty_str = prog.format_type(ty).to_string();
 
-            let index = expr.index();
-
             write!(
                 r,
-                r#"<tr><td align="left">expr_{index}</td><td align="left">{}</td><td align="left">{}</td></tr>"#,
-                quote_html(&ty_str), quote_html(&expr_info_str)
+                r#"<tr><td align="left">expr_{index}</td><td align="left">{}</td>{}</tr>"#,
+                quote_html(&ty_str), parts,
             )?;
         }
 
@@ -295,20 +299,23 @@ impl<'a, W: Write> Renderer<'a, W> {
         }
     }
 
-    fn expr_info_to_str(&self, expr_info: &ExpressionInfo) -> String {
+    fn expr_info_to_parts(&self, expr_info: &ExpressionInfo) -> Vec<String> {
         let prog = self.prog;
+
+        let v = |value| self.value_to_str(value);
+        let t = |ty| prog.format_type(ty).to_string();
 
         match *expr_info {
             ExpressionInfo::Arithmetic { kind, left, right } =>
-                format!("{:?} {}, {}", kind, self.value_to_str(left), self.value_to_str(right)),
+                vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],
             ExpressionInfo::Comparison { kind, left, right } =>
-                format!("{:?} {}, {}", kind, self.value_to_str(left), self.value_to_str(right)),
+                vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],
             ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } =>
-                format!("TupleFieldPtr {}, {}, {}", self.value_to_str(base), index, prog.format_type(tuple_ty)),
+                vec![format!("TupleFieldPtr"), v(base), index.to_string(), t(tuple_ty)],
             ExpressionInfo::PointerOffSet { ty, base, index } =>
-                format!("PointerOffSet {}, {}, {}", self.value_to_str(base), self.value_to_str(index), prog.format_type(ty)),
-            ExpressionInfo::Cast { ty, kind, value } =>
-                format!("Cast {} as {}, {:?}", self.value_to_str(value), self.prog.format_type(ty), kind),
+                vec![format!("PointerOffSet"), v(base), v(index), t(ty)],
+            ExpressionInfo::Cast { ty: _, kind, value } =>
+                vec![format!("Cast {:?}", kind), v(value)],
         }
     }
 
@@ -342,4 +349,8 @@ fn invis_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
 
 fn quote_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn shorten_signed(s: impl AsRef<str>) -> String {
+    s.as_ref().replace("Unsigned", "U").replace("Signed", "S")
 }
