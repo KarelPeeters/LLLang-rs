@@ -10,7 +10,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, StackLayout, VInstruction, VRegPos};
+use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, StackLayout, VInstruction, VRegPos, VSymbol};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -35,7 +35,7 @@ pub fn lower_new(prog: &mut Program) -> String {
 
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("_main:");
-    output.appendln(format_args!("    call {}", symbols.map_global(main_func)));
+    output.appendln(format_args!("    call {}", VSymbol::Global(main_func.into())));
     output.appendln(format_args!("    push eax"));
     output.appendln(format_args!("    call _ExitProcess@4"));
     output.appendln("");
@@ -99,11 +99,11 @@ pub fn lower_new(prog: &mut Program) -> String {
             let inst_range = InstRange::forward(Inst::new(range_start), Inst::new(range_end));
 
             let mut succs = vec![];
-            terminator.for_each_successor(|succ| succs.push(symbols.map_block(succ).1));
+            terminator.for_each_successor(|succ| succs.push(symbols.map_block(succ)));
             let preds = use_info[block].iter().filter_map(|usage| {
                 match usage {
                     BlockUsage::FuncEntry(_) => None,
-                    BlockUsage::Target { pos, kind: _ } => Some(symbols.map_block(pos.block).1)
+                    BlockUsage::Target { pos, kind: _ } => Some(symbols.map_block(pos.block))
                 }
             }).collect();
 
@@ -115,7 +115,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         let inst_infos = v_instructions.iter().map(|inst| inst.to_inst_info()).collect();
 
         let func_wrapper = FuncWrapper {
-            entry_block: symbols.map_block(func_info.entry).1,
+            entry_block: symbols.map_block(func_info.entry),
             blocks,
             v_instructions,
             inst_infos,
@@ -146,13 +146,13 @@ pub fn lower_new(prog: &mut Program) -> String {
         };
 
         // actually generate code
-        output.appendln(format_args!("{}:", symbols.map_global(func)));
+        output.appendln(format_args!("{}:", VSymbol::Global(func.into())));
 
         for &block in &blocks_ordered {
-            let block_mapped = symbols.map_block(block);
-            output.appendln(format_args!("  {}:", block_mapped.0));
+            let block_r2 = symbols.map_block(block);
+            output.appendln(format_args!("  {}:", VSymbol::Block(block)));
 
-            for inst in result.block_insts_and_edits(&func_wrapper, block_mapped.1) {
+            for inst in result.block_insts_and_edits(&func_wrapper, block_r2) {
                 match inst {
                     InstOrEdit::Inst(inst) => {
                         let v_inst = &func_wrapper.v_instructions[inst.index()];

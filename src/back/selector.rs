@@ -5,49 +5,23 @@ use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
 
 use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
-use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
 
 #[derive(Default)]
 pub struct Symbols {
-    globals: HashMap<Global, usize>,
-    next_func: usize,
-    next_ext: usize,
-    next_data: usize,
-
-    blocks: HashMap<Block, (usize, usize)>,
+    blocks: HashMap<Block, r2::Block>,
     next_label: usize,
 }
 
 impl Symbols {
-    pub fn map_global(&mut self, value: impl Into<Global>) -> VSymbol {
-        let value = value.into();
-
-        let (build, next): (fn(usize) -> VSymbol, &mut usize) = match value {
-            Global::Func(_) => (VSymbol::Func, &mut self.next_func),
-            Global::Extern(_) => (VSymbol::Ext, &mut self.next_ext),
-            Global::Data(_) => (VSymbol::Data, &mut self.next_data),
-        };
-
-        let id = *self.globals.entry(value).or_insert_with(|| {
-            let curr = *next;
-            *next += 1;
-            curr
-        });
-
-        build(id)
-    }
-
     pub fn define_block(&mut self, block: Block, func_index: usize) {
-        let index = self.blocks.len();
-        println!("  Defining {:?} -> {:?}", block, index);
-        let prev = self.blocks.insert(block, (index, func_index));
+        println!("  Defining {:?} -> {:?}", block, func_index);
+        let prev = self.blocks.insert(block, r2::Block(func_index as u32));
         assert!(prev.is_none());
     }
 
-    pub fn map_block(&mut self, block: Block) -> (VSymbol, r2::Block) {
-        let (symbol_index, func_index) = *self.blocks.get(&block).unwrap();
-        let result = (VSymbol::Block(symbol_index), r2::Block(func_index as u32));
-        result
+    pub fn map_block(&mut self, block: Block) -> r2::Block {
+        *self.blocks.get(&block).unwrap()
     }
 
     #[allow(dead_code)]
@@ -194,12 +168,7 @@ impl Selector<'_> {
         let &Target { block, ref args } = target;
         let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
 
-        let block_mapped = self.symbols.map_block(block).0;
-
-        VTarget {
-            block: block_mapped,
-            args,
-        }
+        VTarget { block, args }
     }
 
     fn append_div_mod(&mut self, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
@@ -293,14 +262,13 @@ impl Selector<'_> {
                 Immediate::Const(cst) => VConst::Const(cst.value).into(),
             },
             Value::Global(value) => {
-                let symbol = self.symbols.map_global(value);
-                VConst::Symbol(symbol).into()
+                VConst::Symbol(VSymbol::Global(value)).into()
             }
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => {
                     let index = self.map_slot(slot);
                     VopRCM::Slot(index)
-                },
+                }
                 Scoped::Param(param) => self.vregs.map_param(param).into(),
                 Scoped::Instr(instr) => self.vregs.map_instr(instr).into(),
             },

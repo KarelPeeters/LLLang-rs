@@ -6,8 +6,9 @@ use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
 
-use crate::mid::ir::Signed;
+use crate::mid::ir::{Block, Global, Signed};
 use crate::mid::util::bit_int::BitInt;
+use crate::util::arena::IndexType;
 
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
@@ -141,10 +142,8 @@ impl VRegPos {
 
 #[derive(Debug, Copy, Clone)]
 pub enum VSymbol {
-    Func(usize),
-    Ext(usize),
-    Data(usize),
-    Block(usize),
+    Global(Global),
+    Block(Block),
     Label(usize),
 }
 
@@ -163,7 +162,7 @@ pub struct VMem {
 
 #[derive(Debug)]
 pub struct VTarget {
-    pub block: VSymbol,
+    pub block: Block,
     pub args: Vec<VReg>,
 }
 
@@ -495,15 +494,15 @@ impl VInstruction {
                 format!("{} {}", instr, PREG_NAMES_BYTE[preg.index()])
             }
             VInstruction::Jump(ref target) =>
-                format!("jmp {}", target.block),
+                format!("jmp {}", VSymbol::Block(target.block)),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
                 let cond = cond.to_asm(ctx);
 
                 let mut s = String::new();
                 let f = &mut s;
                 writeln!(f, "test {}, {}", cond, cond).unwrap();
-                writeln!(f, "jnz {}", true_target.block).unwrap();
-                writeln!(f, "jmp {}", false_target.block).unwrap();
+                writeln!(f, "jnz {}", VSymbol::Block(true_target.block)).unwrap();
+                writeln!(f, "jmp {}", VSymbol::Block(false_target.block)).unwrap();
 
                 s
             }
@@ -639,12 +638,14 @@ impl InstInfo {
 
 impl Display for VSymbol {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VSymbol::Func(id) => write!(f, "func_{}", id),
-            VSymbol::Ext(id) => write!(f, "ext_{}", id),
-            VSymbol::Data(id) => write!(f, "data_{}", id),
-            VSymbol::Block(id) => write!(f, "block_{}", id),
-            VSymbol::Label(id) => write!(f, "label_{}", id),
+        match *self {
+            VSymbol::Global(global) => match global {
+                Global::Func(func) => write!(f, "func_{}", func.index()),
+                Global::Extern(ext) => write!(f, "ext_{}", ext.index()),
+                Global::Data(data) => write!(f, "data_{}", data.index()),
+            }
+            VSymbol::Block(block) => write!(f, "block_{}", block.index()),
+            VSymbol::Label(index) => write!(f, "label_{}", index),
         }
     }
 }
