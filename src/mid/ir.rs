@@ -528,7 +528,7 @@ impl InstructionInfo {
         //TODO this implementation is prone to infinite recursion!
         match *self {
             InstructionInfo::Load { ty, .. } => ty,
-            InstructionInfo::Store { .. } => prog.ty_ptr(),
+            InstructionInfo::Store { .. } => prog.ty_void(),
             InstructionInfo::Call { target, .. } => {
                 prog.get_type(prog.type_of_value(target)).unwrap_func()
                     .expect("call target should have a function type")
