@@ -206,7 +206,7 @@ impl Visitor for DceVisitor<'_> {
             Terminator::LoopForever => {}
         }
 
-        terminator.for_each_target(|target| {
+        terminator.for_each_target(|target, _| {
             state.add_block(target.block);
         });
     }
@@ -382,7 +382,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
     });
 
     // remove dead target args
-    terminator.for_each_target_mut(|target| {
+    terminator.for_each_target_mut(|target, _| {
         let &mut Target { block: target_block, ref mut args } = target;
         if let Some(target_mask) = alive.block_param_mask(target_block) {
             removed.target_args += retain_mask(args, target_mask);

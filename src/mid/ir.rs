@@ -4,6 +4,7 @@ use std::hash::Hash;
 
 use derive_more::{Constructor, From};
 use itertools::Itertools;
+use crate::mid::analyse::usage::TargetKind;
 
 use crate::mid::util::bit_int::BitInt;
 use crate::util::{Never, NeverExt};
@@ -172,7 +173,6 @@ impl Program {
                 match value {
                     Scoped::Param(param) => self.get_param(param).ty,
                     Scoped::Slot(_) => self.ty_ptr,
-
                     Scoped::Instr(instr) => self.get_instr(instr).ty(self),
                 }
             }
@@ -587,21 +587,11 @@ impl Target {
 }
 
 // TODO all of these "(try)?_for_each_(.*)" function are getting annoying, is there a better way to do this?
+// TODO more this stuff to usage? we're using type from there which is not great...
+// TODO replace all of this with internal iterators
 impl Terminator {
     pub fn replace_blocks(&mut self, mut f: impl FnMut(Block) -> Block) {
-        self.for_each_target_mut(|target| target.replace_blocks(&mut f));
-    }
-
-    pub fn try_for_each_non_target_value<E>(&self, mut f: impl FnMut(Value) -> Result<(), E>) -> Result<(), E> {
-        match self {
-            Terminator::Jump { target: _ } => {}
-            &Terminator::Branch { cond, true_target: _, false_target: _ } => f(cond)?,
-            &Terminator::Return { value } => f(value)?,
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-
-        Ok(())
+        self.for_each_target_mut(|target, _| target.replace_blocks(&mut f));
     }
 
     pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
@@ -618,18 +608,12 @@ impl Terminator {
         }
     }
 
-    pub fn target_count(&self) -> usize {
-        let mut count = 0;
-        self.for_each_target(|_| count += 1);
-        count
-    }
-
-    pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
+    pub fn for_each_target_mut<F: FnMut(&mut Target, TargetKind)>(&mut self, mut f: F) {
         match self {
-            Terminator::Jump { target } => f(target),
+            Terminator::Jump { target } => f(target, TargetKind::Jump),
             Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target);
-                f(false_target);
+                f(true_target, TargetKind::BranchTrue);
+                f(false_target, TargetKind::BranchFalse);
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
@@ -637,12 +621,12 @@ impl Terminator {
         }
     }
 
-    pub fn for_each_target<F: FnMut(&Target)>(&self, mut f: F) {
+    pub fn for_each_target<F: FnMut(&Target, TargetKind)>(&self, mut f: F) {
         match self {
-            Terminator::Jump { target } => f(target),
+            Terminator::Jump { target } => f(target, TargetKind::Jump),
             Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target);
-                f(false_target);
+                f(true_target, TargetKind::BranchTrue);
+                f(false_target, TargetKind::BranchFalse);
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
@@ -650,12 +634,12 @@ impl Terminator {
         }
     }
 
-    pub fn try_for_each_target<E, F: FnMut(&Target) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
+    pub fn try_for_each_target<E, F: FnMut(&Target, TargetKind) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
         match self {
-            Terminator::Jump { target } => f(target)?,
+            Terminator::Jump { target } => f(target, TargetKind::Jump)?,
             Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target)?;
-                f(false_target)?;
+                f(true_target, TargetKind::BranchTrue)?;
+                f(false_target, TargetKind::BranchFalse)?;
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
@@ -665,7 +649,7 @@ impl Terminator {
     }
 
     pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
-        self.for_each_target(|target| f(target.block))
+        self.for_each_target(|target, _| f(target.block))
     }
 }
 
@@ -770,6 +754,10 @@ impl Value {
 
     pub fn is_const_zero(self) -> bool {
         self.as_const().map_or(false, |cst| cst.is_zero())
+    }
+
+    pub fn is_expr(self) -> bool {
+        self.as_expr().is_some()
     }
 }
 

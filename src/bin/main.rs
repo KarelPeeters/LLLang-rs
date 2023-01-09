@@ -17,6 +17,7 @@ use lllang::{back, front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
+use lllang::mid::render::render;
 use lllang::mid::util::verify::{verify, VerifyError};
 
 #[derive(Debug, From)]
@@ -43,6 +44,16 @@ impl<T> IoError for Result<T, std::io::Error> {
     fn with_context<S: Into<String>>(self, f: impl FnOnce() -> S) -> CompileResult<T> {
         self.map_err(|e| CompileError::IO(e, f().into()))
     }
+}
+
+fn file_name(path: impl AsRef<Path>) -> CompileResult<String> {
+    let without_ext = path.as_ref().with_extension("");
+    let name = match without_ext.file_name() {
+        None => return Err(CompileError::InvalidFileName(without_ext.into_os_string())),
+        Some(name) => name,
+    };
+    let name = name.to_str().ok_or_else(|| CompileError::InvalidFileName(name.to_owned()))?;
+    Ok(name.to_string())
 }
 
 fn parse_and_add_module_if_ll(
@@ -189,6 +200,9 @@ fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after
 }
 
 fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> CompileResult<PathBuf> {
+    let ll_path = ll_path.as_ref();
+    let name = file_name(ll_path)?;
+
     println!("----Parse------");
     let ast_program = parse_all(ll_path, include_std)?;
     let ast_file = ll_path.with_extension("ast");
@@ -219,14 +233,17 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     write_ir(&ir_program)?;
     verify(&ir_program)?;
 
+    render_ir_as_svg(&ir_program, &ir_file)?;
+
     println!("----Optimize---");
-    let ir_opt_file = ll_path.with_extension("ir_opt");
-    let ir_opt_before_file = ll_path.with_extension("ir_opt_before");
-    let ir_opt_after_file = ll_path.with_extension("ir_opt_after");
+    let ir_opt_file = ll_path.with_file_name(format!("{name}_opt.ir"));
+    let ir_opt_before_file = ll_path.with_extension(format!("{name}_opt_before.ir"));
+    let ir_opt_after_file = ll_path.with_extension(format!("{name}_opt_after.ir"));
     if optimize {
         run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
             .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
+        render_ir_as_svg(&ir_program, &ir_opt_file)?;
     } else {
         //clear file
         File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
@@ -240,6 +257,25 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
         .write_all(asm.as_bytes()).with_context(|| "Writing to ASM file")?;
 
     Ok(asm_file)
+}
+
+fn render_ir_as_svg(prog: &mid::ir::Program, path: impl AsRef<Path>) -> CompileResult<()> {
+    let path = path.as_ref();
+
+    let render_file = path.with_extension("gv");
+    let mut render_writer = File::create(&render_file)
+        .with_context(|| format!("Creating render file {:?}", render_file))?;
+    render(prog, &mut render_writer)
+        .with_context(|| "Writing to render file")?;
+
+    let dot_output = Command::new("dot").arg(render_file).arg("-Tsvg").output()
+        .with_context(|| "Running dot")?;
+    eprintln!("{}", std::str::from_utf8(&dot_output.stderr).unwrap());
+    let render_file = path.with_extension("svg");
+    std::fs::write(render_file, dot_output.stdout)
+        .with_context(|| "Writing svg")?;
+
+    Ok(())
 }
 
 fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {

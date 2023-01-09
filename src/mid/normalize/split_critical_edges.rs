@@ -17,10 +17,10 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
             let terminator = prog.get_block(block).terminator.clone();
             let mut replacement_targets = VecDeque::new();
 
-            terminator.for_each_target(|target| {
+            terminator.for_each_target(|target, _| {
                 // check if the target block is critical
                 let mut target_count = 0;
-                terminator.for_each_target(|other| target_count += (other.block == target.block) as usize);
+                terminator.for_each_target(|other, _| target_count += (other.block == target.block) as usize);
                 let pred_count = max(
                     dom_info.iter_predecessors(target.block).count(),
                     target_count
@@ -45,7 +45,7 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
                 replacement_targets.push_back(replacement);
             });
 
-            prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
+            prog.get_block_mut(block).terminator.for_each_target_mut(|target, _| {
                 if let Some(replacement) = replacement_targets.pop_front().unwrap() {
                     *target = replacement;
                     split_edges += 1;

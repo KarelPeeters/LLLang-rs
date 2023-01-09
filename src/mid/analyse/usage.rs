@@ -217,14 +217,20 @@ pub fn try_for_each_usage_in_term<E>(
     Ok(())
 }
 
-/// Visit all non-expression values used as part of the expression tree starting from `expr`.
-pub fn try_for_each_expr_leaf_value<E, F: FnMut(Value, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
+/// Visit all values used as part of the expression tree starting from `expr`.
+/// `expr` itself is not visited.
+///
+/// The parameters of `f` are `(value, parent, operand)`, where `value` is used as `operand` in `parent`.
+pub fn try_for_each_expr_tree_operand<E, F: FnMut(Value, Expression, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
     // inner function to deal with getting an "&mut F" without a recursive type
-    fn inner_impl<E, F: FnMut(Value, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, f: &mut F) -> Result<(), E> {
+    fn inner_impl<E, F: FnMut(Value, Expression, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, f: &mut F) -> Result<(), E> {
         try_for_each_usage_in_expr(prog.get_expr(expr), |value, usage| {
             match value {
-                Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => f(value, usage),
-                Value::Expr(inner) => inner_impl(prog, inner, f),
+                Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => f(value, expr, usage),
+                Value::Expr(inner) => {
+                    f(value, expr, usage)?;
+                    inner_impl(prog, inner, f)
+                },
             }
         })
     }
