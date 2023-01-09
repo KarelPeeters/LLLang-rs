@@ -9,7 +9,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, StackLayout, VInstruction, VRegPos, VSymbol};
+use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, Size, StackLayout, VInstruction, VRegPos, VSymbol};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -177,7 +177,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                         let from = VRegPos::from(from);
 
                         output.comment(format_args!("    ; {:?}", edit));
-                        output.appendln(format_args!("    mov {}, {}", to.to_asm(), from.to_asm()));
+                        output.appendln(format_args!("    mov {}, {}", to.to_asm(Size::FULL), from.to_asm(Size::FULL)));
                     }
                 }
             }

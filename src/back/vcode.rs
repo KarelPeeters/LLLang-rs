@@ -10,6 +10,41 @@ use crate::mid::ir::{Block, Global, Signed};
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::IndexType;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Size {
+    S8,
+    S16,
+    S32,
+}
+
+impl Size {
+    pub const FULL: Size = Size::S32;
+
+    pub fn bits(self) -> u32 {
+        match self {
+            Size::S8 => 8,
+            Size::S16 => 16,
+            Size::S32 => 32,
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Size::S8 => 0,
+            Size::S16 => 1,
+            Size::S32 => 2,
+        }
+    }
+
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Size::S8 => "byte",
+            Size::S16 => "word",
+            Size::S32 => "dword",
+        }
+    }
+}
+
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
 pub enum VInstruction {
@@ -21,22 +56,22 @@ pub enum VInstruction {
     Clear(VReg),
 
     // read as "move into .. from .."
-    MovReg(VReg, VopRCM),
-    MovMem(VMem, VopRC),
+    MovReg(Size, VReg, VopRCM),
+    MovMem(Size, VMem, VopRC),
 
     /// args are "target = left (+) right"
     /// target and left must be the same register, this is handled with a register allocation constraint
-    Binary(&'static str, VReg, VReg, VopRCM),
+    Binary(Size, &'static str, VReg, VReg, VopRCM),
 
     /// signed, high, low, div, quot, rem
-    DivMod(Signed, VReg, VReg, VopRM, VReg, VReg),
+    DivMod(Size, Signed, VReg, VReg, VopRM, VReg, VReg),
 
     /// result, target, args
     Call(VReg, VopRCM, Vec<VReg>),
 
     // compare instructions
-    Cmp(VReg, VopRCM),
-    Test(VReg, VopRCM),
+    Cmp(Size, VReg, VopRCM),
+    Test(Size, VReg, VopRCM),
     // TODO allow mem operand here
     Setcc(&'static str, VReg, VReg),
 
@@ -96,13 +131,16 @@ pub enum VRegPos {
 }
 
 impl VConst {
-    pub fn to_asm(&self) -> String {
+    pub fn to_asm(&self, size: Size) -> String {
         match self {
-            VConst::Const(value) => min_by_key(
-                format!("{}", value.unsigned()),
-                format!("{}", value.signed()),
-                |s| s.len(),
-            ),
+            VConst::Const(value) => {
+                assert_eq!(value.bits(), size.bits(), "Tried to store {:?} in {:?}", value, size);
+                min_by_key(
+                    format!("{}", value.unsigned()),
+                    format!("{}", value.signed()),
+                    |s| s.len(),
+                )
+            },
             VConst::Symbol(symbol) => format!("{}", symbol),
         }
     }
@@ -131,9 +169,9 @@ impl VRegPos {
         option_match!(self, VRegPos::PReg(preg) => preg)
     }
 
-    pub fn to_asm(self) -> String {
+    pub fn to_asm(self, size: Size) -> String {
         match self {
-            VRegPos::PReg(preg) => preg_to_asm(preg).to_string(),
+            VRegPos::PReg(preg) => preg_to_asm(preg, size).to_string(),
             // TODO change this 4 when moving to x64
             VRegPos::Slot(index) => format!("[esp+{}]", 4 * index + 4),
         }
@@ -167,10 +205,10 @@ pub struct VTarget {
 }
 
 impl VPReg {
-    fn to_asm(self, ctx: &AsmContext) -> String {
+    fn to_asm(self, ctx: &AsmContext, size: Size) -> String {
         match self {
-            VPReg::V(vreg) => vreg.to_asm(ctx),
-            VPReg::P(preg) => preg_to_asm(preg).to_string(),
+            VPReg::V(vreg) => vreg.to_asm(ctx, size),
+            VPReg::P(preg) => preg_to_asm(preg, size).to_string(),
         }
     }
 }
@@ -207,7 +245,7 @@ impl From<VopRC> for VopRCM {
 
 pub trait VOperand {
     fn for_each_reg(&self, f: impl FnMut(RegOperand));
-    fn to_asm(&self, ctx: &AsmContext) -> String;
+    fn to_asm(&self, ctx: &AsmContext, size: Size) -> String;
     fn is_const_zero(&self) -> bool;
 }
 
@@ -219,10 +257,11 @@ impl VOperand for VMem {
         }
     }
 
-    fn to_asm(&self, ctx: &AsmContext) -> String {
+    fn to_asm(&self, ctx: &AsmContext, _: Size) -> String {
         let &VMem { reg, offset } = self;
 
-        let reg = reg.to_asm(ctx);
+        // pointer are full-sized, not the result size
+        let reg = reg.to_asm(ctx, Size::FULL);
         if offset == 0 {
             format!("[{}]", reg)
         } else {
@@ -246,17 +285,17 @@ impl VOperand for VopRCM {
         }
     }
 
-    fn to_asm(&self, ctx: &AsmContext) -> String {
+    fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
         match *self {
             // TODO this only works because all Vops accept a register, which is kind of brittle
-            VopRCM::Undef => preg_to_asm(PREG_A).to_string(),
+            VopRCM::Undef => preg_to_asm(PREG_A, size).to_string(),
             VopRCM::Slot(index) => {
                 let offset = ctx.stack_layout.slot_offset(index);
                 format!("[esp+{}]", offset)
             }
-            VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(),
-            VopRCM::Const(cst) => cst.to_asm(),
-            VopRCM::Mem(mem) => mem.to_asm(ctx),
+            VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(size),
+            VopRCM::Const(cst) => cst.to_asm(size),
+            VopRCM::Mem(mem) => mem.to_asm(ctx, size),
         }
     }
 
@@ -285,15 +324,22 @@ pub const GENERAL_PREGS: &[PReg] = &[PREG_A, PREG_B, PREG_C, PREG_D, PREG_SI, PR
 pub const PREG_BASE_PTR: PReg = PReg::new(6, RegClass::Int);
 pub const PREG_STACK_PTR: PReg = PReg::new(7, RegClass::Int);
 
-const PREG_NAMES: &[&str] = &["eax", "ebx", "ecx", "edx", "esi", "edi"];
-const PREG_NAMES_BYTE: &[&str] = &["al", "bl", "cl", "dl", "sil", "dil"];
+const PREG_NAMES: &[[&str; 3]] = &[
+    ["eax", "ax", "al"],
+    ["ebx", "bx", "bl"],
+    ["ecx", "cx", "cl"],
+    ["edx", "dx", "dl"],
+    ["esi", "si", "sil"],
+    ["edi", "di", "dil"],
+];
 
 // TODO use some proper ABI settings, maybe depending on the platform?
 pub const ABI_PARAM_REGS: &[PReg] = &[PREG_A, PREG_B, PREG_C, PREG_D, PREG_SI, PREG_DI];
 pub const ABI_RETURN_REG: PReg = PREG_A;
 
-pub fn preg_to_asm(preg: PReg) -> &'static str {
-    PREG_NAMES[preg.index()]
+pub fn preg_to_asm(preg: PReg, size: Size) -> &'static str {
+    let slice = PREG_NAMES[preg.index()];
+    slice[slice.len() - 1 - size.index()]
 }
 
 macro_rules! impl_vop_for {
@@ -302,8 +348,8 @@ macro_rules! impl_vop_for {
             fn for_each_reg(&self, f: impl FnMut(RegOperand)) {
                 VopRCM::from(*self).for_each_reg(f)
             }
-            fn to_asm(&self, ctx: &AsmContext) -> String {
-                VopRCM::from(*self).to_asm(ctx)
+            fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
+                VopRCM::from(*self).to_asm(ctx, size)
             }
             fn is_const_zero(&self) -> bool {
                 VopRCM::from(*self).is_const_zero()
@@ -368,7 +414,7 @@ impl VInstruction {
             VInstruction::Clear(dest) => {
                 operands.push_def(dest);
             }
-            VInstruction::MovReg(dest, source) => {
+            VInstruction::MovReg(_size, dest, source) => {
                 if let VopRCM::Reg(source) = source {
                     return InstInfo::mov(Operand::reg_def(dest), Operand::reg_use(source));
                 }
@@ -376,16 +422,16 @@ impl VInstruction {
                 operands.push_use(source);
                 operands.push_def(dest);
             }
-            VInstruction::MovMem(dest, source) => {
+            VInstruction::MovMem(_size, dest, source) => {
                 operands.push_use(source);
                 operands.push_def(dest);
             }
-            VInstruction::Binary(_instr, dest, left, right) => {
+            VInstruction::Binary(_size, _instr, dest, left, right) => {
                 operands.push(Operand::reg_reuse_def(dest, 1));
                 operands.push_use(left);
                 operands.push_use(right);
             }
-            VInstruction::DivMod(_signed, high, low, div, quot, rem) => {
+            VInstruction::DivMod(_size, _signed, high, low, div, quot, rem) => {
                 operands.push(Operand::reg_fixed_use(high, PREG_D));
                 operands.push(Operand::reg_fixed_use(low, PREG_A));
                 operands.push_use(div);
@@ -400,7 +446,7 @@ impl VInstruction {
                 operands.push_use(target);
                 operands.push(Operand::reg_fixed_def(result, ABI_RETURN_REG));
             }
-            VInstruction::Cmp(left, right) | VInstruction::Test(left, right) => {
+            VInstruction::Cmp(_size, left, right) | VInstruction::Test(_size, left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
             }
@@ -446,30 +492,41 @@ impl VInstruction {
     pub fn to_asm(&self, ctx: &AsmContext) -> String {
         match *self {
             VInstruction::DefAnyReg(dest) =>
-                format!("; def any {}", dest.to_asm(ctx)),
+                format!("; def any {}", dest.to_asm(ctx, Size::FULL)),
             VInstruction::DefFixedReg(dest, preg) => {
                 assert!(ctx.map_reg(dest).is_preg(preg));
-                format!("; def fixed {}", dest.to_asm(ctx))
+                format!("; def fixed {}", dest.to_asm(ctx, Size::FULL))
             }
             VInstruction::Clear(dest) => {
-                let dest = dest.to_asm(ctx);
+                let dest = dest.to_asm(ctx, Size::FULL);
                 format!("xor {}, {}", dest, dest)
             }
-            VInstruction::MovReg(dest, source) => {
-                let dest = dest.to_asm(ctx);
+            VInstruction::MovReg(size, dest, source) => {
+                let dest = dest.to_asm(ctx, size);
                 if source.is_const_zero() {
                     format!("xor {}, {}", dest, dest)
                 } else {
-                    format!("mov {}, {}", dest, source.to_asm(ctx))
+                    format!("mov {}, {}", dest, source.to_asm(ctx, size))
                 }
             }
-            VInstruction::MovMem(dest, source) =>
-                format!("mov dword {}, {}", dest.to_asm(ctx), source.to_asm(ctx)),
-            VInstruction::Binary(instr, dest, left, right) => {
-                assert_eq!(ctx.map_reg(dest), ctx.map_reg(left));
-                format!("{} {}, {}", instr, left.to_asm(ctx), right.to_asm(ctx))
+            VInstruction::MovMem(size, dest, source) => {
+                let dest_str = dest.to_asm(ctx, size);
+                let source_str = source.to_asm(ctx, size);
+
+                if let VopRC::Reg(_) = source {
+                    format!("mov {}, {}", dest_str, source_str)
+                } else {
+                    format!("mov {} {}, {}", size.keyword(), dest_str, source_str)
+                }
             }
-            VInstruction::DivMod(signed, high, low, div, quot, rem) => {
+            VInstruction::Binary(size, instr, dest, left, right) => {
+                assert_eq!(ctx.map_reg(dest), ctx.map_reg(left));
+                format!("{} {}, {}", instr, left.to_asm(ctx, size), right.to_asm(ctx, size))
+            }
+            VInstruction::DivMod(size, signed, high, low, div, quot, rem) => {
+                // TODO implement this, but the regs are annoying
+                assert!(size != Size::S8, "div for size 8 not implemented yet");
+
                 assert!(ctx.map_reg(high).is_preg(PREG_D));
                 assert!(ctx.map_reg(low).is_preg(PREG_A));
                 assert!(ctx.map_reg(quot).is_preg(PREG_A));
@@ -480,24 +537,29 @@ impl VInstruction {
                     Signed::Unsigned => "div",
                 };
 
-                format!("{} {}", instr, div.to_asm(ctx))
+                let div_str = div.to_asm(ctx, size);
+                if let VopRM::Reg(_) = div {
+                    format!("{} {}", instr, div_str)
+                } else {
+                    format!("{} {} {}", instr, size.keyword(), div_str)
+                }
             }
             VInstruction::Call(_result, target, ref _args) => {
-                format!("call {}", target.to_asm(ctx))
+                format!("call {}", target.to_asm(ctx, Size::FULL))
             }
-            VInstruction::Cmp(left, right) =>
-                format!("cmp {}, {}", left.to_asm(ctx), right.to_asm(ctx)),
-            VInstruction::Test(left, right) =>
-                format!("test {}, {}", left.to_asm(ctx), right.to_asm(ctx)),
+            VInstruction::Cmp(size, left, right) =>
+                format!("cmp {}, {}", left.to_asm(ctx, size), right.to_asm(ctx, size)),
+            VInstruction::Test(size, left, right) =>
+                format!("test {}, {}", left.to_asm(ctx, size), right.to_asm(ctx, size)),
             VInstruction::Setcc(instr, dest, source) => {
                 assert_eq!(ctx.map_reg(dest), ctx.map_reg(source));
                 let preg = ctx.map_reg(dest).as_preg().unwrap();
-                format!("{} {}", instr, PREG_NAMES_BYTE[preg.index()])
+                format!("{} {}", instr, preg_to_asm(preg, Size::S8))
             }
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", VSymbol::Block(target.block)),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
-                let cond = cond.to_asm(ctx);
+                let cond = cond.to_asm(ctx, Size::FULL);
 
                 let mut s = String::new();
                 let f = &mut s;
@@ -528,7 +590,7 @@ impl VInstruction {
                 }
             }
             VInstruction::SlotPtr(dest, index) => {
-                let dest = ctx.map_reg(dest).to_asm();
+                let dest = ctx.map_reg(dest).to_asm(Size::FULL);
                 let offset = ctx.stack_layout.slot_offset(index);
 
                 if offset == 0 {
