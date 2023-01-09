@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use crate::mid::analyse::usage::{TargetKind, try_for_each_expr_tree_operand};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{Block, CastKind, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
 
@@ -321,7 +321,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             ExpressionInfo::PointerOffSet { ty, base, index } =>
                 vec![format!("PointerOffSet"), v(base), v(index), t(ty)],
             ExpressionInfo::Cast { ty: _, kind, value } =>
-                vec![format!("Cast {:?}", kind), v(value)],
+                vec![short_cast_kind(kind).to_string(), v(value)],
         }
     }
 
@@ -359,4 +359,12 @@ fn quote_html(s: &str) -> String {
 
 fn shorten_signed(s: impl AsRef<str>) -> String {
     s.as_ref().replace("Unsigned", "U").replace("Signed", "S")
+}
+
+fn short_cast_kind(kind: CastKind) -> &'static str {
+    match kind {
+        CastKind::IntTruncate => "Trunc",
+        CastKind::IntExtend(Signed::Signed) => "Ext(S)",
+        CastKind::IntExtend(Signed::Unsigned) => "Ext(U)",
+    }
 }
