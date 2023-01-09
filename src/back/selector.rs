@@ -5,7 +5,7 @@ use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
 
 use crate::back::vcode::{Size, VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
-use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
 
 #[derive(Default)]
 pub struct Symbols {
@@ -257,7 +257,23 @@ impl Selector<'_> {
             }
             ExpressionInfo::TupleFieldPtr { .. } => todo!("TupleFieldPtr"),
             ExpressionInfo::PointerOffSet { .. } => todo!("PointerOffSet"),
-            ExpressionInfo::Cast { .. } => todo!("Cast"),
+            ExpressionInfo::Cast { ty, kind, value } => {
+                let size_before = self.size_of_value(value);
+                let size_after = self.size_of_ty(ty);
+
+                match kind {
+                    CastKind::IntTruncate => {
+                        // nothing to do, just return value
+                        self.append_value_to_reg(value)
+                    }
+                    CastKind::IntExtend(signed) => {
+                        let before = self.append_value_to_reg(value);
+                        let after = self.vregs.new_vreg();
+                        self.push(VInstruction::Extend(signed, size_after, size_before, after, before));
+                        after
+                    }
+                }
+            },
         };
 
         self.expr_cache.insert(expr, result);

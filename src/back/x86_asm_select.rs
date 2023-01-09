@@ -124,7 +124,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             vregs: mapper.vreg_count(),
         };
 
-        let env = build_env(GENERAL_PREGS.len());
+        let env = build_env(4);
         let options = RegallocOptions {
             verbose_log: true,
             validate_ssa: true,

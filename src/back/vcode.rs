@@ -65,6 +65,8 @@ pub enum VInstruction {
 
     /// signed, high, low, div, quot, rem
     DivMod(Size, Signed, VReg, VReg, VopRM, VReg, VReg),
+    /// signed, size after, size before, after, before
+    Extend(Signed, Size, Size, VReg, VReg),
 
     /// result, target, args
     Call(VReg, VopRCM, Vec<VReg>),
@@ -438,6 +440,10 @@ impl VInstruction {
                 operands.push(Operand::reg_fixed_def(quot, PREG_A));
                 operands.push(Operand::reg_fixed_def(rem, PREG_D));
             }
+            VInstruction::Extend(_signed, _size_after, _size_before, after, before) => {
+                operands.push_def(after);
+                operands.push_use(before);
+            }
             VInstruction::Call(result, target, ref args) => {
                 for (index, &arg) in args.iter().enumerate() {
                     let preg = ABI_PARAM_REGS[index];
@@ -543,6 +549,13 @@ impl VInstruction {
                 } else {
                     format!("{} {} {}", instr, size.keyword(), div_str)
                 }
+            }
+            VInstruction::Extend(signed, size_after, size_before, after, before) => {
+                let instr = match signed {
+                    Signed::Signed => "movsx",
+                    Signed::Unsigned => "movzx",
+                };
+                format!("{} {}, {}", instr, after.to_asm(ctx, size_after), before.to_asm(ctx, size_before))
             }
             VInstruction::Call(_result, target, ref _args) => {
                 format!("call {}", target.to_asm(ctx, Size::FULL))
