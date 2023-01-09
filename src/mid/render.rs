@@ -94,7 +94,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         // render root pointers
         for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
-            writeln!(f, r#"root_{} [label=<{:?}>, shape=diamond];"#, func.index(), name)?;
+            writeln!(f, r#"root_{} [label=<{:?}>, shape=diamond];"#, i, name)?;
             writeln!(f, r#"root_{} -> func_{}_entry [lhead=cluster_func_{}];"#, i, func.index(), func.index())?;
         }
 
@@ -144,6 +144,10 @@ impl<'a, W: Write> Renderer<'a, W> {
     }
 
     fn render_slots(&self, f: &mut W, func: Function, slots: &[StackSlot]) -> Result {
+        if slots.is_empty() {
+            return Ok(());
+        }
+
         let prog = self.prog;
 
         let mut rows = String::new();
@@ -163,7 +167,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         write!(
             f,
-            r#"func_{}_slots [label=<<table border="0">{}</table>>, shape="box"]"#,
+            r#"func_{}_slots [label=<<table border="0">{}</table>>, shape="box", style="rounded"]"#,
             func.index(), rows
         )?;
         Ok(())
