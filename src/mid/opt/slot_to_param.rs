@@ -60,7 +60,7 @@ fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) ->
             let block_instr_count = prog.get_block(block).instructions.len();
             let value = get_value_for_slot(prog, &dom_info, &param_map, entry_block, &replaced_slots, slot, block, block_instr_count);
 
-            prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
+            prog.get_block_mut(block).terminator.for_each_target_mut(|target, _| {
                 target.args.push(value)
             });
         }

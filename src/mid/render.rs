@@ -6,7 +6,7 @@ use derive_more::From;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
-use crate::mid::analyse::usage::try_for_each_expr_tree_operand;
+use crate::mid::analyse::usage::{TargetKind, try_for_each_expr_tree_operand};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, StackSlot, Target, Terminator, Value};
 use crate::util::{Never, NeverExt};
@@ -201,9 +201,14 @@ impl<'a, W: Write> Renderer<'a, W> {
         let label = format!(r#"<<table border="0">{}</table>>"#, rows);
         writeln!(f, r#"block_{} [label={}, shape="box"];"#, block.index(), label)?;
 
-        // TODO targets with edge colors: blue jump, green true branch, red false branch
-        block_info.terminator.try_for_each_target(|target| {
-            writeln!(f, "block_{} -> block_{};", block.index(), target.block.index())
+        block_info.terminator.try_for_each_target(|target, kind| {
+            let color = match kind {
+                TargetKind::Jump => "black",
+                TargetKind::BranchTrue => "green",
+                TargetKind::BranchFalse => "red",
+            };
+
+            writeln!(f, "block_{} -> block_{} [color={}];", block.index(), target.block.index(), color)
         })?;
 
         Ok(())
