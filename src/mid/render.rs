@@ -119,7 +119,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             format!("func_{}", func.index())
         };
         write!(r, "<tr><td><b>{}</b></td></tr>", name)?;
-        write!(r, "<tr><td>{}</td></tr>", quote_html(&prog.format_type(func_info.ty).to_string()))?;
+        write!(r, "<tr><td>{}</td></tr>", quote_html(prog.format_type(func_info.ty).to_string()))?;
         writeln!(f, r#"label = <<table border="0">{}</table>>;"#, rows)?;
 
         // slots
@@ -161,7 +161,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             write!(
                 r,
                 "<tr><td>slot_{}</td><td>{}</td><td>{:?}</td></tr>",
-                slot.index(), prog.format_type(ty), quote_html(slot_name),
+                slot.index(), quote_html(prog.format_type(ty).to_string()), quote_html(slot_name),
             )?;
         }
 
@@ -185,7 +185,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             write!(
                 rows,
                 r#"<tr><td align="left">param_{}</td><td align="left">{}</td></tr>"#,
-                param.index(), quote_html(&prog.format_type(ty).to_string()),
+                param.index(), quote_html(prog.format_type(ty).to_string()),
             )?;
         }
 
@@ -196,7 +196,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             write!(
                 rows,
                 r#"<tr><td align="left">instr_{}</td><td align="left">{}</td><td align="left">{}</td></tr>"#,
-                instr.index(), quote_html(&ty_str), quote_html(&self.instr_to_str(instr))
+                instr.index(), quote_html(ty_str), quote_html(self.instr_to_str(instr))
             )?;
         }
 
@@ -280,7 +280,7 @@ impl<'a, W: Write> Renderer<'a, W> {
             write!(
                 r,
                 r#"<tr><td align="left">expr_{index}</td><td align="left">{}</td>{}</tr>"#,
-                quote_html(&ty_str), parts,
+                quote_html(ty_str), parts,
             )?;
         }
 
@@ -353,8 +353,8 @@ fn invis_node(f: &mut impl Write, name: impl AsRef<str>) -> Result {
     Ok(())
 }
 
-fn quote_html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+fn quote_html(s: impl AsRef<str>) -> String {
+    s.as_ref().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn shorten_signed(s: impl AsRef<str>) -> String {
