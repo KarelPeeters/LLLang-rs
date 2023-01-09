@@ -113,10 +113,12 @@ impl<'a, W: Write> Renderer<'a, W> {
         let r = &mut rows;
 
         // header
-        write!(r, "<tr><td><b>func_{}</b></td></tr>", func.index())?;
-        if let Some(name) = &func_info.debug_name {
-            write!(r, "<tr><td><b>{:?}</b></td></tr>", quote_html(name))?;
-        }
+        let name = if let Some(name) = &func_info.debug_name {
+            format!("func_{} {:?}", func.index(), name)
+        } else {
+            format!("func_{}", func.index())
+        };
+        write!(r, "<tr><td><b>{}</b></td></tr>", name)?;
         write!(r, "<tr><td>{}</td></tr>", quote_html(&prog.format_type(func_info.ty).to_string()))?;
         writeln!(f, r#"label = <<table border="0">{}</table>>;"#, rows)?;
 
