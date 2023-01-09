@@ -170,6 +170,7 @@ fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after
         ("sccp", mid::opt::sccp::sccp),
         ("instr_simplify", mid::opt::instr_simplify::instr_simplify),
         ("param_combine", mid::opt::param_combine::param_combine),
+        ("gvn", mid::opt::gvn::gvn),
         ("dce", mid::opt::dce::dce),
         ("flow_simplify", mid::opt::flow_simplify::flow_simplify),
         ("block_threading", mid::opt::block_threading::block_threading),

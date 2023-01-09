@@ -354,7 +354,7 @@ pub enum InstructionInfo {
     BlackBox { value: Value },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ExpressionInfo {
     ///Perform binary arithmetic operation `kind(left, right)`;
     ///
@@ -395,7 +395,7 @@ pub enum Signed {
     Unsigned,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -408,7 +408,7 @@ pub enum ArithmeticOp {
     Xor,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ComparisonOp {
     Eq,
     Neq,
@@ -476,7 +476,7 @@ impl ComparisonOp {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum CastKind {
     /// Cast from an int to a possibly shorter int.
     IntTruncate,
