@@ -242,13 +242,10 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     let ir_opt_after_file = ll_path.with_extension(format!("{name}_opt_after.ir"));
     if optimize {
         run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
-        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
-            .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
-        render_ir_as_svg(&ir_program, &ir_opt_file)?;
-    } else {
-        //clear file
-        File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?.write_all(&[]).with_context(|| "Clearing IR opt file")?;
     }
+    File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
+        .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
+    render_ir_as_svg(&ir_program, &ir_opt_file)?;
     verify(&ir_program)?;
 
     println!("----Backend----");
