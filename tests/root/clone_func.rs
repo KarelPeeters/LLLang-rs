@@ -1,5 +1,3 @@
-use lllang::mid::ir;
-use lllang::mid::util::bit_int::BitInt;
 use lllang::mid::util::verify::verify;
 
 use crate::root::util::{get_debug_func, parse_ir_standalone};
