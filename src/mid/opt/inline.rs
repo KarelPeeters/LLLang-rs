@@ -74,7 +74,10 @@ struct InlinedCall {
 
 // TODO splitting the calling block here could invalidate other call_pos block positions
 fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: InlinedCall) {
-    let args = unwrap_match!(prog.get_instr(inlined_call.pos.instr), InstructionInfo::Call { target: _, args } => args.clone());
+    let args = unwrap_match!(
+        prog.get_instr(inlined_call.pos.instr),
+        InstructionInfo::Call { target: _, args, conv: _ } => args.clone()
+    );
     let return_ty = prog.get_func(inlined_call.target).func_ty.ret;
     let call_pos = inlined_call.pos;
 

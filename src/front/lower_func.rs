@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-use crate::front::{ast, cst};
+use crate::front::{ast, cst, DEFAULT_CALLING_CONVENTION};
 use crate::front::ast::LogicalOp;
 use crate::front::cst::{IntTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
@@ -459,6 +459,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let call = ir::InstructionInfo::Call {
                     target: target_value.ir,
                     args: ir_args,
+                    conv: DEFAULT_CALLING_CONVENTION,
                 };
                 let call = self.append_instr(after_args.block, call);
 

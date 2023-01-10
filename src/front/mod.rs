@@ -3,6 +3,8 @@ use std::fmt::Debug;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
+use crate::mid::ir::CallingConvention;
+
 pub mod pos;
 pub mod ast;
 pub mod cst;
@@ -17,6 +19,7 @@ pub mod lower;
 pub mod type_func;
 pub mod lower_func;
 
+const DEFAULT_CALLING_CONVENTION: CallingConvention = CallingConvention::StdCall;
 
 #[derive(Debug, Default)]
 pub struct Program<C> {
@@ -36,7 +39,6 @@ impl<C> Program<C> {
         )
     }
 }
-
 
 impl<C> Program<C> {
     ///Recursively map module contents to return a new, transformed program

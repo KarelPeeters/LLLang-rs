@@ -204,11 +204,21 @@ pub enum TypeInfo {
     Array(ArrayType),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum CallingConvention {
+    /// Win32 __stdcall.
+    StdCall,
+    /// The backend can freely choose the calling convention.
+    /// The only requirement is that it's the same for functions with the same signature.
+    Custom,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionType {
     pub params: Vec<Type>,
     // TODO allow multiple returns
     pub ret: Type,
+    pub conv: CallingConvention,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -345,7 +355,7 @@ pub enum InstructionInfo {
     ///
     /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
     // TODO add an expression variant of call that can't have have any side effects 
-    Call { target: Value, args: Vec<Value> },
+    Call { target: Value, args: Vec<Value>, conv: CallingConvention },
 
     /// Return `value` as-is.
     /// Optimizations should assume that:
@@ -546,7 +556,7 @@ impl InstructionInfo {
                 *addr = f(*addr);
                 *value = f(*value);
             }
-            InstructionInfo::Call { target, args } => {
+            InstructionInfo::Call { target, args, conv: _ } => {
                 *target = f(*target);
                 for arg in args {
                     *arg = f(*arg);
@@ -880,7 +890,8 @@ impl Program {
                         write!(f, "&"),
                     TypeInfo::Tuple(TupleType { fields }) =>
                         self.prog.write_tuple(f, fields),
-                    TypeInfo::Func(FunctionType { params, ret }) => {
+                    TypeInfo::Func(FunctionType { params, ret, conv }) => {
+                        write!(f, "{:?} ", conv)?;
                         self.prog.write_tuple(f, params)?;
                         write!(f, " -> {}", self.prog.format_type(*ret))
                     }

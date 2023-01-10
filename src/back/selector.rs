@@ -119,7 +119,8 @@ impl Selector<'_> {
                 let size = self.size_of_ty(ty);
                 self.push(VInstruction::MovMem(size, VMem::at(addr), value));
             }
-            InstructionInfo::Call { target, ref args } => {
+            InstructionInfo::Call { target, ref args, conv: _ } => {
+                // TODO use calling convention
                 let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
                 let target = self.append_value_to_rcm(target);
                 let result = self.vregs.map_instr(instr);

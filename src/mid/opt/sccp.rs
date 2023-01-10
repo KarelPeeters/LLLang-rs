@@ -284,7 +284,7 @@ impl<'a> State<'a> {
             }
             // this instruction doesn't have a return value, so we can just use anything we want
             InstructionInfo::Store { .. } => Lattice::Undef,
-            &InstructionInfo::Call { target, ref args } => {
+            &InstructionInfo::Call { target, ref args, conv: _ } => {
                 self.eval_as_call_target(target).map_known(|target| {
                     if let Some(target) = target.as_func() {
                         // mark reachable

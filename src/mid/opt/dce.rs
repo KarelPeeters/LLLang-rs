@@ -123,7 +123,7 @@ impl Visitor for DceVisitor<'_> {
                         if let Usage::InstrOperand { pos, usage: InstrOperand::CallTarget } = usage {
                             let args = unwrap_match!(
                                 prog.get_instr(pos.instr),
-                                InstructionInfo::Call { target: _, args } => args
+                                InstructionInfo::Call { target: _, args, conv: _ } => args
                             );
 
                             self.add_value(state, args[index]);
@@ -142,7 +142,7 @@ impl Visitor for DceVisitor<'_> {
                 let instr_info = prog.get_instr(instr);
 
                 match instr_info {
-                    &InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args } => {
+                    &InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args, conv: _ } => {
                         // value used as call target, so we don't need to mark all of the args as used
                         self.add_value_target(state, func);
 
@@ -267,7 +267,7 @@ fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
     match prog.get_instr(instr) {
         InstructionInfo::Load { addr: _, ty: _ } => false,
         InstructionInfo::Store { addr: _, ty, value: _ } => *ty != prog.ty_void(),
-        InstructionInfo::Call { target: _, args: _ } => true,
+        InstructionInfo::Call { target: _, args: _, conv: _ } => true,
         InstructionInfo::BlackBox { value: _ } => true,
     }
 }
@@ -351,7 +351,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
             let instr_info = &mut prog_instrs[instr];
 
             // is this is a call to a function
-            if let &mut InstructionInfo::Call { target: Value::Global(Global::Func(target)), ref mut args } = instr_info {
+            if let &mut InstructionInfo::Call { target: Value::Global(Global::Func(target)), ref mut args, conv: _ } = instr_info {
                 let target_info = &prog_funcs[target];
 
                 // remove or replace dead params if any

@@ -5,7 +5,7 @@ use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
 use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_tree_operand, try_for_each_usage_in_instr, Usage};
-use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::ir::{Block, BlockInfo, CallingConvention, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
 
 // TODO verify that there are no expression loops
 #[derive(Debug)]
@@ -14,7 +14,6 @@ pub enum VerifyError {
     BlockDeclaredTwice(Block, Function, Function),
 
     NonDeclaredValueUsed(Scoped, Usage, Option<Expression>),
-
     NonDominatingValueUsed(Scoped, DomPosition, Usage, Option<Expression>),
 
     WrongDeclParamCount(Function, TypeString, usize),
@@ -26,6 +25,8 @@ pub enum VerifyError {
     ExpectedFunctionType(DomPosition, TypeString),
 
     WrongCallParamCount(DomPosition, TypeString, usize),
+    WrongCallingConvention(Value, CallingConvention, DomPosition, CallingConvention),
+
     TupleIndexOutOfBounds(Expression, TypeString, u32, u32),
 
     EntryBlockUsedAsTarget(DomPosition, Block),
@@ -246,7 +247,7 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
             ensure_type_match(prog, pos, prog.type_of_value(addr), prog.ty_ptr())?;
             ensure_type_match(prog, pos, prog.type_of_value(value), ty)?;
         }
-        &InstructionInfo::Call { target, ref args } => {
+        &InstructionInfo::Call { target, ref args, conv } => {
             let target_ty = prog.type_of_value(target);
             let target_func_ty = prog.get_type(target_ty).unwrap_func()
                 .ok_or_else(|| VerifyError::ExpectedFunctionType(pos, ts(target_ty)))?;
@@ -257,6 +258,10 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
 
             for (&param, &arg) in zip(&target_func_ty.params, args) {
                 ensure_type_match(prog, pos, param, prog.type_of_value(arg))?;
+            }
+
+            if conv != target_func_ty.conv {
+                return Err(VerifyError::WrongCallingConvention(target, target_func_ty.conv, pos, conv));
             }
         }
         InstructionInfo::BlackBox { value: _ } => {}

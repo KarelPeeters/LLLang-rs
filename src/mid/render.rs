@@ -296,9 +296,9 @@ impl<'a, W: Write> Renderer<'a, W> {
                 format!("load {} [{}]", prog.format_type(ty), self.value_to_str(addr)),
             InstructionInfo::Store { addr, ty, value } =>
                 format!("store {} [{}] <- {}", prog.format_type(ty), self.value_to_str(addr), self.value_to_str(value)),
-            InstructionInfo::Call { target, ref args } => {
+            InstructionInfo::Call { target, ref args, conv } => {
                 let args = args.iter().map(|&arg| self.value_to_str(arg)).join(", ");
-                format!("call {} ( {} )", self.value_to_str(target), args)
+                format!("call {:?} {} ( {} )", conv, self.value_to_str(target), args)
             }
             InstructionInfo::BlackBox { value } =>
                 format!("blackbox {}", self.value_to_str(value)),

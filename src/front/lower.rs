@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 
-use crate::front::{ast, cst};
+use crate::front::{ast, cst, DEFAULT_CALLING_CONVENTION};
 use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, IntTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, InvalidLiteralReason, Result};
 use crate::front::lower_func::LowerFuncState;
@@ -84,7 +84,8 @@ impl<'a> MappingTypeStore<'a> {
             .collect();
         let ret = self.map_type(prog, ty.ret);
 
-        ir::FunctionType { params, ret }
+        let conv = DEFAULT_CALLING_CONVENTION;
+        ir::FunctionType { params, ret, conv }
     }
 
     pub fn map_type(&mut self, prog: &mut ir::Program, ty: cst::Type) -> ir::Type {

@@ -121,7 +121,7 @@ pub fn try_for_each_usage_in_instr<E>(
             f(addr, InstrOperand::StoreAddr)?;
             f(value, InstrOperand::StoreValue)?;
         }
-        InstructionInfo::Call { target, ref args } => {
+        InstructionInfo::Call { target, ref args, conv: _ } => {
             f(target, InstrOperand::CallTarget)?;
             for (index, &arg) in args.iter().enumerate() {
                 f(arg, InstrOperand::CallArgument(index))?;
