@@ -1,14 +1,18 @@
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{ArithmeticOp, ComparisonOp, Const, Expression, ExpressionInfo, InstructionInfo, Program, Value};
+use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
 /// Simplify local (mostly single instruction or single expression) patterns.
+/// This also replaced unreachable instructions with a terminator, and removed all following instructions.
+// TODO make all of this part of the future uber-SCCP pass
 pub fn instr_simplify(prog: &mut Program) -> bool {
     let mut count_replaced = 0;
 
     let use_info = UseInfo::new(prog);
     let ty_void = prog.ty_void();
+
+    let mut block_unreachable_at: Vec<(Block, usize)> = vec![];
 
     // simplify instructions
     for block in use_info.blocks() {
@@ -16,16 +20,28 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
             let instr = prog.get_block(block).instructions[instr_index];
             let instr_info = prog.get_instr(instr);
 
+            let mut unreachable = false;
+
             match *instr_info {
-                // TODO replace load/store with undef addr with unreachable terminator
-                InstructionInfo::Load { addr: _, ty } => {
-                    if ty == ty_void {
+                InstructionInfo::Load { addr, ty } => {
+                    if addr.is_const_zero() || addr.is_undef() {
+                        unreachable = true;
+                    } else if ty == ty_void {
                         count_replaced += use_info.replace_value_usages(prog, instr.into(), Value::void());
                     }
                 }
-                InstructionInfo::Store { .. } => {}
-                InstructionInfo::Call { .. } => {}
-                InstructionInfo::BlackBox { .. } => {}
+                InstructionInfo::Store { addr, ty: _, value: _ } => {
+                    unreachable = addr.is_const_zero() || addr.is_undef();
+                }
+                InstructionInfo::Call { target, args: _, conv: _ } => {
+                    unreachable = target.is_const_zero() || target.is_undef();
+                }
+                InstructionInfo::BlackBox { .. } => {},
+            };
+
+            if unreachable {
+                block_unreachable_at.push((block, instr_index));
+                break;
             }
         }
     }
@@ -38,7 +54,21 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
         }
     }
 
-    println!("instr_simplify replaced {} values", count_replaced);
+    // replace unreachable instructions with terminator
+    let mut instr_deleted = 0;
+    for &(block, index) in &block_unreachable_at {
+        let block_info = prog.get_block_mut(block);
+
+        instr_deleted += block_info.instructions[index..].len();
+
+        drop(block_info.instructions.drain(index..));
+        block_info.terminator = Terminator::Unreachable;
+    }
+
+    println!(
+        "instr_simplify replaced {} values and deleted {} instructions in {} blocks",
+        count_replaced, instr_deleted, block_unreachable_at.len()
+    );
     count_replaced != 0
 }
 
