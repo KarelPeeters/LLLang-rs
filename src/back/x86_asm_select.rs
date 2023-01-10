@@ -139,7 +139,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         // TODO do all of this properly, depending on the calling convention
         let stack_layout = StackLayout {
             slot_bytes: slots.len() * 4,
-            spill_bytes: result.num_spillslots,
+            spill_bytes: result.num_spillslots * 4,
             param_bytes: 0,
         };
         let mut ctx = AsmContext {
