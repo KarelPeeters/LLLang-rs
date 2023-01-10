@@ -83,6 +83,7 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
             }
 
             // add phis to new block
+            // TODO replace usages of these phis with the values we pass for them!
             prog.get_block_mut(target_block).params.append(&mut old_params);
             blacklist.insert(target_block);
         }
