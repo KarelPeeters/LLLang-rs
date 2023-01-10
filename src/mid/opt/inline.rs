@@ -4,7 +4,8 @@ use crate::mid::analyse::usage::{InstrOperand, InstructionPos, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Function, FunctionInfo, ParameterInfo, Program, Target, Terminator};
 use crate::mid::ir::InstructionInfo;
-use crate::util::{Never, NeverExt, VecExt};
+use crate::util::VecExt;
+use crate::util::internal_iter::InternalIterator;
 
 const TINY_FUNCTION_INSTRUCTION_LIMIT: usize = 16;
 
@@ -85,7 +86,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     let FunctionInfo { ty: _, func_ty: _, slots: cloned_slots, entry: cloned_entry, debug_name: _ } =
         prog.deep_clone_function(inlined_call.target)
             .expect("Recursive functions should have been filtered out already");
-    let cloned_blocks = prog.collect_blocks(cloned_entry);
+    let cloned_blocks = prog.reachable_blocks(cloned_entry).collect_vec();
 
     let return_param = prog.define_param(ParameterInfo { ty: return_ty });
 
@@ -147,13 +148,8 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
 }
 
 fn fn_instruction_count(prog: &Program, func: Function) -> usize {
-    let mut count = 0;
-    prog.try_visit_blocks(prog.get_func(func).entry, |block| {
+    prog.reachable_blocks(prog.get_func(func).entry).map(|block| {
         let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
-        count += params.len();
-        count += instructions.len();
-        count += 1;
-        Never::UNIT
-    }).no_err();
-    count
+        params.len() + instructions.len() + 1
+    }).sum()
 }

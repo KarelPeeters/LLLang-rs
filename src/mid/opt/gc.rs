@@ -1,6 +1,7 @@
-use crate::mid::analyse::usage::{for_each_usage_in_expr, for_each_usage_in_instr, for_each_usage_in_term, TermUsage};
+use crate::mid::analyse::usage::TermUsage;
 use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Global, Program, Value};
 use crate::mid::util::visit::{VisitedResult, Visitor, VisitState};
+use crate::util::internal_iter::InternalIterator;
 
 struct GcVisitor;
 
@@ -17,7 +18,7 @@ impl Visitor for GcVisitor {
                 state.add_values(slots.iter().copied());
             }
             Value::Expr(expr) => {
-                for_each_usage_in_expr(state.prog.get_expr(expr), |inner, _| {
+                state.prog.get_expr(expr).operands().for_each(|(inner, _)| {
                     state.add_value(inner);
                 })
             }
@@ -34,18 +35,17 @@ impl Visitor for GcVisitor {
         state.add_values(instructions.iter().copied());
 
         for &instr in instructions {
-            for_each_usage_in_instr(state.prog.get_instr(instr), |value, _| {
+            state.prog.get_instr(instr).operands().for_each(|(value, _)| {
                 state.add_value(value);
             });
         }
 
-        for_each_usage_in_term(
-            terminator,
-            |usage| match usage {
+        terminator.operands().for_each(|usage| {
+            match usage {
                 TermUsage::Value(value, _) => state.add_value(value),
                 TermUsage::Block(block, _) => state.add_block(block),
-            },
-        );
+            }
+        });
     }
 }
 

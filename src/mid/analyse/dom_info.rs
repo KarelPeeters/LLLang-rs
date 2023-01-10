@@ -1,7 +1,8 @@
 use fixedbitset::FixedBitSet;
 
 use crate::mid::ir::{Block, Function, Program};
-use crate::util::{IndexMutTwice, Never, NeverExt};
+use crate::util::IndexMutTwice;
+use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug)]
 pub struct DomInfo {
@@ -20,15 +21,11 @@ impl DomInfo {
         let func_info = prog.get_func(func);
         let entry_block = func_info.entry;
 
-        let mut blocks = Vec::new();
-        prog.try_visit_blocks(entry_block, |block| {
-            blocks.push(block);
-            Never::UNIT
-        }).no_err();
+        let blocks = prog.reachable_blocks(entry_block).collect_vec();
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());
-            prog.get_block(block).terminator.for_each_successor(|succ| {
+            prog.get_block(block).terminator.successors().for_each(|succ| {
                 let si = blocks.iter()
                     .position(|&b| b == succ)
                     .expect("Successor not in blocks");

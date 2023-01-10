@@ -4,8 +4,9 @@ use std::fmt::Debug;
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
-use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, for_each_usage_in_expr, for_each_usage_in_instr, for_each_usage_in_term, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
+use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Value};
+use crate::util::internal_iter::InternalIterator;
 
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
 // eg. slot_to_phi only cares about slots
@@ -85,7 +86,7 @@ impl UseInfo {
     pub fn expressions(&self) -> &IndexSet<Expression> {
         &self.expressions
     }
-    
+
     /// Whether `value` is used anywhere in `func`, including through expressions.
     /// Can be used to check whether a function can directly call itself.
     pub fn value_used_in_func(&self, prog: &Program, value: Value, func: Function) -> bool {
@@ -222,24 +223,21 @@ impl<'a> State<'a> {
                 let instr_info = prog.get_instr(instr);
                 let instr_pos = InstructionPos { func, block, instr, instr_index };
 
-                for_each_usage_in_instr(instr_info, |value, usage| {
+                instr_info.operands().for_each(|(value, usage)| {
                     self.add_usage(value, Usage::InstrOperand { pos: instr_pos, usage });
                 });
             }
 
             //terminator
-            for_each_usage_in_term(
-                &block_info.terminator,
-                |usage| match usage {
-                    TermUsage::Value(value, usage) => {
-                        self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
-                    }
-                    TermUsage::Block(succ, kind) => {
-                        self.todo_blocks.push_back(BlockPos { func, block: succ });
-                        self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
-                    }
-                },
-            );
+            block_info.terminator.operands().for_each(|usage| match usage {
+                TermUsage::Value(value, usage) => {
+                    self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
+                }
+                TermUsage::Block(succ, kind) => {
+                    self.todo_blocks.push_back(BlockPos { func, block: succ });
+                    self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
+                }
+            });
         }
     }
 
@@ -252,7 +250,7 @@ impl<'a> State<'a> {
         let prog = self.prog;
         let expr_info = prog.get_expr(expr);
 
-        for_each_usage_in_expr(expr_info, |value, usage| {
+        expr_info.operands().for_each(|(value, usage)| {
             self.add_usage(value, Usage::ExprOperand { expr, usage });
         });
     }

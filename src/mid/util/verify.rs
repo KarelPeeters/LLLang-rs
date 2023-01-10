@@ -4,8 +4,9 @@ use std::iter::zip;
 use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_tree_operand, try_for_each_usage_in_instr, Usage};
+use crate::mid::analyse::usage::{BlockPos, InstructionPos, TargetKind, TermOperand, Usage};
 use crate::mid::ir::{Block, BlockInfo, CallingConvention, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
+use crate::util::internal_iter::InternalIterator;
 
 // TODO verify that there are no expression loops
 #[derive(Debug)]
@@ -54,7 +55,7 @@ pub fn verify(prog: &Program) -> Result {
         declarer.declare_all(&func_info.slots, DomPosition::FuncEntry(func))?;
 
         // TODO this way of visiting blocks means we never verify unreachable blocks. Is that okay?
-        prog.try_visit_blocks(func_info.entry, |block| {
+        prog.reachable_blocks(func_info.entry).try_for_each(|block| {
             let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
             let block_pos = BlockPos { func, block };
 
@@ -110,7 +111,7 @@ pub fn verify(prog: &Program) -> Result {
                 check_instr_types(prog, instr, instr_pos.as_dom_pos())?;
 
                 // check instr arg domination
-                try_for_each_usage_in_instr(instr_info, |value, usage| {
+                instr_info.operands().try_for_each(|(value, usage)| {
                     let usage = Usage::InstrOperand { pos: instr_pos, usage };
                     ctx.check_value_usage(value, usage)
                 })?;
@@ -149,9 +150,7 @@ pub fn verify(prog: &Program) -> Result {
         }
 
         let expr_info = prog.get_expr(expr);
-        for_each_usage_in_expr(expr_info, |value, _| if let Value::Expr(inner) = value {
-            todo_expressions.push_back(inner);
-        });
+        expr_info.operands().filter_map(|(value, _)| value.as_expr()).sink_to(&mut todo_expressions);
 
         check_expr_types(prog, expr)?;
     }
@@ -223,12 +222,10 @@ impl<'a> Context<'a> {
             Value::Expr(expr) => {
                 assert!(root.is_none());
                 self.expressions.insert(expr);
-                try_for_each_expr_tree_operand(self.prog, expr, |inner, _, _| {
-                    if inner.is_expr() {
-                        Ok(())
-                    } else {
-                        self.check_value_usage_impl(inner, usage.clone(), Some(expr))
-                    }
+
+                self.prog.expr_tree_leaf_iter(expr).try_for_each(|(inner, _, _)| {
+                    assert!(!inner.is_expr());
+                    self.check_value_usage_impl(inner, usage.clone(), Some(expr))
                 })
             }
         }

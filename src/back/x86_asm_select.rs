@@ -16,8 +16,8 @@ use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
 use crate::mid::normalize::split_critical_edges::split_critical_edges;
 use crate::mid::util::verify::verify;
-use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
+use crate::util::internal_iter::InternalIterator;
 
 pub fn lower_new(prog: &mut Program) -> String {
     Builder::new().filter_level(LevelFilter::Trace).init();
@@ -52,11 +52,10 @@ pub fn lower_new(prog: &mut Program) -> String {
 
         // map blocks in-order
         let mut blocks_ordered = vec![];
-        prog.try_visit_blocks(func_info.entry, |block| {
+        prog.reachable_blocks(func_info.entry).for_each(|block| {
             symbols.define_block(block, blocks_ordered.len());
             blocks_ordered.push(block);
-            Never::UNIT
-        }).no_err();
+        });
 
         // map slots
         let slots = func_info.slots.iter().enumerate().map(|(i, &slot)| (slot, i)).collect();
@@ -102,8 +101,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             let range_end = v_instructions.len();
             let inst_range = InstRange::forward(Inst::new(range_start), Inst::new(range_end));
 
-            let mut succs = vec![];
-            terminator.for_each_successor(|succ| succs.push(symbols.map_block(succ)));
+            let succs = terminator.successors().map(|succ| symbols.map_block(succ)).collect_vec();
             let preds = use_info[block].iter().filter_map(|usage| {
                 match usage {
                     BlockUsage::FuncEntry(_) => None,

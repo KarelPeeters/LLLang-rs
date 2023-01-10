@@ -3,11 +3,12 @@ use std::num::Wrapping;
 
 use indexmap::map::IndexMap;
 
-use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_instr, InstrOperand, InstructionPos, TermOperand, Usage};
+use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
+use crate::util::internal_iter::InternalIterator;
 use crate::util::zip_eq;
 
 /// Try to prove values are constant and replace them
@@ -216,7 +217,7 @@ impl<'a> State<'a> {
 
             // mark each usage in this instruction
             //  visit_instr already does this for most instructions, but not necessarily all of them
-            for_each_usage_in_instr(prog.get_instr(instr), |value, usage| {
+            prog.get_instr(instr).operands().for_each(|(value, usage)| {
                 let usage = Usage::InstrOperand { pos: instr_pos, usage };
                 self.mark_usage(value, usage);
             });

@@ -1,14 +1,13 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 use derive_more::{Constructor, From};
 use itertools::Itertools;
-use crate::mid::analyse::usage::TargetKind;
 
 use crate::mid::util::bit_int::BitInt;
-use crate::util::{Never, NeverExt};
 use crate::util::arena::{Arena, ArenaSet};
+use crate::util::internal_iter::InternalIterator;
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $single:ident, $mul:ident],)*) => {
@@ -596,73 +595,6 @@ impl Target {
     }
 }
 
-// TODO all of these "(try)?_for_each_(.*)" function are getting annoying, is there a better way to do this?
-// TODO more this stuff to usage? we're using type from there which is not great...
-// TODO replace all of this with internal iterators
-impl Terminator {
-    pub fn replace_blocks(&mut self, mut f: impl FnMut(Block) -> Block) {
-        self.for_each_target_mut(|target, _| target.replace_blocks(&mut f));
-    }
-
-    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
-        match self {
-            Terminator::Jump { target } => target.replace_values(f),
-            Terminator::Branch { cond, true_target, false_target } => {
-                *cond = f(*cond);
-                true_target.replace_values(&mut f);
-                false_target.replace_values(&mut f);
-            }
-            Terminator::Return { value } => *value = f(*value),
-            Terminator::Unreachable => (),
-            Terminator::LoopForever => (),
-        }
-    }
-
-    pub fn for_each_target_mut<F: FnMut(&mut Target, TargetKind)>(&mut self, mut f: F) {
-        match self {
-            Terminator::Jump { target } => f(target, TargetKind::Jump),
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target, TargetKind::BranchTrue);
-                f(false_target, TargetKind::BranchFalse);
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-    }
-
-    pub fn for_each_target<F: FnMut(&Target, TargetKind)>(&self, mut f: F) {
-        match self {
-            Terminator::Jump { target } => f(target, TargetKind::Jump),
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target, TargetKind::BranchTrue);
-                f(false_target, TargetKind::BranchFalse);
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-    }
-
-    pub fn try_for_each_target<E, F: FnMut(&Target, TargetKind) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
-        match self {
-            Terminator::Jump { target } => f(target, TargetKind::Jump)?,
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target, TargetKind::BranchTrue)?;
-                f(false_target, TargetKind::BranchFalse)?;
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-        Ok(())
-    }
-
-    pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
-        self.for_each_target(|target, _| f(target.block))
-    }
-}
-
 macro_rules! impl_nested_from {
     ($outer:ident::$variant:ident($inner:ty)) => {
         impl From<$inner> for $outer {
@@ -820,56 +752,6 @@ impl Const {
     }
 }
 
-// Visits
-impl Program {
-    pub fn collect_blocks(&self, start: Block) -> Vec<Block> {
-        let mut blocks = vec![];
-        self.try_visit_blocks(start, |block| {
-            blocks.push(block);
-            Never::UNIT
-        }).no_err();
-        blocks
-    }
-
-    // TODO switch to using Try trait, or something custom that accepts (), Result and ControlFlow
-    /// Visit the blocks reachable from `start` while staying within the same function.
-    pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
-        let mut blocks_left = VecDeque::new();
-        let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(start);
-
-        while let Some(block) = blocks_left.pop_front() {
-            if !blocks_seen.insert(block) { continue; }
-
-            f(block)?;
-
-            let block_info = self.get_block(block);
-            block_info.terminator.for_each_successor(
-                |succ| blocks_left.push_back(succ));
-        }
-
-        Ok(())
-    }
-
-    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, start: Block, mut f: F) -> Result<(), E> {
-        let mut blocks_left = VecDeque::new();
-        let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(start);
-
-        while let Some(block) = blocks_left.pop_front() {
-            if !blocks_seen.insert(block) { continue; }
-
-            f(self, block)?;
-
-            let block_info = self.get_block(block);
-            block_info.terminator.for_each_successor(
-                |succ| blocks_left.push_back(succ));
-        }
-
-        Ok(())
-    }
-}
-
 //Formatting related stuff
 impl Program {
     /// Wrap a `Type` as a `Display` value that recursively prints a human-readable version of the type.
@@ -1000,7 +882,7 @@ impl Display for Program {
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
-            self.try_visit_blocks(self.get_func(func).entry, |block| {
+            self.reachable_blocks(self.get_func(func).entry).try_for_each(|block| {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
 

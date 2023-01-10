@@ -1,7 +1,8 @@
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{try_for_each_expr_tree_operand, Usage};
+use crate::mid::analyse::usage::{Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Expression, Function, Program, Scoped, Value};
+use crate::util::internal_iter::InternalIterator;
 use crate::util::VecExt;
 
 // TODO this entire file is kind of brute-forcy and sad, can we compute this in advance in either dominfo or useinfo?
@@ -30,14 +31,14 @@ impl DomPosition {
                 match value {
                     Scoped::Param(param) => {
                         let (func, func_info) = get_func()?;
-                        prog.try_visit_blocks(func_info.entry, |block| {
+                        prog.reachable_blocks(func_info.entry).find_map(|block| {
                             let block_info = prog.get_block(block);
                             if block_info.params.contains(&param) {
-                                Err(DomPosition::InBlock(func, block, InBlockPos::Entry))
+                                Some(DomPosition::InBlock(func, block, InBlockPos::Entry))
                             } else {
-                                Ok(())
+                                None
                             }
-                        }).err().ok_or(DefError::NoDefFound)
+                        }).ok_or(DefError::NoDefFound)
                     }
                     Scoped::Slot(slot) => {
                         let (func, func_info) = get_func()?;
@@ -45,14 +46,14 @@ impl DomPosition {
                     }
                     Scoped::Instr(instr) => {
                         let (func, func_info) = get_func()?;
-                        prog.try_visit_blocks(func_info.entry, |block| {
+                        prog.reachable_blocks(func_info.entry).find_map(|block| {
                             let block_info = prog.get_block(block);
                             if let Some(index) = block_info.instructions.index_of(&instr) {
-                                Err(DomPosition::InBlock(func, block, InBlockPos::Instruction(index)))
+                                Some(DomPosition::InBlock(func, block, InBlockPos::Instruction(index)))
                             } else {
-                                Ok(())
+                                None
                             }
-                        }).err().ok_or(DefError::NoDefFound)
+                        }).ok_or(DefError::NoDefFound)
                     }
                 }
             }
@@ -88,12 +89,8 @@ pub fn value_strictly_dominates_usage_slow(
                 }
                 Err(DefError::NoDefFound) => Err(NoDefFound),
                 Err(DefError::Expression(expr)) => {
-                    let result = try_for_each_expr_tree_operand(prog, expr, |leaf, _, _| {
-                        // we only care about leaf operands
-                        if leaf.is_expr() {
-                            return Ok(());
-                        }
-
+                    let result = prog.expr_tree_leaf_iter(expr).try_for_each(|(leaf, _, _)| {
+                       assert!(!leaf.is_expr());
                         let result = value_strictly_dominates_usage_slow(prog, dom_info, use_info, leaf, usage);
                         match result {
                             Ok(true) => Ok(()),

@@ -6,11 +6,11 @@ use derive_more::From;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
-use crate::mid::analyse::usage::{TargetKind, try_for_each_expr_tree_operand};
+use crate::mid::analyse::usage::TargetKind;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, CastKind, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
-use crate::util::{Never, NeverExt};
 use crate::util::arena::IndexType;
+use crate::util::internal_iter::InternalIterator;
 
 type Result<T = ()> = std::result::Result<T, Error>;
 
@@ -58,12 +58,12 @@ impl<'a, W: Write> Renderer<'a, W> {
                 for usage in &use_info[value] {
                     if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
                         mark_expr(func, expr);
-                        try_for_each_expr_tree_operand(prog, expr, |value, _, _| {
+
+                        prog.expr_tree_iter(expr).try_for_each(|(value, _, _)| {
                             if let Value::Expr(value) = value {
                                 mark_expr(func, value);
                             }
-                            Never::UNIT
-                        }).no_err();
+                        });
                     }
                 }
             }
@@ -126,7 +126,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         self.render_slots(f, func, &func_info.slots)?;
 
         // blocks
-        prog.try_visit_blocks(func_info.entry, |block| {
+        prog.reachable_blocks(func_info.entry).try_for_each(|block| {
             self.render_block(f, block)
         })?;
 
@@ -205,7 +205,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         let label = format!(r#"<<table border="0">{}</table>>"#, rows);
         writeln!(f, r#"block_{} [label={}, shape="box"];"#, block.index(), label)?;
 
-        block_info.terminator.try_for_each_target(|target, kind| {
+        block_info.terminator.targets().try_for_each(|(target, kind)| {
             let color = match kind {
                 TargetKind::Jump => "black",
                 TargetKind::BranchTrue => "green",

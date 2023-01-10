@@ -4,6 +4,7 @@ use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::{InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Type, Value};
+use crate::util::internal_iter::InternalIterator;
 
 ///Replace slots and the associated loads and stores with block parameters where possible.
 pub fn slot_to_param(prog: &mut Program) -> bool {
@@ -60,7 +61,7 @@ fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) ->
             let block_instr_count = prog.get_block(block).instructions.len();
             let value = get_value_for_slot(prog, &dom_info, &param_map, entry_block, &replaced_slots, slot, block, block_instr_count);
 
-            prog.get_block_mut(block).terminator.for_each_target_mut(|target, _| {
+            prog.get_block_mut(block).terminator.targets_mut().for_each(|(target, _)| {
                 target.args.push(value)
             });
         }

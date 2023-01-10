@@ -5,6 +5,7 @@ use itertools::Itertools;
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::ir::{BlockInfo, Program, Target, Terminator};
+use crate::util::internal_iter::InternalIterator;
 
 pub fn split_critical_edges(prog: &mut Program) -> bool {
     let mut split_edges = 0;
@@ -17,13 +18,15 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
             let terminator = prog.get_block(block).terminator.clone();
             let mut replacement_targets = VecDeque::new();
 
-            terminator.for_each_target(|target, _| {
+            terminator.targets().for_each(|(target, _)| {
                 // check if the target block is critical
-                let mut target_count = 0;
-                terminator.for_each_target(|other, _| target_count += (other.block == target.block) as usize);
+                let target_count = terminator.targets()
+                    .filter(|(other, _)| other.block == target.block)
+                    .count();
+
                 let pred_count = max(
                     dom_info.iter_predecessors(target.block).count(),
-                    target_count
+                    target_count,
                 );
                 let is_critical = pred_count > 1;
 
@@ -45,7 +48,7 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
                 replacement_targets.push_back(replacement);
             });
 
-            prog.get_block_mut(block).terminator.for_each_target_mut(|target, _| {
+            prog.get_block_mut(block).terminator.targets_mut().for_each(|(target, _)| {
                 if let Some(replacement) = replacement_targets.pop_front().unwrap() {
                     *target = replacement;
                     split_edges += 1;

@@ -3,11 +3,12 @@ use std::fmt::Debug;
 
 use fixedbitset::FixedBitSet;
 
-use crate::mid::analyse::usage::{BlockUsage, for_each_usage_in_expr, for_each_usage_in_instr, InstrOperand, Usage};
+use crate::mid::analyse::usage::{BlockUsage, InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
 use crate::mid::util::visit::{Visitor, VisitState};
-use crate::util::{Never, NeverExt, VecExt};
+use crate::util::VecExt;
+use crate::util::internal_iter::InternalIterator;
 
 /// Dead code elimination.
 ///
@@ -156,7 +157,7 @@ impl Visitor for DceVisitor<'_> {
                     }
                     _ => {
                         // fallback, mark all operands as used
-                        for_each_usage_in_instr(prog.get_instr(instr), |operand, usage| {
+                        prog.get_instr(instr).operands().for_each(|(operand, usage)| {
                             if matches!(usage, InstrOperand::CallTarget) {
                                 self.add_value_target(state, operand);
                             } else {
@@ -168,7 +169,7 @@ impl Visitor for DceVisitor<'_> {
             }
             Value::Expr(expr) => {
                 // mark all operands as used
-                for_each_usage_in_expr(prog.get_expr(expr), |operand, _| {
+                prog.get_expr(expr).operands().for_each(|(operand, _)| {
                     self.add_value(state, operand);
                 });
             }
@@ -206,7 +207,7 @@ impl Visitor for DceVisitor<'_> {
             Terminator::LoopForever => {}
         }
 
-        terminator.for_each_target(|target, _| {
+        terminator.targets().for_each(|(target, _)| {
             state.add_block(target.block);
         });
     }
@@ -253,13 +254,11 @@ impl<'a> DceVisitor<'a> {
 // TODO this is slow and ugly
 fn find_param_pos(prog: &Program, param: &Parameter) -> (Function, Block, usize) {
     prog.nodes.funcs.iter().find_map(|(func, func_info)| {
-        prog.try_visit_blocks(func_info.entry, |block| {
-            let block_info = prog.get_block(block);
-            match block_info.params.index_of(param) {
-                Some(index) => Err((func, block, index)),
-                None => Ok(())
-            }
-        }).err()
+        prog.reachable_blocks(func_info.entry).find_map(|block| {
+            prog.get_block(block)
+                .params.index_of(param)
+                .map(|index| (func, block, index))
+        })
     }).unwrap()
 }
 
@@ -318,11 +317,11 @@ fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive: &Alive) -> 
 
         let func_used_as_non_call_target = alive.funcs_used_as_non_call_target.contains(&func);
 
-        prog.try_visit_blocks_mut(entry, |prog, block| {
+        let blocks = prog.reachable_blocks(entry).collect_vec();
+        for &block in &blocks {
             let keep_params = block == entry && func_used_as_non_call_target;
             remove_dead_values_from_block(prog, &mut removed, alive, block, keep_params);
-            Never::UNIT
-        }).no_err();
+        }
     }
 
     removed
@@ -382,7 +381,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
     });
 
     // remove dead target args
-    terminator.for_each_target_mut(|target, _| {
+    terminator.targets_mut().for_each(|(target, _)| {
         let &mut Target { block: target_block, ref mut args } = target;
         if let Some(target_mask) = alive.block_param_mask(target_block) {
             removed.target_args += retain_mask(args, target_mask);

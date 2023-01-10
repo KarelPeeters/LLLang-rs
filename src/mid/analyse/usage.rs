@@ -1,5 +1,9 @@
+use std::collections::{HashSet, VecDeque};
+use std::ops::ControlFlow;
+
 use crate::mid::analyse::dom_info::{DomPosition, InBlockPos};
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
+use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug, Clone)]
 pub enum Usage {
@@ -52,6 +56,12 @@ pub enum TermOperand {
     },
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum TermUsage<V, B> {
+    Value(V, TermOperand),
+    Block(B, TargetKind),
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum BlockUsage {
     FuncEntry(Function),
@@ -102,139 +112,281 @@ pub struct InstructionPos {
     pub instr_index: usize,
 }
 
-pub fn for_each_usage_in_instr(instr_info: &InstructionInfo, mut f: impl FnMut(Value, InstrOperand)) {
-    try_for_each_usage_in_instr::<()>(instr_info, |value, usage| {
-        f(value, usage);
-        Ok(())
-    }).unwrap();
+pub struct OperandIterator<T>(T);
+
+pub struct TargetsIterator<T>(T);
+
+impl InstructionInfo {
+    pub fn operands(&self) -> OperandIterator<&Self> {
+        OperandIterator(self)
+    }
 }
 
-pub fn try_for_each_usage_in_instr<E>(
-    instr_info: &InstructionInfo,
-    mut f: impl FnMut(Value, InstrOperand) -> Result<(), E>,
-) -> Result<(), E> {
-    match *instr_info {
-        InstructionInfo::Load { addr, ty: _ } => {
-            f(addr, InstrOperand::LoadAddr)?;
-        }
-        InstructionInfo::Store { addr, value, ty: _ } => {
-            f(addr, InstrOperand::StoreAddr)?;
-            f(value, InstrOperand::StoreValue)?;
-        }
-        InstructionInfo::Call { target, ref args, conv: _ } => {
-            f(target, InstrOperand::CallTarget)?;
-            for (index, &arg) in args.iter().enumerate() {
-                f(arg, InstrOperand::CallArgument(index))?;
+impl ExpressionInfo {
+    pub fn operands(&self) -> OperandIterator<&Self> {
+        OperandIterator(self)
+    }
+}
+
+impl Terminator {
+    pub fn operands(&self) -> OperandIterator<&Self> {
+        OperandIterator(self)
+    }
+
+    pub fn successors(&self) -> impl InternalIterator<Item=Block> + '_ {
+        self.operands().filter_map(|usage| option_match!(usage, TermUsage::Block(succ, _) => succ))
+    }
+
+    pub fn operands_mut(&mut self) -> OperandIterator<&mut Self> {
+        OperandIterator(self)
+    }
+
+    pub fn targets(&self) -> TargetsIterator<&Self> {
+        TargetsIterator(self)
+    }
+
+    pub fn targets_mut(&mut self) -> TargetsIterator<&mut Self> {
+        TargetsIterator(self)
+    }
+}
+
+impl InternalIterator for OperandIterator<&InstructionInfo> {
+    type Item = (Value, InstrOperand);
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        match *self.0 {
+            InstructionInfo::Load { addr, ty: _ } => {
+                f((addr, InstrOperand::LoadAddr))?;
+            }
+            InstructionInfo::Store { addr, value, ty: _ } => {
+                f((addr, InstrOperand::StoreAddr))?;
+                f((value, InstrOperand::StoreValue))?;
+            }
+            InstructionInfo::Call { target, ref args, conv: _ } => {
+                f((target, InstrOperand::CallTarget))?;
+                for (index, &arg) in args.iter().enumerate() {
+                    f((arg, InstrOperand::CallArgument(index)))?;
+                }
+            }
+            InstructionInfo::BlackBox { value } => {
+                f((value, InstrOperand::BlackBoxValue))?;
             }
         }
-        InstructionInfo::BlackBox { value } => {
-            f(value, InstrOperand::BlackBoxValue)?;
-        }
+        ControlFlow::Continue(())
     }
-    Ok(())
 }
 
-pub fn for_each_usage_in_expr(
-    expr_info: &ExpressionInfo,
-    mut f: impl FnMut(Value, ExprOperand),
-) {
-    try_for_each_usage_in_expr::<()>(expr_info, |value, usage| {
-        f(value, usage);
-        Ok(())
-    }).unwrap();
-}
+impl InternalIterator for OperandIterator<&ExpressionInfo> {
+    type Item = (Value, ExprOperand);
 
-pub fn try_for_each_usage_in_expr<E>(
-    expr_info: &ExpressionInfo,
-    mut f: impl FnMut(Value, ExprOperand) -> Result<(), E>,
-) -> Result<(), E> {
-    match expr_info {
-        &ExpressionInfo::Arithmetic { kind: _, left, right } |
-        &ExpressionInfo::Comparison { kind: _, left, right } => {
-            f(left, ExprOperand::BinaryOperandLeft)?;
-            f(right, ExprOperand::BinaryOperandRight)?;
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        match *self.0 {
+            ExpressionInfo::Arithmetic { kind: _, left, right } |
+            ExpressionInfo::Comparison { kind: _, left, right } => {
+                f((left, ExprOperand::BinaryOperandLeft))?;
+                f((right, ExprOperand::BinaryOperandRight))?;
+            }
+            ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
+                f((base, ExprOperand::TupleFieldPtrBase))?;
+            }
+            ExpressionInfo::PointerOffSet { base, index, ty: _ } => {
+                f((base, ExprOperand::PointerOffSetBase))?;
+                f((index, ExprOperand::PointerOffSetIndex))?;
+            }
+            ExpressionInfo::Cast { ty: _, kind: _, value } => {
+                f((value, ExprOperand::CastValue))?;
+            }
         }
-        &ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty: _ } => {
-            f(base, ExprOperand::TupleFieldPtrBase)?;
-        }
-        &ExpressionInfo::PointerOffSet { base, index, ty: _ } => {
-            f(base, ExprOperand::PointerOffSetBase)?;
-            f(index, ExprOperand::PointerOffSetIndex)?;
-        }
-        &ExpressionInfo::Cast { ty: _, kind: _, value } => {
-            f(value, ExprOperand::CastValue)?;
-        }
+        ControlFlow::Continue(())
     }
-    Ok(())
 }
 
-pub enum TermUsage {
-    Value(Value, TermOperand),
-    Block(Block, TargetKind),
-}
+// TODO somehow merge this with the targets iterator
+impl InternalIterator for OperandIterator<&Terminator> {
+    type Item = TermUsage<Value, Block>;
 
-pub fn for_each_usage_in_term(
-    term: &Terminator,
-    mut f: impl FnMut(TermUsage),
-) {
-    try_for_each_usage_in_term::<()>(
-        term,
-        |usage| {
-            f(usage);
-            Ok(())
-        },
-    ).unwrap();
-}
-
-pub fn try_for_each_usage_in_term<E>(
-    terminator: &Terminator,
-    mut f: impl FnMut(TermUsage) -> Result<(), E>,
-) -> Result<(), E> {
-    fn visit_target<E>(f: &mut impl FnMut(TermUsage) -> Result<(), E>, target: &Target, kind: TargetKind) -> Result<(), E> {
-        let &Target { block, ref args } = target;
-        f(TermUsage::Block(block, kind))?;
-        for (index, &value) in args.iter().enumerate() {
-            f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        fn visit_target<R>(
+            f: &mut impl FnMut(TermUsage<Value, Block>) -> ControlFlow<R>,
+            target: &Target,
+            kind: TargetKind,
+        ) -> ControlFlow<R> {
+            let &Target { block, ref args } = target;
+            f(TermUsage::Block(block, kind))?;
+            for (index, &value) in args.iter().enumerate() {
+                f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
+            }
+            ControlFlow::Continue(())
         }
-        Ok(())
+
+        match *self.0 {
+            Terminator::Jump { ref target } => {
+                visit_target(&mut f, target, TargetKind::Jump)?;
+            }
+            Terminator::Branch { cond, ref true_target, ref false_target } => {
+                f(TermUsage::Value(cond, TermOperand::BranchCond))?;
+                visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
+                visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
+            }
+            Terminator::Return { value } => {
+                f(TermUsage::Value(value, TermOperand::ReturnValue))?;
+            }
+            Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl<'a> InternalIterator for OperandIterator<&'a mut Terminator> {
+    type Item = TermUsage<&'a mut Value, &'a mut Block>;
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        fn visit_target<'a, R>(
+            f: &mut impl FnMut(TermUsage<&'a mut Value, &'a mut Block>) -> ControlFlow<R>,
+            target: &'a mut Target,
+            kind: TargetKind,
+        ) -> ControlFlow<R> {
+            let Target { block, args } = target;
+            f(TermUsage::Block(block, kind))?;
+            for (index, value) in args.iter_mut().enumerate() {
+                f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
+            }
+            ControlFlow::Continue(())
+        }
+
+        match self.0 {
+            Terminator::Jump { target } => {
+                visit_target(&mut f, target, TargetKind::Jump)?;
+            }
+            Terminator::Branch { cond, true_target, false_target } => {
+                f(TermUsage::Value(cond, TermOperand::BranchCond))?;
+                visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
+                visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
+            }
+            Terminator::Return { value } => {
+                f(TermUsage::Value(value, TermOperand::ReturnValue))?;
+            }
+            Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl<'a> InternalIterator for TargetsIterator<&'a Terminator> {
+    type Item = (&'a Target, TargetKind);
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        match self.0 {
+            Terminator::Jump { target } => f((target, TargetKind::Jump))?,
+            Terminator::Branch { cond: _, true_target, false_target } => {
+                f((true_target, TargetKind::BranchTrue))?;
+                f((false_target, TargetKind::BranchFalse))?;
+            }
+            Terminator::Return { value: _ } => {}
+            Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl<'a> InternalIterator for TargetsIterator<&'a mut Terminator> {
+    type Item = (&'a mut Target, TargetKind);
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        match self.0 {
+            Terminator::Jump { target } => f((target, TargetKind::Jump))?,
+            Terminator::Branch { cond: _, true_target, false_target } => {
+                f((true_target, TargetKind::BranchTrue))?;
+                f((false_target, TargetKind::BranchFalse))?;
+            }
+            Terminator::Return { value: _ } => {}
+            Terminator::Unreachable => {}
+            Terminator::LoopForever => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+pub struct ExpressionTreeIterator<'a> {
+    prog: &'a Program,
+    root: Expression,
+}
+
+impl Program {
+    /// Visit all values used as part of the expression tree starting from `root`.
+    /// `root` itself is not visited.
+    ///
+    /// The item values are `(value, parent, operand)`, where `value` is used as `operand` in `parent`.
+    pub fn expr_tree_iter(&self, root: Expression) -> ExpressionTreeIterator {
+        ExpressionTreeIterator { prog: self, root }
     }
 
-    match *terminator {
-        Terminator::Jump { ref target } => {
-            visit_target(&mut f, target, TargetKind::Jump)?;
-        }
-        Terminator::Branch { cond, ref true_target, ref false_target } => {
-            f(TermUsage::Value(cond, TermOperand::BranchCond))?;
-            visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
-            visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
-        }
-        Terminator::Return { value } => {
-            f(TermUsage::Value(value, TermOperand::ReturnValue))?;
-        }
-        Terminator::Unreachable => {}
-        Terminator::LoopForever => {}
-    }
-    Ok(())
-}
-
-/// Visit all values used as part of the expression tree starting from `expr`.
-/// `expr` itself is not visited.
-///
-/// The parameters of `f` are `(value, parent, operand)`, where `value` is used as `operand` in `parent`.
-pub fn try_for_each_expr_tree_operand<E, F: FnMut(Value, Expression, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, mut f: F) -> Result<(), E> {
-    // inner function to deal with getting an "&mut F" without a recursive type
-    fn inner_impl<E, F: FnMut(Value, Expression, ExprOperand) -> Result<(), E>>(prog: &Program, expr: Expression, f: &mut F) -> Result<(), E> {
-        try_for_each_usage_in_expr(prog.get_expr(expr), |value, usage| {
-            match value {
-                Value::Immediate(_) | Value::Global(_) | Value::Scoped(_) => f(value, expr, usage),
-                Value::Expr(inner) => {
-                    f(value, expr, usage)?;
-                    inner_impl(prog, inner, f)
-                },
+    /// The same as [Program::expr_tree_iter] but only yields non-expression leaf values.
+    pub fn expr_tree_leaf_iter(&self, root: Expression) -> impl InternalIterator<Item=(Value, Expression, ExprOperand)> + '_ {
+        self.expr_tree_iter(root).filter_map(|(value, parent, operand)| {
+            if value.is_expr() {
+                None
+            } else {
+                Some((value, parent, operand))
             }
         })
     }
-    inner_impl(prog, expr, &mut f)
+}
+
+impl InternalIterator for ExpressionTreeIterator<'_> {
+    type Item = (Value, Expression, ExprOperand);
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        // inner function to deal with getting an "&mut F" without a recursive type
+        fn inner_impl<R, F: FnMut((Value, Expression, ExprOperand)) -> ControlFlow<R>>(prog: &Program, expr: Expression, f: &mut F) -> ControlFlow<R> {
+            prog.get_expr(expr).operands().try_for_each_impl(|(value, usage)| {
+                f((value, expr, usage))?;
+                if let Value::Expr(inner) = value {
+                    inner_impl(prog, inner, f)?;
+                }
+                ControlFlow::Continue(())
+            })
+        }
+        inner_impl(self.prog, self.root, &mut f)
+    }
+}
+
+pub struct ReachableBlocksIterator<'a> {
+    prog: &'a Program,
+    root: Block,
+}
+
+impl Program {
+    /// Iterate over all blocks reachable from `root` while following terminators.
+    pub fn reachable_blocks(&self, root: Block) -> ReachableBlocksIterator {
+        ReachableBlocksIterator { prog: self, root }
+    }
+}
+
+impl InternalIterator for ReachableBlocksIterator<'_> {
+    type Item = Block;
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        let mut seen = HashSet::new();
+        let mut todo = VecDeque::new();
+
+        todo.push_back(self.root);
+
+        while let Some(curr) = todo.pop_front() {
+            if !seen.insert(curr) { continue; }
+            f(curr)?;
+
+            self.prog.get_block(curr).terminator.successors()
+                .for_each(|succ| todo.push_back(succ));
+        }
+
+        ControlFlow::Continue(())
+    }
 }
 
 impl Usage {

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use crate::mid::analyse::usage::TermUsage;
 
 use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, FunctionInfo, Instruction, Parameter, ParameterInfo, Program, Scoped, StackSlot, StackSlotInfo, Value};
 use crate::util::arena::Arena;
+use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug)]
 pub struct Recursive;
@@ -13,7 +15,7 @@ impl Program {
         let old_info = self.get_func(func);
 
         let old_slots = old_info.slots.clone();
-        let old_blocks = self.collect_blocks(self.get_func(func).entry);
+        let old_blocks = self.reachable_blocks(self.get_func(func).entry).collect_vec();
 
         let mut new_slots = vec![];
         let map_slot: HashMap<_, _> = old_slots.iter().map(|&old_slot| {
@@ -80,8 +82,13 @@ impl Program {
         }
         for &new_block in map_block_map.values() {
             let new_term = &mut self.nodes.blocks[new_block].terminator;
-            new_term.replace_blocks(map_block);
-            new_term.replace_values(|value| mapper.map_value(value));
+
+            new_term.operands_mut().for_each(|operand| {
+                match operand {
+                    TermUsage::Value(value, _) => *value = mapper.map_value(*value),
+                    TermUsage::Block(block, _) => *block = map_block(*block),
+                }
+            });
         }
 
         if mapper.recursive {
