@@ -28,7 +28,7 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
         let info = prog.get_block_mut(block);
         let old_term = std::mem::replace(&mut info.terminator, Terminator::Unreachable);
 
-        let (simplified, simple_term) = simplify_terminator(old_term.clone());
+        let (simplified, simple_term) = simplify_terminator(prog, old_term.clone());
         count_simplified += simplified as usize;
 
         let new_term = match simple_term {
@@ -59,7 +59,7 @@ pub fn flow_simplify(prog: &mut Program) -> bool {
     count != 0
 }
 
-fn simplify_terminator(terminator: Terminator) -> (bool, Terminator) {
+fn simplify_terminator(prog: &Program, terminator: Terminator) -> (bool, Terminator) {
     match terminator {
         Terminator::Branch { cond, true_target, false_target } => {
             match cond {
@@ -70,14 +70,35 @@ fn simplify_terminator(terminator: Terminator) -> (bool, Terminator) {
                     let target = if cst.as_bool().unwrap() { true_target } else { false_target };
                     (true, Terminator::Jump { target })
                 }
-                // otherwise it really is a branch
-                _ => (false, Terminator::Branch { cond, true_target, false_target })
+                _ => {
+                    // try cutting out unreachable branches
+                    // TODO technically we can add a hint that the condition must be true/false
+                    let true_unreachable = is_empty_unreachable(prog, true_target.block);
+                    let false_unreachable = is_empty_unreachable(prog, false_target.block);
+                    match (true_unreachable, false_unreachable) {
+                        (true, true) => (true, Terminator::Unreachable),
+                        (true, false) => (true, Terminator::Jump { target: false_target }),
+                        (false, true) => (true, Terminator::Jump { target: true_target }),
+                        // otherwise it really is a branch
+                        (false, false) => (false, Terminator::Branch { cond, true_target, false_target })
+                    }
+                }
             }
         }
 
         Terminator::Jump { .. } | Terminator::Return { .. } | Terminator::Unreachable | Terminator::LoopForever =>
             (false, terminator),
     }
+}
+
+fn is_empty_unreachable(prog: &Program, block: Block) -> bool {
+    let block_info = prog.get_block(block);
+    if !block_info.instructions.is_empty() {
+        return false;
+    }
+
+    let term = &block_info.terminator;
+    matches!(term, Terminator::Unreachable)
 }
 
 // TODO is there a way to merge find_block, find_target and find_term? they're all pretty similar...
@@ -97,7 +118,7 @@ fn find_block(prog: &Program, start: Block) -> (usize, Block) {
             break;
         }
 
-        match simplify_terminator(curr_info.terminator.clone()).1 {
+        match simplify_terminator(prog, curr_info.terminator.clone()).1 {
             Terminator::Jump { target: Target { block: next, args } } if args.is_empty() => {
                 skipped += 1;
                 curr = next;
@@ -128,7 +149,7 @@ fn find_target(prog: &Program, start_block: Block, start_target: Target) -> (usi
             break;
         }
 
-        match simplify_terminator(curr_info.terminator.clone()).1 {
+        match simplify_terminator(prog, curr_info.terminator.clone()).1 {
             Terminator::Jump { target: next } => {
                 if !blocks_seen.insert(next.block) {
                     break;
@@ -158,7 +179,7 @@ fn find_terminator(prog: &Program, start_block: Block, start_term: Terminator) -
             if !blocks_seen.insert(block) {
                 return (skipped, Terminator::LoopForever);
             }
-            curr_simple = simplify_terminator(block_info.terminator.clone()).1;
+            curr_simple = simplify_terminator(prog, block_info.terminator.clone()).1;
             skipped += 1;
         } else {
             break;
