@@ -582,8 +582,8 @@ mod test {
             let pos = Pos { file: FileId(0), line: 0, col: 0 };
             let expr = ast::Expression { span: Span { start: pos, end: pos }, kind: ExpressionKind::Null };
             let $origin = Origin::Expression(&expr);
-            let mut $types = TypeStore::default();
-            let mut $problem = TypeProblem::new(64);
+            let mut $types = TypeStore::new(64);
+            let mut $problem = TypeProblem::new();
         }
     }
 

@@ -136,6 +136,7 @@ impl Debug for BitInt {
 }
 
 #[cfg(test)]
+#[allow(clippy::unusual_byte_groupings)]
 mod tests {
     use std::fmt::Binary;
 
@@ -159,11 +160,11 @@ mod tests {
 
     #[test]
     fn test_overflow_unsigned() {
-        assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow { .. }));
         assert_match!(BitInt::from_unsigned(0, 0), Ok(_));
-        assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow { .. }));
 
-        assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow { .. }));
         assert_match!(BitInt::from_unsigned(16, 1 << 15), Ok(_));
     }
 
