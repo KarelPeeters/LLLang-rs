@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
@@ -90,6 +91,10 @@ impl<'a> TypeStore<'a> {
 
     pub fn define_type_ptr(&mut self, inner: Type) -> Type {
         self.define_type(TypeInfo::Pointer(inner))
+    }
+
+    pub fn info_size_as_int(&self, ty: Type) -> Cow<BasicTypeInfo> {
+        self[ty].size_as_int(self.ptr_size_bits)
     }
 
     pub fn format_type(&self, ty: Type) -> impl Display + '_ {
@@ -342,32 +347,28 @@ impl Display for IntTypeInfo {
     }
 }
 
-impl<'ast, T: Copy> TypeInfo<'ast, T> {
+impl<'ast, T> TypeInfo<'ast, T> {
     pub fn unwrap_int(&self) -> Option<IntTypeInfo> {
-        match self {
-            &TypeInfo::Int(info) => Some(info),
-            _ => None,
-        }
+        option_match!(self, &TypeInfo::Int(info) => info)
     }
 
-    pub fn unwrap_ptr(&self) -> Option<T> {
-        match self {
-            TypeInfo::Pointer(inner) => Some(*inner),
-            _ => None,
-        }
-    }
-}
-
-impl<'ast, T> TypeInfo<'ast, T> {
     pub fn unwrap_func(&self) -> Option<&FunctionTypeInfo<T>> {
+        option_match!(self, TypeInfo::Function(func) => func)
+    }
+
+    pub fn unwrap_ptr(&self) -> Option<&T> {
+        option_match!(self, TypeInfo::Pointer(inner) => inner)
+    }
+
+    /// Convert the `usize`/`isize` to the corresponding int type.
+    /// All other types remain identical.
+    pub fn size_as_int(&self, ptr_size_bits: u32) -> Cow<Self> where T: Clone {
         match self {
-            TypeInfo::Function(inner) => Some(inner),
-            _ => None,
+            &TypeInfo::IntSize(signed) => Cow::Owned(TypeInfo::Int(IntTypeInfo::new(signed, ptr_size_bits))),
+            _ => Cow::Borrowed(self),
         }
     }
-}
 
-impl<'ast, T> TypeInfo<'ast, T> {
     /// Map the representation for nested types while keeping the structure.
     pub fn map_ty<R>(&self, f: &mut impl FnMut(&T) -> R) -> TypeInfo<'ast, R> {
         match *self {

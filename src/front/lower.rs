@@ -30,7 +30,7 @@ impl LRValue {
     /// dereferenced.
     pub fn ty(self, types: &TypeStore) -> cst::Type {
         match self {
-            LRValue::Left(value) => types[value.ty].unwrap_ptr()
+            LRValue::Left(value) => *types[value.ty].unwrap_ptr()
                 .unwrap_or_else(|| panic!("LRValue::Left({:?}) should have pointer type", value)),
             LRValue::Right(value) => value.ty,
         }

@@ -316,17 +316,21 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     fn apply_add_sub_constraints(&mut self) {
+        // TODO try getting some information to flow from right to left?
+        //   should be possible if RHS is not isize
+
         let mut temp = std::mem::take(&mut self.add_sub_constraints);
 
         temp.retain(|&AddSubConstraint { left, right }| {
-            let left_info = if let Some(left) = &self.state[left.0].info {
-                left
-            } else {
-                return true;
+            let left_info = match &self.state[left.0].info {
+                Some(left) => left,
+                _ => return true,
             };
 
-            let required_right_ty = match left_info {
-                &TypeInfo::Int(info) => self.known(Origin::FullyKnown, TypeInfo::Int(info)),
+            // TODO does it make sense to define new vars here? can't we just propagate the old ones?
+            let required_right_ty = match *left_info {
+                TypeInfo::Int(info) => self.known(Origin::FullyKnown, TypeInfo::Int(info)),
+                TypeInfo::IntSize(signed) => self.known(Origin::FullyKnown, TypeInfo::IntSize(signed)),
                 TypeInfo::Pointer(_) => self.ty_isize,
                 _ => panic!(
                     "Expected either pointer type or integer type for {:?} at {:?}, got {:?}",

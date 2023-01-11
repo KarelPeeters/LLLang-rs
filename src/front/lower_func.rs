@@ -194,7 +194,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     fn append_load_lr(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
             LRValue::Left(value) => {
-                let inner_ty = self.types[value.ty].unwrap_ptr()
+                let inner_ty = *self.types[value.ty].unwrap_ptr()
                     .expect("Left should have pointer type");
                 let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
 
@@ -240,7 +240,10 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     fn append_cast(&mut self, expr: &'ast ast::Expression, value_before: TypedValue, ty_after: cst::Type) -> Result<'ast, ir::Value> {
-        match (&self.types[value_before.ty], &self.types[ty_after]) {
+        let info_before = self.types.info_size_as_int(value_before.ty);
+        let info_after = self.types.info_size_as_int(ty_after);
+
+        match (info_before.as_ref(), info_after.as_ref()) {
             (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
                 // IR pointers are untyped, so this is a no-op
                 Ok(value_before.ir)
@@ -352,7 +355,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     self.append_expr_loaded(after_left, scope, right)?;
 
                 let result_ty = self.expr_type(expr);
-                let result = if let Some(inner_ty) = self.types[result_ty].unwrap_ptr() {
+                let result = if let Some(&inner_ty) = self.types[result_ty].unwrap_ptr() {
                     //pointer offset
                     let offset_ir = match kind {
                         ast::BinaryOp::Add =>
@@ -374,6 +377,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     let arg_ty = match self.types[value_left.ty] {
                         TypeInfo::Bool => BinaryArgType::Bool,
                         TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
+                        TypeInfo::IntSize(signed) => BinaryArgType::Int(signed),
                         _ => panic!(),
                     };
                     self.prog.define_expr(binary_op_to_expr(
@@ -470,7 +474,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 //  but we could add support for RValue(Struct) and RValue(&Struct) as well
 
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
-                let target_inner_ty = self.types[target_value.ty].unwrap_ptr().unwrap();
+                let target_inner_ty = *self.types[target_value.ty].unwrap_ptr().unwrap();
 
                 let index = match (&self.types[target_inner_ty], index) {
                     (TypeInfo::Tuple(_), ast::DotIndexIndex::Tuple { index, .. }) => {
@@ -815,7 +819,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let index_ty_ptr = self.types.define_type_ptr(index_ty);
                 let index_ty_ir = self.types.map_type(self.prog, index_ty);
 
-                let index_info = self.types[index_ty].unwrap_int().unwrap();
+                let index_info = self.types.info_size_as_int(index_ty).unwrap_int().unwrap();
                 let const_one = ir::Const { ty: index_ty_ir, value: BitInt::from_unsigned(index_info.bits, 1).unwrap() };
 
                 //evaluate the range
