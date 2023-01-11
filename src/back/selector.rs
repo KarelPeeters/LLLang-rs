@@ -4,8 +4,9 @@ use itertools::Itertools;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
 use crate::back::layout::TupleLayout;
+use crate::back::register::RSize;
 
-use crate::back::vcode::{Size, VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
+use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 
@@ -180,7 +181,7 @@ impl Selector<'_> {
     fn append_mul(&mut self, left: Value, right: Value) -> VReg {
         let size = self.size_of_value(left);
         // TODO handle this case, the registers are different and annoying
-        assert!(size != Size::S8, "Mul for byte not implemented yet");
+        assert!(size != RSize::S8, "Mul for byte not implemented yet");
 
         let result_high = self.vregs.new_vreg();
         let result_low = self.vregs.new_vreg();
@@ -196,7 +197,7 @@ impl Selector<'_> {
         let size = self.size_of_value(left);
 
         // TODO handle this case, the registers are different and annoying
-        assert!(size != Size::S8, "Div for byte not implemented yet");
+        assert!(size != RSize::S8, "Div for byte not implemented yet");
 
         let low = self.append_value_to_reg(left);
         let div = self.append_value_to_rm(right);
@@ -280,12 +281,12 @@ impl Selector<'_> {
                 let layout = TupleLayout::for_types(prog, tuple_ty.fields.iter().copied());
 
                 let offset = layout.offsets[index as usize];
-                let offset = BitInt::from_unsigned(Size::FULL.bits(), offset as UStorage).unwrap();
+                let offset = BitInt::from_unsigned(RSize::FULL.bits(), offset as UStorage).unwrap();
                 let offset = VConst::Const(offset).into();
 
                 let base = self.append_value_to_reg(base);
                 let dest = self.vregs.new_vreg();
-                self.push(VInstruction::Binary(Size::FULL, "add", dest, base, offset));
+                self.push(VInstruction::Binary(RSize::FULL, "add", dest, base, offset));
                 dest
             },
             ExpressionInfo::PointerOffSet { ty, base, index } => {
@@ -363,7 +364,7 @@ impl Selector<'_> {
     }
 
     #[must_use]
-    fn force_rc(&mut self, value: VopRCM, size: Size) -> VopRC {
+    fn force_rc(&mut self, value: VopRCM, size: RSize) -> VopRC {
         match value {
             VopRCM::Undef => VopRC::Undef,
             VopRCM::Reg(reg) => reg.into(),
@@ -373,7 +374,7 @@ impl Selector<'_> {
     }
 
     #[must_use]
-    fn force_rm(&mut self, value: VopRCM, size: Size) -> VopRM {
+    fn force_rm(&mut self, value: VopRCM, size: RSize) -> VopRM {
         match value {
             VopRCM::Undef => VopRM::Undef,
             VopRCM::Reg(reg) => reg.into(),
@@ -383,12 +384,12 @@ impl Selector<'_> {
     }
 
     #[must_use]
-    fn force_reg(&mut self, value: VopRCM, size: Size) -> VReg {
+    fn force_reg(&mut self, value: VopRCM, size: RSize) -> VReg {
         match value {
             VopRCM::Undef => self.dummy_reg(),
             VopRCM::Reg(reg) => reg,
             VopRCM::Slot(index) => {
-                assert!(size == Size::FULL);
+                assert!(size == RSize::FULL);
                 let reg = self.vregs.new_vreg();
                 self.push(VInstruction::SlotPtr(reg, index));
                 reg
@@ -405,25 +406,26 @@ impl Selector<'_> {
         *self.slots.get(&slot).unwrap()
     }
 
-    fn size_of_value(&self, value: Value) -> Size {
+    fn size_of_value(&self, value: Value) -> RSize {
         self.size_of_ty(self.prog.type_of_value(value))
     }
 
-    fn size_of_ty(&self, ty: Type) -> Size {
+    fn size_of_ty(&self, ty: Type) -> RSize {
         match *self.prog.get_type(ty) {
             TypeInfo::Void => panic!("void type not supported"),
             TypeInfo::Integer { bits } => {
                 match bits {
                     // TODO bool size? when stored 8bits, but when doing other stuff FULL?
-                    1 => Size::FULL,
-                    8 => Size::S8,
-                    16 => Size::S16,
-                    32 => Size::S32,
+                    1 => RSize::FULL,
+                    8 => RSize::S8,
+                    16 => RSize::S16,
+                    32 => RSize::S32,
+                    64 => RSize::S64,
                     _ => panic!("integer type with {} bits not supported", bits),
                 }
             }
-            TypeInfo::Pointer => Size::FULL,
-            TypeInfo::Func(_) => Size::FULL,
+            TypeInfo::Pointer => RSize::FULL,
+            TypeInfo::Func(_) => RSize::FULL,
             TypeInfo::Tuple(_) => panic!("tuple type not supported"),
             TypeInfo::Array(_) => panic!("array type not supported"),
         }

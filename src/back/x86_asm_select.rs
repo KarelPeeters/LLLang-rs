@@ -5,12 +5,14 @@ use std::iter::zip;
 use env_logger::Builder;
 use itertools::Itertools;
 use log::LevelFilter;
-use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PRegSet, RegallocOptions, RegClass};
+use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
+use crate::back::abi::{ABI_PARAM_REGS, SPECIAL_PURPOSE_REGS};
 
+use crate::back::register::{Register, RSize};
 use crate::back::selector::{Selector, Symbols, VRegMapper};
-use crate::back::vcode::{ABI_PARAM_REGS, AsmContext, GENERAL_PREGS, InstInfo, Size, StackLayout, VInstruction, VRegPos, VSymbol};
+use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, VInstruction, VSymbol};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Program};
@@ -22,7 +24,7 @@ use crate::util::internal_iter::InternalIterator;
 pub fn lower_new(prog: &mut Program) -> String {
     Builder::new().filter_level(LevelFilter::Trace).init();
 
-    assert!(prog.ptr_size_bits() == 32, "This backend only supports 32 bit for now");
+    assert_eq!(prog.ptr_size_bits(), 64, "This backend only supports 64-bit");
 
     // the register allocator requires us to split critical edges
     // TODO merge edges without any moves again
@@ -37,10 +39,10 @@ pub fn lower_new(prog: &mut Program) -> String {
     let mut output = Output::new(true);
 
     let main_func = *prog.root_functions.get("main").unwrap();
-    output.appendln("_main:");
+    output.appendln("main:");
     output.appendln(format_args!("    call func_{}", main_func.index()));
-    output.appendln(format_args!("    push eax"));
-    output.appendln(format_args!("    call _ExitProcess@4"));
+    output.appendln(format_args!("    push rax"));
+    output.appendln(format_args!("    call ExitProcess"));
     output.appendln("");
 
     for (func, _) in &prog.nodes.funcs {
@@ -126,6 +128,7 @@ pub fn lower_new(prog: &mut Program) -> String {
             vregs: mapper.vreg_count(),
         };
 
+        // TODO use more registers
         let env = build_env(4);
         let options = RegallocOptions {
             verbose_log: true,
@@ -140,8 +143,8 @@ pub fn lower_new(prog: &mut Program) -> String {
 
         // TODO do all of this properly, depending on the calling convention
         let stack_layout = StackLayout {
-            slot_bytes: slots.len() * 4,
-            spill_bytes: result.num_spillslots * 4,
+            slot_bytes: slots.len() * 8,
+            spill_bytes: result.num_spillslots * 8,
             param_bytes: 0,
         };
         let mut ctx = AsmContext {
@@ -176,11 +179,11 @@ pub fn lower_new(prog: &mut Program) -> String {
                     InstOrEdit::Edit(edit) => {
                         let &Edit::Move { from, to } = edit;
 
-                        let to = VRegPos::from(to);
-                        let from = VRegPos::from(from);
+                        let to = AllocPos::from(to);
+                        let from = AllocPos::from(from);
 
                         output.comment(format_args!("    ; {:?}", edit));
-                        output.appendln(format_args!("    mov {}, {}", to.to_asm(Size::FULL), from.to_asm(Size::FULL)));
+                        output.appendln(format_args!("    mov {}, {}", to.to_asm(RSize::FULL), from.to_asm(RSize::FULL)));
                     }
                 }
             }
@@ -245,12 +248,12 @@ impl Output {
 
     fn finish(self, prog: &Program) -> Result<String, std::fmt::Error> {
         let mut ext_set: BTreeSet<&str> = prog.nodes.exts.iter().map(|(_, ext_info)| ext_info.name.as_str()).collect();
-        ext_set.insert("_ExitProcess@4");
+        ext_set.insert("ExitProcess");
 
         let mut result = String::new();
         let f = &mut result;
 
-        writeln!(f, "global _main")?;
+        writeln!(f, "global main")?;
 
         for ext in ext_set {
             writeln!(f, "extern {}", ext)?;
@@ -275,7 +278,12 @@ impl Output {
 }
 
 fn build_env(reg_count: usize) -> MachineEnv {
-    let regs = GENERAL_PREGS[..reg_count].to_vec();
+    let mut regs = Register::ALL.iter()
+        .filter(|reg| !SPECIAL_PURPOSE_REGS.contains(&reg))
+        .map(|reg| PReg::new(reg.index(), RegClass::Int))
+        .collect_vec();
+    drop(regs.drain(reg_count..));
+
     MachineEnv {
         preferred_regs_by_class: [regs, vec![]],
         non_preferred_regs_by_class: [vec![], vec![]],

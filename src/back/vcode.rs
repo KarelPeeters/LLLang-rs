@@ -4,85 +4,50 @@ use std::fmt::Write;
 use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
+use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG};
 
+use crate::back::register::{Register, RSize};
 use crate::mid::ir::{Block, Global, Program, Signed};
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::IndexType;
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Size {
-    S8,
-    S16,
-    S32,
-}
-
-impl Size {
-    pub const FULL: Size = Size::S32;
-
-    pub fn bits(self) -> u32 {
-        self.bytes() * 8
-    }
-
-    pub fn bytes(self) -> u32 {
-        match self {
-            Size::S8 => 1,
-            Size::S16 => 2,
-            Size::S32 => 4,
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            Size::S8 => 0,
-            Size::S16 => 1,
-            Size::S32 => 2,
-        }
-    }
-
-    pub fn keyword(self) -> &'static str {
-        match self {
-            Size::S8 => "byte",
-            Size::S16 => "word",
-            Size::S32 => "dword",
-        }
-    }
-}
 
 // TODO find proper names for these instructions, especially "binary" sucks
 #[derive(Debug)]
 pub enum VInstruction {
     // utilities for marking registers as defined
     DefAnyReg(VReg),
-    DefFixedReg(VReg, PReg),
+    DefFixedReg(VReg, Register),
 
     /// set the given register to zero
     Clear(VReg),
 
+    // TODO remove size from reg<-reg/reg<-const moves?
+    //   maybe make size a property of mem instead
     // read as "move into .. from .."
-    MovReg(Size, VReg, VopRCM),
-    MovMem(Size, VMem, VopRC),
+    MovReg(RSize, VReg, VopRCM),
+    MovMem(RSize, VMem, VopRC),
 
     /// target = base + index * size
-    Lea(VReg, VopRC, VReg, Size),
+    Lea(VReg, VopRC, VReg, RSize),
 
     /// args are "target = left (+) right"
     /// target and left must be the same register, this is handled with a register allocation constraint
-    Binary(Size, &'static str, VReg, VReg, VopRCM),
+    Binary(RSize, &'static str, VReg, VReg, VopRCM),
 
     /// result_high, result_low, left, right
-    Mul(Size, VReg, VReg, VReg, VopRM),
+    Mul(RSize, VReg, VReg, VReg, VopRM),
     /// signed, high, low, div, quot, rem
-    DivMod(Size, Signed, VReg, VReg, VopRM, VReg, VReg),
+    DivMod(RSize, Signed, VReg, VReg, VopRM, VReg, VReg),
 
     /// signed, size after, size before, after, before
-    Extend(Signed, Size, Size, VReg, VReg),
+    Extend(Signed, RSize, RSize, VReg, VReg),
 
     /// result, target, args
     Call(VReg, VopRCM, Vec<VReg>),
 
     // compare instructions
-    Cmp(Size, VReg, VopRCM),
-    Test(Size, VReg, VopRCM),
+    Cmp(RSize, VReg, VopRCM),
+    Test(RSize, VReg, VopRCM),
     // TODO allow mem operand here
     Setcc(&'static str, VReg, VReg),
 
@@ -136,13 +101,13 @@ pub enum VConst {
 
 // TODO merge this with VopRM? it's the same except it has a PReg instead of VReg
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum VRegPos {
-    PReg(PReg),
+pub enum AllocPos {
+    Reg(Register),
     Slot(usize),
 }
 
 impl VConst {
-    pub fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
+    pub fn to_asm(&self, ctx: &AsmContext, size: RSize) -> String {
         match self {
             VConst::Const(value) => {
                 assert_eq!(value.bits(), size.bits(), "Tried to store {:?} in {:?}", value, size);
@@ -157,34 +122,35 @@ impl VConst {
     }
 }
 
-impl From<Allocation> for VRegPos {
+impl From<Allocation> for AllocPos {
     fn from(value: Allocation) -> Self {
         match value.kind() {
             AllocationKind::None => unreachable!(),
-            AllocationKind::Reg => VRegPos::PReg(value.as_reg().unwrap()),
+            AllocationKind::Reg =>
+                AllocPos::Reg(Register::from_index(value.as_reg().unwrap().index())),
             AllocationKind::Stack => {
                 let slot = value.as_stack().unwrap();
                 assert!(slot.is_valid());
-                VRegPos::Slot(slot.index())
+                AllocPos::Slot(slot.index())
             }
         }
     }
 }
 
-impl VRegPos {
-    fn is_preg(self, preg: PReg) -> bool {
-        self == VRegPos::PReg(preg)
+impl AllocPos {
+    fn is_reg(self, reg: Register) -> bool {
+        self == AllocPos::Reg(reg)
     }
 
-    fn as_preg(self) -> Option<PReg> {
-        option_match!(self, VRegPos::PReg(preg) => preg)
+    fn as_reg(self) -> Option<Register> {
+        option_match!(self, AllocPos::Reg(preg) => preg)
     }
 
-    pub fn to_asm(self, size: Size) -> String {
+    pub fn to_asm(self, size: RSize) -> String {
         match self {
-            VRegPos::PReg(preg) => preg_to_asm(preg, size).to_string(),
-            // TODO change this 4 when moving to x64
-            VRegPos::Slot(index) => format!("[esp+{}]", 4 * index + 4),
+            AllocPos::Reg(reg) => reg.to_symbol(size).to_string(),
+            // TODO is this really the right expression?
+            AllocPos::Slot(index) => format!("[rsp+{}]", 8 * index + 8),
         }
     }
 }
@@ -196,6 +162,7 @@ pub enum VSymbol {
     Label(usize),
 }
 
+// TODO replace this with just VReg?
 #[derive(Debug, Copy, Clone, From)]
 pub enum VPReg {
     V(VReg),
@@ -216,7 +183,7 @@ pub struct VTarget {
 }
 
 impl VPReg {
-    fn to_asm(self, ctx: &AsmContext, size: Size) -> String {
+    fn to_asm(self, ctx: &AsmContext, size: RSize) -> String {
         match self {
             VPReg::V(vreg) => vreg.to_asm(ctx, size),
             VPReg::P(preg) => preg_to_asm(preg, size).to_string(),
@@ -256,7 +223,7 @@ impl From<VopRC> for VopRCM {
 
 pub trait VOperand {
     fn for_each_reg(&self, f: impl FnMut(RegOperand));
-    fn to_asm(&self, ctx: &AsmContext, size: Size) -> String;
+    fn to_asm(&self, ctx: &AsmContext, size: RSize) -> String;
     fn is_const_zero(&self) -> bool;
 }
 
@@ -268,11 +235,11 @@ impl VOperand for VMem {
         }
     }
 
-    fn to_asm(&self, ctx: &AsmContext, _: Size) -> String {
+    fn to_asm(&self, ctx: &AsmContext, _: RSize) -> String {
         let &VMem { reg, offset } = self;
 
         // pointer are full-sized, not the result size
-        let reg = reg.to_asm(ctx, Size::FULL);
+        let reg = reg.to_asm(ctx, RSize::FULL);
         if offset == 0 {
             format!("[{}]", reg)
         } else {
@@ -296,13 +263,13 @@ impl VOperand for VopRCM {
         }
     }
 
-    fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
+    fn to_asm(&self, ctx: &AsmContext, size: RSize) -> String {
         match *self {
             // TODO this only works because all Vops accept a register, which is kind of brittle
-            VopRCM::Undef => preg_to_asm(PREG_A, size).to_string(),
+            VopRCM::Undef => Register::A.to_symbol(size).to_string(),
             VopRCM::Slot(index) => {
                 let offset = ctx.stack_layout.slot_offset(index);
-                format!("[esp+{}]", offset)
+                format!("[rsp+{}]", offset)
             }
             VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(size),
             VopRCM::Const(cst) => cst.to_asm(ctx, size),
@@ -322,35 +289,9 @@ impl VOperand for VopRCM {
     }
 }
 
-// TODO this is not really the right order, but do we care?
-pub const PREG_A: PReg = PReg::new(0, RegClass::Int);
-pub const PREG_B: PReg = PReg::new(1, RegClass::Int);
-pub const PREG_C: PReg = PReg::new(2, RegClass::Int);
-pub const PREG_D: PReg = PReg::new(3, RegClass::Int);
-pub const PREG_SI: PReg = PReg::new(4, RegClass::Int);
-pub const PREG_DI: PReg = PReg::new(5, RegClass::Int);
-
-pub const GENERAL_PREGS: &[PReg] = &[PREG_A, PREG_B, PREG_C, PREG_D, PREG_SI, PREG_DI];
-
-pub const PREG_BASE_PTR: PReg = PReg::new(6, RegClass::Int);
-pub const PREG_STACK_PTR: PReg = PReg::new(7, RegClass::Int);
-
-const PREG_NAMES: &[[&str; 3]] = &[
-    ["eax", "ax", "al"],
-    ["ebx", "bx", "bl"],
-    ["ecx", "cx", "cl"],
-    ["edx", "dx", "dl"],
-    ["esi", "si", "sil"],
-    ["edi", "di", "dil"],
-];
-
-// TODO use some proper ABI settings, maybe depending on the platform?
-pub const ABI_PARAM_REGS: &[PReg] = &[PREG_A, PREG_B, PREG_C, PREG_D, PREG_SI, PREG_DI];
-pub const ABI_RETURN_REG: PReg = PREG_A;
-
-pub fn preg_to_asm(preg: PReg, size: Size) -> &'static str {
-    let slice = PREG_NAMES[preg.index()];
-    slice[slice.len() - 1 - size.index()]
+pub fn preg_to_asm(preg: PReg, size: RSize) -> &'static str {
+    let register = Register::from_index(preg.index());
+    register.to_symbol(size)
 }
 
 macro_rules! impl_vop_for {
@@ -359,7 +300,7 @@ macro_rules! impl_vop_for {
             fn for_each_reg(&self, f: impl FnMut(RegOperand)) {
                 VopRCM::from(*self).for_each_reg(f)
             }
-            fn to_asm(&self, ctx: &AsmContext, size: Size) -> String {
+            fn to_asm(&self, ctx: &AsmContext, size: RSize) -> String {
                 VopRCM::from(*self).to_asm(ctx, size)
             }
             fn is_const_zero(&self) -> bool {
@@ -381,7 +322,7 @@ pub struct AsmContext<'a> {
 }
 
 impl AsmContext<'_> {
-    pub fn map_reg(&self, reg: VReg) -> VRegPos {
+    pub fn map_reg(&self, reg: VReg) -> AllocPos {
         (*self.allocs.get(&reg).unwrap()).into()
     }
 }
@@ -421,7 +362,7 @@ impl VInstruction {
                 operands.push_def(dest);
             }
             VInstruction::DefFixedReg(dest, preg) => {
-                operands.push(Operand::reg_fixed_def(dest, preg));
+                operands.push_fixed_def(dest, preg);
             }
             VInstruction::Clear(dest) => {
                 operands.push_def(dest);
@@ -449,17 +390,17 @@ impl VInstruction {
                 operands.push_use(right);
             }
             VInstruction::Mul(_size, result_high, result_low, left, right) => {
-                operands.push(Operand::reg_fixed_use(left, PREG_A));
+                operands.push_fixed_use(left, Register::A);
                 operands.push_use(right);
-                operands.push(Operand::reg_fixed_def(result_high, PREG_D));
-                operands.push(Operand::reg_fixed_def(result_low, PREG_A));
+                operands.push_fixed_def(result_high, Register::D);
+                operands.push_fixed_def(result_low, Register::A);
             }
             VInstruction::DivMod(_size, _signed, high, low, div, quot, rem) => {
-                operands.push(Operand::reg_fixed_use(high, PREG_D));
-                operands.push(Operand::reg_fixed_use(low, PREG_A));
+                operands.push_fixed_use(high, Register::D);
+                operands.push_fixed_use(low, Register::A);
                 operands.push_use(div);
-                operands.push(Operand::reg_fixed_def(quot, PREG_A));
-                operands.push(Operand::reg_fixed_def(rem, PREG_D));
+                operands.push_fixed_def(quot, Register::A);
+                operands.push_fixed_def(rem, Register::D);
             }
             VInstruction::Extend(_signed, _size_after, _size_before, after, before) => {
                 operands.push_def(after);
@@ -468,10 +409,10 @@ impl VInstruction {
             VInstruction::Call(result, target, ref args) => {
                 for (index, &arg) in args.iter().enumerate() {
                     let preg = ABI_PARAM_REGS[index];
-                    operands.push(Operand::reg_fixed_use(arg, preg));
+                    operands.push_fixed_use(arg, preg);
                 }
                 operands.push_use(target);
-                operands.push(Operand::reg_fixed_def(result, ABI_RETURN_REG));
+                operands.push_fixed_def(result, ABI_RETURN_REG);
             }
             VInstruction::Cmp(_size, left, right) | VInstruction::Test(_size, left, right) => {
                 operands.push_use(left);
@@ -484,7 +425,7 @@ impl VInstruction {
                 // in x86 we can only use the first 4 registers for setcc
                 // regalloc2 only supports either all regs or a single one, so we have to pick the latter
                 // TODO remove this limitation once we switch to x64
-                operands.push(Operand::reg_fixed_use(src, PREG_A));
+                operands.push_fixed_use(src, Register::A);
             }
 
             VInstruction::Jump(ref target) => {
@@ -497,7 +438,7 @@ impl VInstruction {
             }
             VInstruction::ReturnAndStackFree(value) => {
                 if let Some(value) = value {
-                    operands.push(Operand::reg_fixed_use(value, ABI_RETURN_REG));
+                    operands.push_fixed_use(value, ABI_RETURN_REG);
                 }
                 return InstInfo::ret(operands);
             }
@@ -519,16 +460,17 @@ impl VInstruction {
     pub fn to_asm(&self, ctx: &AsmContext) -> String {
         match *self {
             VInstruction::DefAnyReg(dest) =>
-                format!("; def any {}", dest.to_asm(ctx, Size::FULL)),
+                format!("; def any {}", dest.to_asm(ctx, RSize::FULL)),
             VInstruction::DefFixedReg(dest, preg) => {
-                assert!(ctx.map_reg(dest).is_preg(preg));
-                format!("; def fixed {}", dest.to_asm(ctx, Size::FULL))
+                assert!(ctx.map_reg(dest).is_reg(preg));
+                format!("; def fixed {}", dest.to_asm(ctx, RSize::FULL))
             }
             VInstruction::Clear(dest) => {
-                let dest = dest.to_asm(ctx, Size::FULL);
+                let dest = dest.to_asm(ctx, RSize::FULL);
                 format!("xor {}, {}", dest, dest)
             }
             VInstruction::MovReg(size, dest, source) => {
+                // TODO always zero- or sign-extend?
                 let dest = dest.to_asm(ctx, size);
                 if source.is_const_zero() {
                     format!("xor {}, {}", dest, dest)
@@ -547,9 +489,9 @@ impl VInstruction {
                 }
             }
             VInstruction::Lea(dest, base, index, scale) => {
-                let dest = dest.to_asm(ctx, Size::FULL);
-                let base = base.to_asm(ctx, Size::FULL);
-                let index = index.to_asm(ctx, Size::FULL);
+                let dest = dest.to_asm(ctx, RSize::FULL);
+                let base = base.to_asm(ctx, RSize::FULL);
+                let index = index.to_asm(ctx, RSize::FULL);
                 let scale = scale.bytes();
 
                 if scale == 1 {
@@ -563,10 +505,10 @@ impl VInstruction {
                 format!("{} {}, {}", instr, left.to_asm(ctx, size), right.to_asm(ctx, size))
             }
             VInstruction::Mul(size, result_high, result_low, left, right) => {
-                assert!(size != Size::S8);
-                assert!(ctx.map_reg(result_high).is_preg(PREG_D));
-                assert!(ctx.map_reg(result_low).is_preg(PREG_A));
-                assert!(ctx.map_reg(left).is_preg(PREG_A));
+                assert!(size != RSize::S8);
+                assert!(ctx.map_reg(result_high).is_reg(Register::D));
+                assert!(ctx.map_reg(result_low).is_reg(Register::A));
+                assert!(ctx.map_reg(left).is_reg(Register::A));
 
                 if let VopRM::Reg(_) = right {
                     format!("mul {}", right.to_asm(ctx, size))
@@ -575,11 +517,11 @@ impl VInstruction {
                 }
             }
             VInstruction::DivMod(size, signed, high, low, div, quot, rem) => {
-                assert!(size != Size::S8);
-                assert!(ctx.map_reg(high).is_preg(PREG_D));
-                assert!(ctx.map_reg(low).is_preg(PREG_A));
-                assert!(ctx.map_reg(quot).is_preg(PREG_A));
-                assert!(ctx.map_reg(rem).is_preg(PREG_D));
+                assert!(size != RSize::S8);
+                assert!(ctx.map_reg(high).is_reg(Register::D));
+                assert!(ctx.map_reg(low).is_reg(Register::A));
+                assert!(ctx.map_reg(quot).is_reg(Register::A));
+                assert!(ctx.map_reg(rem).is_reg(Register::D));
 
                 let instr = match signed {
                     Signed::Signed => "idiv",
@@ -601,21 +543,21 @@ impl VInstruction {
                 format!("{} {}, {}", instr, after.to_asm(ctx, size_after), before.to_asm(ctx, size_before))
             }
             VInstruction::Call(_result, target, ref _args) => {
-                format!("call {}", target.to_asm(ctx, Size::FULL))
+                format!("call {}", target.to_asm(ctx, RSize::FULL))
             }
             VInstruction::Cmp(size, left, right) =>
                 format!("cmp {}, {}", left.to_asm(ctx, size), right.to_asm(ctx, size)),
             VInstruction::Test(size, left, right) =>
                 format!("test {}, {}", left.to_asm(ctx, size), right.to_asm(ctx, size)),
             VInstruction::Setcc(instr, dest, source) => {
-                assert_eq!(ctx.map_reg(dest), ctx.map_reg(source));
-                let preg = ctx.map_reg(dest).as_preg().unwrap();
-                format!("{} {}", instr, preg_to_asm(preg, Size::S8))
+                let dest = ctx.map_reg(dest);
+                assert_eq!(dest, ctx.map_reg(source));
+                format!("{} {}", instr, dest.to_asm(RSize::S8))
             }
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", VSymbol::Block(target.block).to_asm(ctx)),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
-                let cond = cond.to_asm(ctx, Size::FULL);
+                let cond = cond.to_asm(ctx, RSize::FULL);
 
                 let mut s = String::new();
                 let f = &mut s;
@@ -628,7 +570,7 @@ impl VInstruction {
             VInstruction::ReturnAndStackFree(_value) => {
                 let bytes = ctx.stack_layout.free_bytes();
                 if bytes != 0 {
-                    format!("add esp, {}\nret 0", bytes)
+                    format!("add rsp, {}\nret 0", bytes)
                 } else {
                     "ret 0".to_owned()
                 }
@@ -640,19 +582,19 @@ impl VInstruction {
             VInstruction::StackAlloc => {
                 let bytes = ctx.stack_layout.alloc_bytes();
                 if bytes != 0 {
-                    format!("sub esp, {}", bytes)
+                    format!("sub rsp, {}", bytes)
                 } else {
                     "".to_owned()
                 }
             }
             VInstruction::SlotPtr(dest, index) => {
-                let dest = ctx.map_reg(dest).to_asm(Size::FULL);
+                let dest = ctx.map_reg(dest).to_asm(RSize::FULL);
                 let offset = ctx.stack_layout.slot_offset(index);
 
                 if offset == 0 {
-                    format!("mov {}, esp", dest)
+                    format!("mov {}, rsp", dest)
                 } else {
-                    format!("lea {}, [esp+{}]", dest, offset)
+                    format!("lea {}, [rsp+{}]", dest, offset)
                 }
             }
         }
@@ -673,6 +615,14 @@ impl Operands {
 
     fn push(&mut self, operand: Operand) {
         self.operands.push(operand)
+    }
+
+    fn push_fixed_use(&mut self, vreg: VReg, reg: Register) {
+        self.push(Operand::reg_fixed_use(vreg, PReg::new(reg.index(), RegClass::Int)))
+    }
+
+    fn push_fixed_def(&mut self, vreg: VReg, reg: Register) {
+        self.push(Operand::reg_fixed_def(vreg, PReg::new(reg.index(), RegClass::Int)))
     }
 
     fn push_use(&mut self, vop: impl VOperand) {
