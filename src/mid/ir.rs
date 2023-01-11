@@ -205,8 +205,8 @@ pub enum TypeInfo {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum CallingConvention {
-    /// Win32 __stdcall.
-    StdCall,
+    Win32StdCall,
+
     /// The backend can freely choose the calling convention.
     /// The only requirement is that it's the same for functions with the same signature.
     Custom,

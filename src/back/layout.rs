@@ -1,6 +1,8 @@
 use std::cmp::max;
+use regalloc2::PReg;
+use crate::back::vcode::Size;
 
-use crate::mid::ir::{ArrayType, Program, TupleType, Type, TypeInfo};
+use crate::mid::ir::{ArrayType, CallingConvention, FunctionType, Program, TupleType, Type, TypeInfo};
 
 //TODO cache all of this layout stuff somewhere
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -85,6 +87,54 @@ impl TupleLayout {
             layout: Layout::new(size, alignment),
             offsets,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CallLayout {
+    caller_stack_alloc: usize,
+    caller_stack_free: usize,
+    callee_stack_free: usize,
+
+    param_positions: Vec<ArgPosition>,
+    ret_position: ArgPosition,
+}
+
+pub enum ArgPosition {
+    Reg(PReg),
+    /// offset from base of caller_stack_alloc
+    Stack(usize),
+}
+
+impl CallLayout {
+    fn for_type(prog: &Program, ty: &FunctionType) -> Self {
+        let &FunctionType { ref params, ret, conv } = ty;
+
+
+        let mut stack_params = vec![];
+        let mut param_positions = vec![];
+
+        // TODO use a better calling
+
+        assert!(conv == CallingConvention::Win32StdCall || conv == CallingConvention::Custom);
+        for &param in params {
+            let param_layout = Layout::for_type(prog, param);
+            if param_layout.size_bytes <= Size::FULL.bytes() as i32 {
+
+            }
+        }
+
+        todo!()
+    }
+
+    fn for_type_stdcall(prog: &Program, ty: &FunctionType) -> Self {
+        // pass everything on the stack, right to left
+        // caller allocates stack, callee frees
+    }
+
+    fn for_type_custom(prog: &Program, ty: &FunctionType) -> Self {
+        // TODO do something better here, pass more stuff in registers
+        Self::for_type_stdcall(prog, ty)
     }
 }
 
