@@ -59,9 +59,11 @@ declare_tokens![
     U8("u8"),
     U16("u16"),
     U32("u32"),
+    U64("u64"),
     I8("i8"),
     I16("i16"),
     I32("i32"),
+    I64("i64"),
 
     True("true"),
     False("false"),
@@ -1174,9 +1176,11 @@ impl<'s> Parser<'s> {
             TT::I8 => Some(IntTypeInfo::I8),
             TT::I16 => Some(IntTypeInfo::I16),
             TT::I32 => Some(IntTypeInfo::I32),
+            TT::I64 => Some(IntTypeInfo::I64),
             TT::U8 => Some(IntTypeInfo::U8),
             TT::U16 => Some(IntTypeInfo::U16),
             TT::U32 => Some(IntTypeInfo::U32),
+            TT::U64 => Some(IntTypeInfo::U64),
             _ => None,
         };
 
@@ -1199,7 +1203,7 @@ impl<'s> Parser<'s> {
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
 
-            TT::I8 | TT::I16 | TT::I32 | TT::U8 | TT::U16 | TT::U32 => Ok(self.maybe_int_ty()?.unwrap()),
+            TT::I8 | TT::I16 | TT::I32 | TT::I64 | TT::U8 | TT::U16 | TT::U32 | TT::U64 => Ok(self.maybe_int_ty()?.unwrap()),
 
             TT::Ampersand => {
                 self.pop()?;

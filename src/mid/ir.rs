@@ -152,7 +152,7 @@ impl Program {
     }
 
     pub fn const_null_ptr(&self) -> Const {
-        Const::new(self.ty_ptr, BitInt::zero(PTR_SIZE_BITS))
+        Const::new(self.ty_ptr, BitInt::zero(self.ptr_size_bits))
     }
 
     pub fn const_bool(&self, value: bool) -> Const {
@@ -730,10 +730,6 @@ pub struct ExternInfo {
     pub name: String,
     pub ty: Type,
 }
-
-pub type PtrStorageType = u32;
-
-pub const PTR_SIZE_BITS: u32 = PtrStorageType::BITS;
 
 // TODO think about how ptr-typed consts are supposed to work
 //   if we decide to keep those separate, remove this struct and rename Value:::Const to ::IntConst

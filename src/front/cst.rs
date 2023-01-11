@@ -2,7 +2,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
 
-use derive_more::Constructor;
 use itertools::Itertools;
 
 use crate::front::{ast, error};
@@ -10,7 +9,7 @@ use crate::front::error::{Error, Result};
 use crate::front::lower::LRValue;
 use crate::front::scope::Scope;
 use crate::front::type_solver::TypeVar;
-use crate::mid::ir::{PTR_SIZE_BITS, Signed};
+use crate::mid::ir::Signed;
 use crate::util::arena::{Arena, ArenaSet};
 
 new_index_type!(pub Module);
@@ -33,10 +32,7 @@ pub struct TypeStore<'a> {
     ty_wildcard: Type,
     ty_void: Type,
     ty_bool: Type,
-
     ty_u8: Type,
-    ty_isize: Type,
-    ty_usize: Type,
 }
 
 impl<'a> Debug for TypeStore<'a> {
@@ -58,10 +54,8 @@ impl<'a> Default for TypeStore<'a> {
         let ty_bool = types.push(TypeInfo::Bool);
 
         let ty_u8 = types.push(TypeInfo::Int(IntTypeInfo::U8));
-        let ty_isize = types.push(TypeInfo::Int(IntTypeInfo::ISIZE));
-        let ty_usize = types.push(TypeInfo::Int(IntTypeInfo::USIZE));
 
-        Self { types, ty_wildcard, ty_void, ty_bool, ty_u8, ty_isize, ty_usize }
+        Self { types, ty_wildcard, ty_void, ty_bool, ty_u8 }
     }
 }
 
@@ -76,14 +70,6 @@ impl<'a> TypeStore<'a> {
 
     pub fn type_u8(&self) -> Type {
         self.ty_u8
-    }
-
-    pub fn type_isize(&self) -> Type {
-        self.ty_isize
-    }
-
-    pub fn type_usize(&self) -> Type {
-        self.ty_usize
     }
 
     pub fn new_placeholder(&mut self) -> Type {
@@ -314,22 +300,27 @@ pub enum TypeInfo<'ast, T> {
     Struct(StructTypeInfo<'ast>),
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Constructor)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct IntTypeInfo {
     pub signed: Signed,
     pub bits: u32,
 }
 
 impl IntTypeInfo {
-    pub const I8: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 8 };
-    pub const I16: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 16 };
-    pub const I32: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: 32 };
-    pub const U8: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 8 };
-    pub const U16: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 16 };
-    pub const U32: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: 32 };
+    pub const fn new(signed: Signed, bits: u32) -> Self {
+        Self { signed, bits }
+    }
+}
 
-    pub const ISIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Signed, bits: PTR_SIZE_BITS };
-    pub const USIZE: IntTypeInfo = IntTypeInfo { signed: Signed::Unsigned, bits: PTR_SIZE_BITS };
+impl IntTypeInfo {
+    pub const I8: IntTypeInfo = IntTypeInfo::new(Signed::Signed, 8);
+    pub const I16: IntTypeInfo = IntTypeInfo::new(Signed::Signed, 16);
+    pub const I32: IntTypeInfo = IntTypeInfo::new(Signed::Signed, 32);
+    pub const I64: IntTypeInfo = IntTypeInfo::new(Signed::Signed, 64);
+    pub const U8: IntTypeInfo = IntTypeInfo::new(Signed::Unsigned, 8);
+    pub const U16: IntTypeInfo = IntTypeInfo::new(Signed::Unsigned, 16);
+    pub const U32: IntTypeInfo = IntTypeInfo::new(Signed::Unsigned, 32);
+    pub const U64: IntTypeInfo = IntTypeInfo::new(Signed::Unsigned, 64);
 }
 
 impl Display for IntTypeInfo {

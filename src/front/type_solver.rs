@@ -102,8 +102,8 @@ impl IndexKind<'_> {
     }
 }
 
-impl<'ast> Default for TypeProblem<'ast> {
-    fn default() -> Self {
+impl<'ast> TypeProblem<'ast> {
+    pub fn new(ptr_size_bits: u32) -> Self {
         let mut problem = TypeProblem {
             state: vec![],
             matches: Default::default(),
@@ -121,14 +121,15 @@ impl<'ast> Default for TypeProblem<'ast> {
         problem.ty_bool = problem.known(Origin::FullyKnown, TypeInfo::Bool);
 
         problem.ty_u8 = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::U8));
-        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::ISIZE));
-        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::USIZE));
+
+        let isize_info = IntTypeInfo::new(Signed::Signed, ptr_size_bits);
+        let usize_info = IntTypeInfo::new(Signed::Unsigned, ptr_size_bits);
+        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::Int(isize_info));
+        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::Int(usize_info));
 
         problem
     }
-}
 
-impl<'ast> TypeProblem<'ast> {
     /// The current amount of `TypeVar`s defined in this problem.
     pub fn len(&self) -> usize {
         self.state.len()
@@ -572,7 +573,7 @@ mod test {
             let expr = ast::Expression { span: Span { start: pos, end: pos }, kind: ExpressionKind::Null };
             let $origin = Origin::Expression(&expr);
             let mut $types = TypeStore::default();
-            let mut $problem = TypeProblem::default();
+            let mut $problem = TypeProblem::new(64);
         }
     }
 

@@ -9,6 +9,7 @@ use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, IntTypeInfo, ScopedValu
 use crate::front::error::{Error, InvalidLiteralReason, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
+use crate::front::type_solver::TypeProblem;
 use crate::mid::ir;
 use crate::mid::ir::Signed;
 use crate::mid::util::bit_int::{BitInt, IStorage, UStorage};
@@ -136,7 +137,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let mut types = MappingTypeStore::wrap(prog.types);
 
     // TODO expose this as an option somewhere
-    let mut ir_prog = ir::Program::new(32);
+    let mut ir_prog = ir::Program::new(64);
 
     //create ir function for each cst function
     let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()
@@ -187,7 +188,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
 
                     expr_type_map: Default::default(),
                     decl_type_map: Default::default(),
-                    problem: Default::default(),
+                    problem: TypeProblem::new(ir_prog.ptr_size_bits()),
                 };
                 type_state.visit_func(func_decl)?;
 
