@@ -135,7 +135,8 @@ impl<'a> MappingTypeStore<'a> {
 pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let mut types = MappingTypeStore::wrap(prog.types);
 
-    let mut ir_prog = ir::Program::default();
+    // TODO expose this as an option somewhere
+    let mut ir_prog = ir::Program::new(32);
 
     //create ir function for each cst function
     let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()

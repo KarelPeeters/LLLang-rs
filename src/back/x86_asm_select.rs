@@ -22,6 +22,8 @@ use crate::util::internal_iter::InternalIterator;
 pub fn lower_new(prog: &mut Program) -> String {
     Builder::new().filter_level(LevelFilter::Trace).init();
 
+    assert!(prog.ptr_size_bits() == 32, "This backend only supports 32 bit for now");
+
     // the register allocator requires us to split critical edges
     // TODO merge edges without any moves again
     split_critical_edges(prog);

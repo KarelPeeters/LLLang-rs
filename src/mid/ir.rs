@@ -66,6 +66,8 @@ pub type ProgramTypes = ArenaSet<Type, TypeInfo>;
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    ptr_size_bits: u32,
+
     //TODO we've lost distinct indices! is there an easy way to get that back?
     //all values that may be used multiple times are stored as nodes
     pub nodes: Arenas,
@@ -74,35 +76,40 @@ pub struct Program {
     pub types: ProgramTypes,
 
     //predefined types
-    #[allow(dead_code)]
     ty_void: Type,
-    #[allow(dead_code)]
     ty_ptr: Type,
-    #[allow(dead_code)]
     ty_bool: Type,
-    #[allow(dead_code)]
     ty_isize: Type,
 
     pub root_functions: HashMap<String, Function>,
 }
 
-impl Default for Program {
+impl Program {
     /// Return the program representing `fn main() -> void { unreachable(); }`
-    fn default() -> Self {
+    pub fn new(ptr_size_bits: u32) -> Self {
         let mut types = ArenaSet::default();
 
         let ty_void = types.push(TypeInfo::Void);
         let ty_ptr = types.push(TypeInfo::Pointer);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
-        // TODO change this when we switch to 64-bit
-        //   or just make this configurable?
-        let ty_isize = types.push(TypeInfo::Integer { bits: 32 });
+        let ty_isize = types.push(TypeInfo::Integer { bits: ptr_size_bits });
 
-        Program { nodes: Arenas::default(), types, ty_void, ty_ptr, ty_bool, ty_isize, root_functions: Default::default() }
+        Program {
+            ptr_size_bits,
+            nodes: Arenas::default(),
+            types,
+            ty_void,
+            ty_ptr,
+            ty_bool,
+            ty_isize,
+            root_functions: Default::default()
+        }
     }
-}
 
-impl Program {
+    pub fn ptr_size_bits(&self) -> u32 {
+        self.ptr_size_bits
+    }
+
     // TODO maybe make self.types use internal mutability?
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)

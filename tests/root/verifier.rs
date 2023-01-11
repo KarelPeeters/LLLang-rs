@@ -3,7 +3,7 @@ use lllang::mid::util::verify::verify;
 
 #[test]
 fn slot_used_in_param() {
-    let mut prog = Program::default();
+    let mut prog = Program::new(64);
 
     let bits = 32;
     let ty = prog.define_type_int(bits);
