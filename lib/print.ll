@@ -9,9 +9,9 @@ fn println() {
 }
 
 fn print_str(str: &u8, len: u32) -> bool {
-    let stdout = win32::_GetStdHandle@4(win32::STD_OUTPUT_HANDLE);
+    let stdout = win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
     let written;
-    return win32::_WriteFile@20(stdout, str as &void, len, &written, null) != 0;
+    return win32::WriteFile(stdout, str as &void, len, &written, null) != 0;
 }
 
 fn print_char(char: u8) {

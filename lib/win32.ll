@@ -25,15 +25,15 @@ type LPCSTR = &i8; // pointer to zero-terminated string
 type LPDWORD = &u32;
 
 // heapapi.h
-extern fn _GetProcessHeap@0() -> HANDLE;
+extern fn GetProcessHeap() -> HANDLE;
 
-extern fn _HeapAlloc@12(
+extern fn HeapAlloc(
     hHeap: HANDLE,
     dwFlags: DWORD,
     dwBytes: SIZE_T
 ) -> LPVOID;
 
-extern fn _HeapFree@12(
+extern fn HeapFree(
     hHeap: HANDLE,
     dwFlags: DWORD,
     lpMem: LPVOID
@@ -56,11 +56,11 @@ const TRUNCATE_EXISTING: DWORD = 5;
 
 const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
 
-extern fn _GetStdHandle@4(
+extern fn GetStdHandle(
     nStdHandle: DWORD
 ) -> HANDLE;
 
-extern fn _CreateFileA@28(
+extern fn CreateFileA(
     lpFileName: LPCSTR,
     dwDesiredAccess: DWORD,
     dwShareMode: DWORD,
@@ -70,7 +70,7 @@ extern fn _CreateFileA@28(
     hTemplateFile: HANDLE,
 ) -> HANDLE;
 
-extern fn _WriteFile@20(
+extern fn WriteFile(
     hFile: HANDLE,
     lpBuffer: LPCVOID,
     nNumberOfBytesToWrite: DWORD,
@@ -81,9 +81,9 @@ extern fn _WriteFile@20(
 // processthreadsapi.h
 const CREATE_SUSPENDED: DWORD = 0x00000004;
 
-extern fn _ExitProcess@4(exitCode: UINT);
+extern fn ExitProcess(exitCode: UINT);
 
-extern fn _CreateThread@24(
+extern fn CreateThread(
   lpThreadAttributes: &void, // TODO define the proper struct for this
   dwStackSize: SIZE_T,
   lpStartAddress: (LPVOID) -> DWORD,
@@ -93,12 +93,12 @@ extern fn _CreateThread@24(
 ) -> HANDLE;
 
 // synchapi.h
-extern fn _WaitForSingleObject@8(
+extern fn WaitForSingleObject(
   hHandle: HANDLE,
   dwMilliseconds: DWORD,
 ) -> DWORD;
 
-extern fn _WaitForMultipleObjects@16(
+extern fn WaitForMultipleObjects(
   nCount: DWORD,
   lpHandles: &HANDLE,
   bWaitAll: BOOL,
@@ -106,6 +106,6 @@ extern fn _WaitForMultipleObjects@16(
 ) -> DWORD;
 
 // sysinfoapi.h
-extern fn _GetPhysicallyInstalledSystemMemory@4(
+extern fn GetPhysicallyInstalledSystemMemory(
     TotalMemoryInKilobytes: &ULONGLONG,
 ) -> BOOL;
