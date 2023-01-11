@@ -18,7 +18,7 @@ fn print_char(char: u8) {
     print_str(&char, 1);
 }
 
-fn print_int(x: i32) {
+fn print_int(x: i64) {
     if x == 0 {
         print_char(CHAR_ZERO);
         return;
@@ -29,17 +29,17 @@ fn print_int(x: i32) {
     }
 
     let buffer: [u8; 16];
-    let buffer_size = 16;
+    let buffer_size: u32 = 16;
 
     let i = buffer_size;
 
     while x != 0 {
         i = i - 1;
-        buffer[i] = CHAR_ZERO + (x % 10) as u8;
+        buffer[i as usize] = CHAR_ZERO + (x % 10) as u8;
         x = x / 10;
     }
 
-    print_str(&buffer[i], buffer_size - i);
+    print_str(&buffer[i as usize], (buffer_size - i));
 }
 
 fn println_str(s: &u8, len: u32) {
@@ -47,7 +47,7 @@ fn println_str(s: &u8, len: u32) {
     println();
 }
 
-fn println_int(x: i32) {
+fn println_int(x: i64) {
     print_int(x);
     println();
 }

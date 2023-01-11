@@ -1,6 +1,6 @@
 use win32;
 
-fn malloc(size: u32) -> &void {
+fn malloc(size: usize) -> &void {
     let heap = win32::_GetProcessHeap@0();
     return win32::_HeapAlloc@12(heap, 0, size);
 }
@@ -11,8 +11,9 @@ fn free(mem: &void) -> bool {
 }
 
 /// overlapping memory is undefined behavior
-fn memcpy(dest: &u8, src: &u8, len: u32) {
+fn memcpy(dest: &u8, src: &u8, len: usize) {
     for i in 0..len {
-        *(dest + i as i32) = *(src + i as i32);
+        // TODO switch to unsigned for ptr offset? does it even matter?
+        *(dest + i as isize) = *(src + i as isize);
     }
 }

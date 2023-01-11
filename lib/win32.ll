@@ -2,13 +2,21 @@
 //   hopefully the compiler is fast enough to deal with the thousands of items that will yield :)
 
 // minwindef.h
-// NOTE: windows int and long are both 32-bit
 type BYTE = u8;
+type SHORT = i16;
+type USHORT = u16;
+// bool, int, long, dword are all 32-bit
 type BOOL = i32;
 type DWORD = u32;
 type INT = i32;
 type UINT = u32;
-type SIZE_T = u32;
+type LONG = i32;
+type ULONG = u32;
+// only "long long" is 64-bit
+type LONGLONG = i64;
+type ULONGLONG = u64;
+
+type SIZE_T = usize;
 type HANDLE = &void;
 
 type LPVOID = &void;
@@ -99,6 +107,5 @@ extern fn _WaitForMultipleObjects@16(
 
 // sysinfoapi.h
 extern fn _GetPhysicallyInstalledSystemMemory@4(
-    // TODO use proper 64-bit int for this
-    TotalMemoryInKilobytes: &[u32; 2]
+    TotalMemoryInKilobytes: &ULONGLONG,
 ) -> BOOL;
