@@ -40,7 +40,7 @@ struct ResolveState<'a> {
 
 /// Collect all declared items into local_scope and populate the maps.
 fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
-    let mut store = TypeStore::default();
+    let mut store = TypeStore::new(ast.ptr_size_bits);
     let common_ph_type = store.new_placeholder();
 
     let mut cst = ItemStore::default();

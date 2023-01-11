@@ -103,7 +103,7 @@ impl IndexKind<'_> {
 }
 
 impl<'ast> TypeProblem<'ast> {
-    pub fn new(ptr_size_bits: u32) -> Self {
+    pub fn new() -> Self {
         let mut problem = TypeProblem {
             state: vec![],
             matches: Default::default(),
@@ -122,10 +122,8 @@ impl<'ast> TypeProblem<'ast> {
 
         problem.ty_u8 = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::U8));
 
-        let isize_info = IntTypeInfo::new(Signed::Signed, ptr_size_bits);
-        let usize_info = IntTypeInfo::new(Signed::Unsigned, ptr_size_bits);
-        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::Int(isize_info));
-        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::Int(usize_info));
+        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::IntSize(Signed::Signed));
+        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::IntSize(Signed::Unsigned));
 
         problem
     }
@@ -226,7 +224,7 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Require the following:
     /// * if `left` is an integer type `right` should be the same type
-    /// * if `left` is a pointer type `right` should be the type Int
+    /// * if `left` is a pointer type `right` should be the type `isize`.
     pub fn add_sub_constraint(&mut self, left: TypeVar, right: TypeVar) {
         self.add_sub_constraints.push_back(AddSubConstraint { left, right });
     }
@@ -422,6 +420,13 @@ impl<'ast> TypeProblem<'ast> {
                     left, left_info, right, right_info,
                 );
             }
+            (&TypeInfo::IntSize(left_signed), &TypeInfo::IntSize(right_signed)) => {
+                assert_eq!(
+                    left_signed, right_signed,
+                    "IntSize signedness mismatch between {:?}: {:?} and {:?}: {:?}",
+                    left, left_signed, right, right_signed,
+                );
+            }
 
             (&TypeInfo::Pointer(left), &TypeInfo::Pointer(right)) => {
                 self.unify_var(left, right);
@@ -468,9 +473,10 @@ impl<'ast> TypeProblem<'ast> {
 
 impl PostCheck {
     fn is_satisfied_by<T>(self, info: &TypeInfo<T>) -> bool {
-        let (is_bool, is_int) = match info {
+        let (is_bool, is_int) = match *info {
             TypeInfo::Bool => (true, None),
             TypeInfo::Int(info) => (false, Some(info.signed)),
+            TypeInfo::IntSize(signed) => (false, Some(signed)),
             _ => (false, None)
         };
 

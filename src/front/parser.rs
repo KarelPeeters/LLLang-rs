@@ -6,6 +6,7 @@ use TokenType as TT;
 use crate::front::ast;
 use crate::front::cst::IntTypeInfo;
 use crate::front::pos::{FileId, Pos, Span};
+use crate::mid::ir::Signed;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -60,10 +61,12 @@ declare_tokens![
     U16("u16"),
     U32("u32"),
     U64("u64"),
+    USize("usize"),
     I8("i8"),
     I16("i16"),
     I32("i32"),
     I64("i64"),
+    ISize("isize"),
 
     True("true"),
     False("false"),
@@ -388,9 +391,13 @@ const TYPE_START_TOKENS: &[TT] = &[
     TT::U8,
     TT::U16,
     TT::U32,
+    TT::U64,
+    TT::USize,
     TT::I8,
     TT::I16,
     TT::I32,
+    TT::I64,
+    TT::ISize,
     TT::Ampersand,
     TT::DoubleAmpersand,
     TT::Id,
@@ -1177,10 +1184,12 @@ impl<'s> Parser<'s> {
             TT::I16 => Some(IntTypeInfo::I16),
             TT::I32 => Some(IntTypeInfo::I32),
             TT::I64 => Some(IntTypeInfo::I64),
+            TT::ISize => return Ok(Some(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::IntSize(Signed::Signed) })),
             TT::U8 => Some(IntTypeInfo::U8),
             TT::U16 => Some(IntTypeInfo::U16),
             TT::U32 => Some(IntTypeInfo::U32),
             TT::U64 => Some(IntTypeInfo::U64),
+            TT::USize => return Ok(Some(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::IntSize(Signed::Unsigned) })),
             _ => None,
         };
 
@@ -1197,13 +1206,15 @@ impl<'s> Parser<'s> {
     fn type_decl(&mut self) -> Result<ast::Type> {
         let start_pos = self.peek().span.start;
 
+        if let Some(ty) = self.maybe_int_ty()? {
+            return Ok(ty);
+        }
+
         match self.peek().ty {
             TT::Underscore => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Wildcard }),
 
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
-
-            TT::I8 | TT::I16 | TT::I32 | TT::I64 | TT::U8 | TT::U16 | TT::U32 | TT::U64 => Ok(self.maybe_int_ty()?.unwrap()),
 
             TT::Ampersand => {
                 self.pop()?;

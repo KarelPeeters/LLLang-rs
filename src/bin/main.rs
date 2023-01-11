@@ -105,7 +105,8 @@ fn parse_and_add_module_if_ll(
 
 /// Parse the main file and all of the lib files into a single program
 fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<Option<ast::ModuleContent>>> {
-    let mut prog = front::Program::default();
+    // TODO expose the architecture choice to commandline?
+    let mut prog = front::Program::new(64);
     let mut file_count: usize = 0;
 
     //add stdlib files

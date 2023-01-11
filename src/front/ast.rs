@@ -1,5 +1,6 @@
 use crate::front::cst::IntTypeInfo;
 use crate::front::pos::Span;
+use crate::mid::ir::Signed;
 
 #[derive(Debug)]
 pub struct Type {
@@ -14,6 +15,7 @@ pub enum TypeKind {
     Void,
     Bool,
     Int(IntTypeInfo),
+    IntSize(Signed),
 
     Path(Path),
 

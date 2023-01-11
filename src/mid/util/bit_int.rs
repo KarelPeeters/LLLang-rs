@@ -14,7 +14,11 @@ pub struct BitInt {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct BitOverflow;
+pub struct BitOverflow {
+    bits: u32,
+    unsigned: UStorage,
+    signed: IStorage,
+}
 
 impl BitInt {
     /// Construct from an unsigned value. All bits above `bits` must be zero.
@@ -22,7 +26,7 @@ impl BitInt {
         assert!(bits <= MAX_BITS);
 
         if value & !Self::mask(bits) != 0 {
-            Err(BitOverflow)
+            Err(BitOverflow { bits, unsigned: value, signed: value as IStorage })
         } else {
             Ok(BitInt { bits, value })
         }
@@ -44,7 +48,7 @@ impl BitInt {
         let mask_bits = Self::mask(bits);
 
         if value & !mask_bits != sign_broadcast & !mask_bits {
-            Err(BitOverflow)
+            Err(BitOverflow { bits, unsigned: value, signed: value as IStorage })
         } else {
             Ok(BitInt { bits, value: value & mask_bits })
         }

@@ -94,34 +94,39 @@ impl<'a> MappingTypeStore<'a> {
             return *ir_ty;
         }
 
-        let ir_ty = match &self.inner[ty] {
-            ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
+        let ir_ty = match self.inner[ty] {
+            ref ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
             TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
             TypeInfo::Void => prog.ty_void(),
             TypeInfo::Bool => prog.ty_bool(),
-            &TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
+            TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
                 // In the IR signed-ness is not a property of the type, only of the operations.
                 prog.define_type_int(bits)
             }
+            TypeInfo::IntSize(_signed) => {
+                // Again, ignore sign.
+                // We also don't make a distinction between usize and the normal int with the same size.
+                prog.define_type_int(prog.ptr_size_bits())
+            }
             TypeInfo::Pointer(_) => prog.ty_ptr(),
-            TypeInfo::Tuple(TupleTypeInfo { fields }) => {
+            TypeInfo::Tuple(TupleTypeInfo { ref fields }) => {
                 let fields = fields.clone().iter()
                     .map(|&f_ty| self.map_type(prog, f_ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
             }
-            TypeInfo::Function(info) => {
+            TypeInfo::Function(ref info) => {
                 let info = info.clone();
                 let func_ty = self.map_type_func(prog, &info);
                 prog.define_type_func(func_ty)
             }
-            TypeInfo::Struct(StructTypeInfo { decl: _, fields }) => {
+            TypeInfo::Struct(StructTypeInfo { decl: _, ref fields }) => {
                 let fields = fields.clone().iter()
                     .map(|field| self.map_type(prog, field.ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
             }
-            &TypeInfo::Array(ArrayTypeInfo { inner, length }) => {
+            TypeInfo::Array(ArrayTypeInfo { inner, length }) => {
                 let inner = self.map_type(prog, inner);
                 prog.define_type_array(ir::ArrayType { inner, length })
             }
@@ -135,9 +140,7 @@ impl<'a> MappingTypeStore<'a> {
 /// The main entry point of the lowering pass that generates the `ir` code for a given `ResolvedProgram`.
 pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let mut types = MappingTypeStore::wrap(prog.types);
-
-    // TODO expose this as an option somewhere
-    let mut ir_prog = ir::Program::new(64);
+    let mut ir_prog = ir::Program::new(types.ptr_size_bits());
 
     //create ir function for each cst function
     let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()
@@ -188,7 +191,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
 
                     expr_type_map: Default::default(),
                     decl_type_map: Default::default(),
-                    problem: TypeProblem::new(ir_prog.ptr_size_bits()),
+                    problem: TypeProblem::new(),
                 };
                 type_state.visit_func(func_decl)?;
 
@@ -298,7 +301,7 @@ pub fn lower_literal<'a>(
                 }
             };
 
-            let info = check_integer_type(types, expr, ty)?;
+            let info = check_integer_type(types, expr, ty, true)?;
 
             let value_raw = if let Some(digits) = value.strip_prefix("0x") {
                 IStorage::from_str_radix(digits, 16)
@@ -349,9 +352,10 @@ fn check_type_match<'ast>(store: &TypeStore, expr: &'ast ast::Expression, expect
     Ok(())
 }
 
-fn check_integer_type<'ast>(store: &TypeStore, expr: &'ast ast::Expression, actual: cst::Type) -> Result<'ast, IntTypeInfo> {
-    match &store[actual] {
-        &TypeInfo::Int(info) => Ok(info),
+fn check_integer_type<'ast>(store: &TypeStore, expr: &'ast ast::Expression, actual: cst::Type, allow_int_size: bool) -> Result<'ast, IntTypeInfo> {
+    match store[actual] {
+        TypeInfo::Int(info) => Ok(info),
+        TypeInfo::IntSize(signed) if allow_int_size => Ok(IntTypeInfo::new(signed, store.ptr_size_bits())),
         _ => Err(Error::ExpectIntegerType {
             expression: expr,
             actual: store.format_type(actual).to_string(),
