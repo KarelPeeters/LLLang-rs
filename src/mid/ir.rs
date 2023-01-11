@@ -720,6 +720,7 @@ impl Value {
 
 #[derive(Debug, Clone)]
 pub struct DataInfo {
+    // TODO should data always have type &u8? Currently it has &T, but we could just cast it when used.
     pub ty: Type,
     pub inner_ty: Type,
     pub bytes: Vec<u8>,

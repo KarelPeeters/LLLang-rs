@@ -92,6 +92,8 @@ impl<'a, W: Write> Renderer<'a, W> {
         // render expressions that aren't used in any function
         self.render_expressions(f, "global", &self.other_expressions)?;
 
+        self.render_data(f)?;
+
         // render root pointers
         for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
             writeln!(f, r#"root_{} [label=<{:?}>, shape=diamond];"#, i, name)?;
@@ -100,6 +102,38 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         writeln!(f)?;
         writeln!(f, "}}")?;
+        Ok(())
+    }
+
+    fn render_data(&self, f: &mut W) -> Result {
+        let prog = self.prog;
+        if prog.nodes.datas.len() == 0 {
+            return Ok(());
+        }
+
+        let mut rows = String::new();
+        let r = &mut rows;
+
+        write!(r, r#"<tr><td colspan="3"><b>Data</b></td></tr>"#)?;
+
+        for (data, data_info) in &prog.nodes.datas {
+            let bytes = &data_info.bytes;
+            let limit = 8;
+
+            let bytes_str = if bytes.len() > limit {
+                format!("{:?}", &bytes[..limit]).replace(']', ", ...]")
+            } else {
+                format!("{:?}", bytes)
+            };
+
+            write!(
+                r,
+                "<tr><td>data_{}</td><td>{}</td><td>{}</td></tr>",
+                data.index(), quote_html(prog.format_type(data_info.ty).to_string()), bytes_str
+            )?;
+        }
+
+        writeln!(f, r#"data [label=<<table border="0">{rows}</table>>, shape="box", style="rounded"]"#)?;
         Ok(())
     }
 
