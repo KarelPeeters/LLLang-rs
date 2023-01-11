@@ -6,20 +6,21 @@ use crate::mid::ir::{ArrayType, Program, TupleType, Type, TypeInfo};
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Layout {
     // >= 0, multiple of alignment
-    pub size: i32,
-
+    pub size_bytes: i32,
     // >= 1 and a power of two
-    pub alignment: i32,
+    pub align_bytes: i32,
 }
 
-impl Layout {
-    pub fn new(size: i32, alignment: i32) -> Self {
-        assert!(size >= 0, "size must be >= 0, was {}", size);
-        assert!(alignment >= 1, "alignment must be >= 1, was {}", alignment);
-        assert!(alignment.count_ones() == 1, "alignment must be a power of two, was {}", alignment);
-        assert!(size % alignment == 0, "size must be a multiple of alignment, was {} and {}", size, alignment);
+pub const POINTER_SIZE_BYTES: i32 = 4;
 
-        Layout { size, alignment }
+impl Layout {
+    pub fn new(size_bytes: i32, align_bytes: i32) -> Self {
+        assert!(size_bytes >= 0, "size must be >= 0, got {}", size_bytes);
+        assert!(align_bytes >= 1, "alignment must be >= 1, got {}", align_bytes);
+        assert!(align_bytes.count_ones() == 1, "alignment must be a power of two, got {}", align_bytes);
+        assert!(size_bytes % align_bytes == 0, "size must be a multiple of alignment, got {} and {}", size_bytes, align_bytes);
+
+        Layout { size_bytes, align_bytes }
     }
 
     pub fn for_type(prog: &Program, ty: Type) -> Self {
@@ -36,7 +37,7 @@ impl Layout {
 
             &TypeInfo::Array(ArrayType { inner, length }) => {
                 let inner = Layout::for_type(prog, inner);
-                Layout::new(inner.size * (length as i32), inner.alignment)
+                Layout::new(inner.size_bytes * (length as i32), inner.align_bytes)
             }
             TypeInfo::Tuple(TupleType { fields }) => {
                 TupleLayout::for_types(prog, fields.iter().copied()).layout
@@ -67,12 +68,12 @@ impl TupleLayout {
         let mut alignment = 1;
 
         for field in fields {
-            next_offset = next_multiple(next_offset, field.alignment);
+            next_offset = next_multiple(next_offset, field.align_bytes);
             offsets.push(next_offset);
 
-            next_offset += field.size;
+            next_offset += field.size_bytes;
 
-            alignment = max(alignment, field.alignment);
+            alignment = max(alignment, field.align_bytes);
         }
 
         //make sure size is multiple of alignment
