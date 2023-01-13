@@ -19,7 +19,7 @@ pub mod lower;
 pub mod type_func;
 pub mod lower_func;
 
-const DEFAULT_CALLING_CONVENTION: CallingConvention = CallingConvention::StdCall;
+const DEFAULT_CALLING_CONVENTION: CallingConvention = CallingConvention::Win64;
 
 #[derive(Debug)]
 pub struct Program<C> {

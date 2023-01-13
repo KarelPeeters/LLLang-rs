@@ -26,6 +26,16 @@ impl RSize {
         }
     }
 
+    pub const fn from_bytes(bytes: u32) -> Option<Self> {
+        match bytes {
+            1 => Some(Self::S8),
+            2 => Some(Self::S16),
+            4 => Some(Self::S32),
+            8 => Some(Self::S64),
+            _ => None,
+        }
+    }
+
     pub const fn keyword(self) -> &'static str {
         match self {
             RSize::S8 => "byte",

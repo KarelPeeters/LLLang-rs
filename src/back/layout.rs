@@ -6,15 +6,13 @@ use crate::mid::ir::{ArrayType, Program, TupleType, Type, TypeInfo};
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Layout {
     // >= 0, multiple of alignment
-    pub size_bytes: i32,
+    pub size_bytes: u32,
     // >= 1 and a power of two
-    pub align_bytes: i32,
+    pub align_bytes: u32,
 }
 
-pub const POINTER_SIZE_BYTES: i32 = 4;
-
 impl Layout {
-    pub fn new(size_bytes: i32, align_bytes: i32) -> Self {
+    pub fn new(size_bytes: u32, align_bytes: u32) -> Self {
         assert!(size_bytes >= 0, "size must be >= 0, got {}", size_bytes);
         assert!(align_bytes >= 1, "alignment must be >= 1, got {}", align_bytes);
         assert!(align_bytes.count_ones() == 1, "alignment must be a power of two, got {}", align_bytes);
@@ -37,7 +35,7 @@ impl Layout {
 
             &TypeInfo::Array(ArrayType { inner, length }) => {
                 let inner = Layout::for_type(prog, inner);
-                Layout::new(inner.size_bytes * (length as i32), inner.align_bytes)
+                Layout::new(inner.size_bytes * (length as u32), inner.align_bytes)
             }
             TypeInfo::Tuple(TupleType { fields }) => {
                 TupleLayout::for_types(prog, fields.iter().copied()).layout
@@ -49,7 +47,7 @@ impl Layout {
 #[derive(Debug, Eq, PartialEq)]
 pub struct TupleLayout {
     pub layout: Layout,
-    pub offsets: Vec<i32>,
+    pub offsets: Vec<u32>,
 }
 
 impl TupleLayout {
@@ -88,7 +86,7 @@ impl TupleLayout {
     }
 }
 
-pub fn next_multiple(x: i32, div: i32) -> i32 {
+pub fn next_multiple(x: u32, div: u32) -> u32 {
     assert!(div > 0);
     (x + div - 1) / div * div
 }

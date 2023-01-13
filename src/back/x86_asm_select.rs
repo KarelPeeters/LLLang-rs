@@ -8,7 +8,7 @@ use log::LevelFilter;
 use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
-use crate::back::abi::{ABI_PARAM_REGS, SPECIAL_PURPOSE_REGS};
+use crate::back::abi::ABI_PARAM_REGS;
 
 use crate::back::register::{Register, RSize};
 use crate::back::selector::{Selector, Symbols, VRegMapper};
@@ -278,10 +278,12 @@ impl Output {
 }
 
 fn build_env(reg_count: usize) -> MachineEnv {
+    // don't use stack pointer as general purpose register
     let mut regs = Register::ALL.iter()
-        .filter(|reg| !SPECIAL_PURPOSE_REGS.contains(&reg))
+        .filter(|&&reg| reg != Register::SP)
         .map(|reg| PReg::new(reg.index(), RegClass::Int))
         .collect_vec();
+
     drop(regs.drain(reg_count..));
 
     MachineEnv {
