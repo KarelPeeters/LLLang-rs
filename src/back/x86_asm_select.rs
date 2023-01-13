@@ -41,7 +41,7 @@ pub fn lower_new(prog: &mut Program) -> String {
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("main:");
     output.appendln(format_args!("    call func_{}", main_func.index()));
-    output.appendln(format_args!("    push rax"));
+    output.appendln(format_args!("    mov rcx, rax"));
     output.appendln(format_args!("    call ExitProcess"));
     output.appendln("");
 
