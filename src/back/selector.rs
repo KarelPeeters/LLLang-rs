@@ -3,12 +3,18 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
-use crate::back::layout::TupleLayout;
+use crate::back::layout::{Layout, TupleLayout};
 use crate::back::register::RSize;
 
 use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
+
+#[derive(Debug, Copy, Clone)]
+pub enum ValuePosition {
+    VReg(VReg),
+    Stack(usize),
+}
 
 #[derive(Default)]
 pub struct Symbols {
@@ -35,37 +41,58 @@ impl Symbols {
     }
 }
 
-#[derive(Default)]
-pub struct VRegMapper {
+pub struct ValueMapper {
     next_vreg: usize,
-    value_map: HashMap<Value, VReg>,
+    slot_values: Vec<Value>,
+
+    value_map: HashMap<Value, ValuePosition>,
 }
 
-impl VRegMapper {
+impl ValueMapper {
+    pub fn new() -> Self {
+        ValueMapper {
+            next_vreg: 0,
+            slot_values: vec![],
+            value_map: Default::default(),
+        }
+    }
+
     pub fn new_vreg(&mut self) -> VReg {
         let index = self.next_vreg;
         self.next_vreg += 1;
         VReg::new(index, RegClass::Int)
     }
 
-    pub fn get_or_new(&mut self, value: Value) -> VReg {
+    pub fn get_or_new(&mut self, prog: &Program, value: Value) -> ValuePosition {
         let next_vreg = &mut self.next_vreg;
-        *self.value_map.entry(value).or_insert_with(|| {
-            let index = *next_vreg;
-            *next_vreg += 1;
-            let reg = VReg::new(index, RegClass::Int);
 
-            println!("      Mapping {:?} to {:?}", value, reg);
-            reg
+        *self.value_map.entry(value).or_insert_with(|| {
+            let layout = Layout::for_type(prog, prog.type_of_value(value));
+            let result = if RSize::from_bytes(layout.size_bytes).is_some() {
+                // allocate vreg
+                let index = *next_vreg;
+                *next_vreg += 1;
+                ValuePosition::VReg(VReg::new(index, RegClass::Int))
+            } else {
+                // allocate stack position
+                let index = self.slot_values.len();
+                self.slot_values.push(value);
+                ValuePosition::Stack(index)
+            };
+
+            println!("      Mapping {:?} to {:?}", value, result);
+
+            result
         })
     }
 
-    pub fn map_param(&mut self, param: Parameter) -> VReg {
-        self.get_or_new(param.into())
+    // TODO entry block params normally have known locations
+    pub fn map_param(&mut self, prog: &Program, param: Parameter) -> ValuePosition {
+        self.get_or_new(prog, param.into())
     }
 
-    pub fn map_instr(&mut self, instr: Instruction) -> VReg {
-        self.get_or_new(instr.into())
+    pub fn map_instr(&mut self, prog: &Program, instr: Instruction) -> ValuePosition {
+        self.get_or_new(prog, instr.into())
     }
 
     pub fn vreg_count(&self) -> usize {
@@ -77,7 +104,7 @@ pub struct Selector<'a> {
     pub prog: &'a Program,
 
     pub symbols: &'a mut Symbols,
-    pub vregs: &'a mut VRegMapper,
+    pub values: &'a mut ValueMapper,
     pub slots: &'a HashMap<StackSlot, usize>,
 
     pub instructions: &'a mut Vec<VInstruction>,
@@ -96,12 +123,14 @@ impl Selector<'_> {
 
     #[allow(dead_code)]
     fn dummy_reg(&mut self) -> VReg {
-        let reg = self.vregs.new_vreg();
+        let reg = self.values.new_vreg();
         self.push(VInstruction::DefAnyReg(reg));
         reg
     }
 
     pub fn append_instr(&mut self, instr: Instruction) {
+        let prog = self.prog;
+
         // TODO only invalidate expressions modified by this instruction instead of all of them?
         // TODO even better, properly schedule expressions in advance with dom_info and use_info
         self.expr_cache.clear();
@@ -109,13 +138,38 @@ impl Selector<'_> {
 
         match *self.prog.get_instr(instr) {
             InstructionInfo::Load { addr, ty } => {
-                let size = self.size_of_ty(ty);
+                let layout = Layout::for_type(prog, ty);
                 let addr = self.append_value_to_reg(addr);
-                let result = self.vregs.map_instr(instr);
-                self.push(VInstruction::MovReg(size, result, VMem::at(addr).into()));
+                let dest = self.values.map_instr(prog, instr);
+
+                match dest {
+                    ValuePosition::VReg(dest) => {
+                        // TODO ensure we generate full size moves for reg->reg
+                        let rsize = RSize::from_bytes(layout.size_bytes).unwrap();
+                        self.push(VInstruction::MovReg(rsize, dest, VMem::at(addr).into()));
+                    }
+                    ValuePosition::Stack(dest) => {
+                        self.push(VInstruction::MovStackMem(layout, dest, addr))
+                    }
+                }
             }
             InstructionInfo::Store { addr, ty, value } => {
+                let layout = Layout::for_type(prog, ty);
+                // TODO ensure we can generate "store [esp+8], eax" if addr is stack slot
                 let addr = self.append_value_to_reg(addr);
+                let src = self.append_value_to_position(value);
+
+                match src {
+                    // TODO ensure we can generate "store [rax], 17" if value is const
+                    ValuePosition::VReg(src) => {
+                        let rsize = RSize::from_bytes(layout.size_bytes).unwrap();
+                        self.push(VInstruction::MovMem(rsize, VMem::at(addr).into(), src.into()))
+                    }
+                    ValuePosition::Stack(src) => {
+                        self.push(VInstruction::MovMemStack(layout, addr, src));
+                    }
+                }
+
                 let value = self.append_value_to_rc(value);
                 let size = self.size_of_ty(ty);
                 self.push(VInstruction::MovMem(size, VMem::at(addr), value));
@@ -124,13 +178,13 @@ impl Selector<'_> {
                 // TODO use calling convention
                 let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
                 let target = self.append_value_to_rcm(target);
-                let result = self.vregs.map_instr(instr);
+                let result = self.values.map_instr(instr);
                 self.push(VInstruction::Call(result, target, args));
             }
             InstructionInfo::BlackBox { value } => {
                 let size = self.size_of_value(value);
                 let value = self.append_value_to_reg(value);
-                let result = self.vregs.map_instr(instr);
+                let result = self.values.map_instr(instr);
                 self.push(VInstruction::MovReg(size, result, value.into()))
             }
         }
@@ -183,8 +237,8 @@ impl Selector<'_> {
         // TODO handle this case, the registers are different and annoying
         assert!(size != RSize::S8, "Mul for byte not implemented yet");
 
-        let result_high = self.vregs.new_vreg();
-        let result_low = self.vregs.new_vreg();
+        let result_high = self.values.new_vreg();
+        let result_low = self.values.new_vreg();
         let left = self.append_value_to_reg(left);
         let right = self.append_value_to_rm(right);
 
@@ -202,9 +256,9 @@ impl Selector<'_> {
         let low = self.append_value_to_reg(left);
         let div = self.append_value_to_rm(right);
 
-        let high = self.vregs.new_vreg();
-        let quot = self.vregs.new_vreg();
-        let rem = self.vregs.new_vreg();
+        let high = self.values.new_vreg();
+        let quot = self.values.new_vreg();
+        let rem = self.values.new_vreg();
 
         self.push(VInstruction::Clear(high));
         self.push(VInstruction::DivMod(size, signed, high, low, div, quot, rem));
@@ -226,7 +280,7 @@ impl Selector<'_> {
         };
 
         let size = self.size_of_value(left);
-        let result = self.vregs.new_vreg();
+        let result = self.values.new_vreg();
         let left = self.append_value_to_reg(left);
         let right = self.append_value_to_rcm(right);
         self.push(VInstruction::Binary(size, instr, result, left, right));
@@ -264,8 +318,8 @@ impl Selector<'_> {
                 };
 
                 let size = self.size_of_value(left);
-                let before = self.vregs.new_vreg();
-                let after = self.vregs.new_vreg();
+                let before = self.values.new_vreg();
+                let after = self.values.new_vreg();
                 let left = self.append_value_to_reg(left);
                 let right = self.append_value_to_rcm(right);
 
@@ -285,12 +339,12 @@ impl Selector<'_> {
                 let offset = VConst::Const(offset).into();
 
                 let base = self.append_value_to_reg(base);
-                let dest = self.vregs.new_vreg();
+                let dest = self.values.new_vreg();
                 self.push(VInstruction::Binary(RSize::FULL, "add", dest, base, offset));
                 dest
             },
             ExpressionInfo::PointerOffSet { ty, base, index } => {
-                let dest =self.vregs.new_vreg();
+                let dest =self.values.new_vreg();
                 let base = self.append_value_to_rc(base);
                 let index = self.append_value_to_reg(index);
                 let scale = self.size_of_ty(ty);
@@ -308,7 +362,7 @@ impl Selector<'_> {
                     }
                     CastKind::IntExtend(signed) => {
                         let before = self.append_value_to_reg(value);
-                        let after = self.vregs.new_vreg();
+                        let after = self.values.new_vreg();
                         self.push(VInstruction::Extend(signed, size_after, size_before, after, before));
                         after
                     }
@@ -335,11 +389,15 @@ impl Selector<'_> {
                     let index = self.map_slot_to_index(slot);
                     VopRCM::Slot(index)
                 }
-                Scoped::Param(param) => self.vregs.map_param(param).into(),
-                Scoped::Instr(instr) => self.vregs.map_instr(instr).into(),
+                Scoped::Param(param) => self.values.map_param(param).into(),
+                Scoped::Instr(instr) => self.values.map_instr(instr).into(),
             },
             Value::Expr(expr) => self.append_expr(expr).into(),
         }
+    }
+
+    fn append_value_to_position(&mut self, value: Value) -> ValuePosition {
+        todo!()
     }
 
     #[must_use]
@@ -390,12 +448,12 @@ impl Selector<'_> {
             VopRCM::Reg(reg) => reg,
             VopRCM::Slot(index) => {
                 assert!(size == RSize::FULL);
-                let reg = self.vregs.new_vreg();
+                let reg = self.values.new_vreg();
                 self.push(VInstruction::SlotPtr(reg, index));
                 reg
             }
             VopRCM::Mem(_) | VopRCM::Const(_) => {
-                let reg = self.vregs.new_vreg();
+                let reg = self.values.new_vreg();
                 self.push(VInstruction::MovReg(size, reg, value));
                 reg
             }
@@ -406,28 +464,11 @@ impl Selector<'_> {
         *self.slots.get(&slot).unwrap()
     }
 
-    fn size_of_value(&self, value: Value) -> RSize {
-        self.size_of_ty(self.prog.type_of_value(value))
+    fn layout_of_value(self, value: Value) -> Layout {
+        Layout::for_type(self.prog, self.prog.type_of_value(value))
     }
 
-    fn size_of_ty(&self, ty: Type) -> RSize {
-        match *self.prog.get_type(ty) {
-            TypeInfo::Void => panic!("void type not supported"),
-            TypeInfo::Integer { bits } => {
-                match bits {
-                    // TODO bool size? when stored 8bits, but when doing other stuff FULL?
-                    1 => RSize::FULL,
-                    8 => RSize::S8,
-                    16 => RSize::S16,
-                    32 => RSize::S32,
-                    64 => RSize::S64,
-                    _ => panic!("integer type with {} bits not supported", bits),
-                }
-            }
-            TypeInfo::Pointer => RSize::FULL,
-            TypeInfo::Func(_) => RSize::FULL,
-            TypeInfo::Tuple(_) => panic!("tuple type not supported"),
-            TypeInfo::Array(_) => panic!("array type not supported"),
-        }
+    fn reg_size_of_value(&self, value: Value) -> RSize {
+        self.reg_size_of_ty(self.prog.type_of_value(value))
     }
 }

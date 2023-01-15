@@ -27,10 +27,11 @@ impl Layout {
 
             TypeInfo::Pointer { .. } | TypeInfo::Func(_) => Layout::new(4, 4),
 
-            TypeInfo::Integer { bits: 32 } => Layout::new(4, 4),
-            TypeInfo::Integer { bits: 16 } => Layout::new(2, 2),
-            TypeInfo::Integer { bits: 8 } => Layout::new(1, 1),
             TypeInfo::Integer { bits: 1 } => Layout::new(1, 1),
+            TypeInfo::Integer { bits: 8 } => Layout::new(1, 1),
+            TypeInfo::Integer { bits: 16 } => Layout::new(2, 2),
+            TypeInfo::Integer { bits: 32 } => Layout::new(4, 4),
+            TypeInfo::Integer { bits: 64 } => Layout::new(8, 8),
             TypeInfo::Integer { bits } => panic!("Integer with {} bits not yet supported", bits),
 
             &TypeInfo::Array(ArrayType { inner, length }) => {

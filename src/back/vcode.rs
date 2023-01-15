@@ -5,6 +5,7 @@ use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
 use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG};
+use crate::back::layout::Layout;
 
 use crate::back::register::{Register, RSize};
 use crate::mid::ir::{Block, Global, Program, Signed};
@@ -26,6 +27,11 @@ pub enum VInstruction {
     // read as "move into .. from .."
     MovReg(RSize, VReg, VopRCM),
     MovMem(RSize, VMem, VopRC),
+
+    /// layout, dest_stack_index, src_addr
+    MovStackMem(Layout, usize, VReg),
+    /// layout, dest_addr, src_stack_index
+    MovMemStack(Layout, VReg, usize),
 
     /// target = base + index * size
     Lea(VReg, VopRC, VReg, RSize),

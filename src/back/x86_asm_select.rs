@@ -2,27 +2,25 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Write};
 use std::iter::zip;
 
-use env_logger::Builder;
 use itertools::Itertools;
-use log::LevelFilter;
 use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
-use crate::back::abi::ABI_PARAM_REGS;
 
+use crate::back::abi::{ABI_PARAM_REGS, FunctionAbi};
 use crate::back::register::{Register, RSize};
-use crate::back::selector::{Selector, Symbols, VRegMapper};
+use crate::back::selector::{Selector, Symbols, ValueMapper};
 use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, VInstruction, VSymbol};
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{BlockInfo, Program};
+use crate::mid::ir::{BlockInfo, InstructionInfo, Program};
 use crate::mid::normalize::split_critical_edges::split_critical_edges;
 use crate::mid::util::verify::verify;
 use crate::util::arena::IndexType;
 use crate::util::internal_iter::InternalIterator;
 
 pub fn lower_new(prog: &mut Program) -> String {
-    Builder::new().filter_level(LevelFilter::Trace).init();
+    // Builder::new().filter_level(LevelFilter::Trace).init();
 
     assert_eq!(prog.ptr_size_bits(), 64, "This backend only supports 64-bit");
 
@@ -49,7 +47,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         println!("Func {:?}", func);
 
         let func_info = prog.get_func(func);
-        let mut mapper = VRegMapper::default();
+        let mut mapper = ValueMapper::default();
 
         let mut blocks = vec![];
         let mut v_instructions = vec![];
@@ -61,22 +59,39 @@ pub fn lower_new(prog: &mut Program) -> String {
             blocks_ordered.push(block);
         });
 
+        // collect calling conventions
+        let mut call_layouts = vec![];
+        for &block in &blocks_ordered {
+            for &instr in &prog.get_block(block).instructions {
+                let instr_info = prog.get_instr(instr);
+                if let Some(&target) = option_match!(instr_info, InstructionInfo::Call { target, args: _, conv: _ } => target) {
+                    let ty = prog.type_of_value(target);
+                    let func_ty = prog.get_type(ty).unwrap_func().unwrap();
+                    let layout = FunctionAbi::for_type(prog, func_ty);
+
+                    println!("{}", prog.format_type(ty));
+                    println!("{:#?}", layout);
+
+                    // TODO compute aggregate values at once?
+                    call_layouts.push(layout);
+                }
+            }
+        }
+
         // map slots
         let slots = func_info.slots.iter().enumerate().map(|(i, &slot)| (slot, i)).collect();
 
         for &block in &blocks_ordered {
-            println!("  Block {:?} -> {:?}", block, symbols.map_block(block).0);
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
             // setup builder
             let mut params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
-            println!("    params {:?}", params);
 
             let range_start = v_instructions.len();
             let mut builder = Selector {
                 prog,
                 symbols: &mut symbols,
-                vregs: &mut mapper,
+                values: &mut mapper,
                 slots: &slots,
                 instructions: &mut v_instructions,
                 expr_cache: &mut Default::default(),
@@ -113,8 +128,6 @@ pub fn lower_new(prog: &mut Program) -> String {
                 }
             }).collect();
 
-            println!("  succs: {:?}", succs);
-
             blocks.push(R2BlockInfo { inst_range, succs, preds, params });
         };
 
@@ -131,7 +144,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         // TODO use more registers
         let env = build_env(4);
         let options = RegallocOptions {
-            verbose_log: true,
+            verbose_log: false,
             validate_ssa: true,
         };
 
