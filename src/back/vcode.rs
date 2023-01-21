@@ -4,9 +4,9 @@ use std::fmt::Write;
 use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
+
 use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG};
 use crate::back::layout::Layout;
-
 use crate::back::register::{Register, RSize};
 use crate::mid::ir::{Block, Global, Program, Signed};
 use crate::mid::util::bit_int::BitInt;
@@ -28,10 +28,10 @@ pub enum VInstruction {
     MovReg(RSize, VReg, VopRCM),
     MovMem(RSize, VMem, VopRC),
 
-    /// layout, dest_stack_index, src_addr
-    MovStackMem(Layout, usize, VReg),
-    /// layout, dest_addr, src_stack_index
-    MovMemStack(Layout, VReg, usize),
+    /// layout, dest_stack_index, src_addr, tmp_reg
+    MovStackMem(Layout, usize, VReg, VReg),
+    /// layout, dest_addr, src_stack_index, tmp_reg
+    MovMemStack(Layout, VReg, usize, VReg),
 
     /// target = base + index * size
     Lea(VReg, VopRC, VReg, RSize),
@@ -48,8 +48,8 @@ pub enum VInstruction {
     /// signed, size after, size before, after, before
     Extend(Signed, RSize, RSize, VReg, VReg),
 
-    /// result, target, args
-    Call(VReg, VopRCM, Vec<VReg>),
+    /// target, result, reg args, clobbers
+    Call(VopRCM, Option<VReg>, Vec<VReg>, PRegSet),
 
     // compare instructions
     Cmp(RSize, VReg, VopRCM),
@@ -370,9 +370,11 @@ impl VInstruction {
             VInstruction::DefFixedReg(dest, preg) => {
                 operands.push_fixed_def(dest, preg);
             }
+
             VInstruction::Clear(dest) => {
                 operands.push_def(dest);
             }
+
             VInstruction::MovReg(_size, dest, source) => {
                 if let VopRCM::Reg(source) = source {
                     return InstInfo::mov(Operand::reg_def(dest), Operand::reg_use(source));
@@ -385,6 +387,15 @@ impl VInstruction {
                 operands.push_use(source);
                 operands.push_def(dest);
             }
+            VInstruction::MovStackMem(_layout, _dest_index, src_addr, tmp_reg) => {
+                operands.push_use(src_addr);
+                operands.push(Operand::reg_temp(tmp_reg));
+            }
+            VInstruction::MovMemStack(_layout, dest_addr, src_index, tmp_reg) => {
+                operands.push_use(dest_addr);
+                operands.push(Operand::reg_temp(tmp_reg));
+            }
+
             VInstruction::Lea(dest, base, index, _scale) => {
                 operands.push_def(dest);
                 operands.push_use(base);
@@ -412,6 +423,7 @@ impl VInstruction {
                 operands.push_def(after);
                 operands.push_use(before);
             }
+
             VInstruction::Call(result, target, ref args) => {
                 for (index, &arg) in args.iter().enumerate() {
                     let preg = ABI_PARAM_REGS[index];
@@ -420,6 +432,7 @@ impl VInstruction {
                 operands.push_use(target);
                 operands.push_fixed_def(result, ABI_RETURN_REG);
             }
+
             VInstruction::Cmp(_size, left, right) | VInstruction::Test(_size, left, right) => {
                 operands.push_use(left);
                 operands.push_use(right);
@@ -454,6 +467,7 @@ impl VInstruction {
             VInstruction::LoopForever(_label) => {
                 return InstInfo::ret(operands);
             }
+
             VInstruction::StackAlloc => {}
             VInstruction::SlotPtr(dest, _index) => {
                 operands.push_def(dest);

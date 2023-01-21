@@ -1,13 +1,14 @@
 use std::collections::HashMap;
+use std::iter::zip;
 
-use itertools::Itertools;
-use regalloc2::{Inst, RegClass, VReg};
+use regalloc2::{Inst, PReg, PRegSet, RegClass, VReg};
 use regalloc2 as r2;
+
+use crate::back::abi::{FunctionAbi, PassPosition};
 use crate::back::layout::{Layout, TupleLayout};
 use crate::back::register::RSize;
-
 use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 
 #[derive(Debug, Copy, Clone)]
@@ -169,17 +170,34 @@ impl Selector<'_> {
                         self.push(VInstruction::MovMemStack(layout, addr, src));
                     }
                 }
-
-                let value = self.append_value_to_rc(value);
-                let size = self.size_of_ty(ty);
-                self.push(VInstruction::MovMem(size, VMem::at(addr), value));
             }
             InstructionInfo::Call { target, ref args, conv: _ } => {
-                // TODO use calling convention
-                let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
+                let target_ty = prog.get_type(prog.type_of_value(target)).unwrap_func().unwrap();
+                let abi = FunctionAbi::for_type(prog, target_ty);
+
+                let reg_result = match abi.pass_ret.pos {
+                    PassPosition::Reg(reg) => Some(self.values.new_vreg()),
+                    PassPosition::StackSlot(_) => None,
+                };
                 let target = self.append_value_to_rcm(target);
-                let result = self.values.map_instr(instr);
-                self.push(VInstruction::Call(result, target, args));
+
+                // TODO re-order args to minimize register usage?
+                let mut reg_args = vec![];
+                for (arg, param_abi) in zip(args, &abi.pass_params) {
+                    // reg_args.push(arg);
+                }
+
+                // TODO use calling convention
+                // let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
+                // let target = self.append_value_to_rcm(target);
+                // let result = self.values.map_instr(instr);
+
+                let mut clobbers = PRegSet::empty();
+                for reg in &abi.volatile_registers {
+                    clobbers.add(PReg::new(reg.index(), RegClass::Int));
+                }
+
+                self.push(VInstruction::Call(target, reg_result, reg_args, clobbers));
             }
             InstructionInfo::BlackBox { value } => {
                 let size = self.size_of_value(value);
@@ -342,15 +360,15 @@ impl Selector<'_> {
                 let dest = self.values.new_vreg();
                 self.push(VInstruction::Binary(RSize::FULL, "add", dest, base, offset));
                 dest
-            },
+            }
             ExpressionInfo::PointerOffSet { ty, base, index } => {
-                let dest =self.values.new_vreg();
+                let dest = self.values.new_vreg();
                 let base = self.append_value_to_rc(base);
                 let index = self.append_value_to_reg(index);
                 let scale = self.size_of_ty(ty);
                 self.push(VInstruction::Lea(dest, base, index, scale));
                 dest
-            },
+            }
             ExpressionInfo::Cast { ty, kind, value } => {
                 let size_before = self.size_of_value(value);
                 let size_after = self.size_of_ty(ty);
@@ -367,7 +385,7 @@ impl Selector<'_> {
                         after
                     }
                 }
-            },
+            }
         };
 
         self.expr_cache.insert(expr, result);

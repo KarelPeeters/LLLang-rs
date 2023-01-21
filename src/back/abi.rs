@@ -33,21 +33,21 @@ pub struct FunctionAbi {
     /// Stack space that needs to be allocated by the callee, for register parameter shadow space and stack parameters.
     /// This does **not** include the return address location pushed by `call` or additional slots necessary for passing
     /// parameters by reference.
-    stack_space_allocated_by_caller: u32,
+    pub stack_space_allocated_by_caller: u32,
     /// How much the stack needs to be aligned **after** the return address is pushed.
-    stack_alignment_bytes: u32,
+    pub stack_alignment_bytes: u32,
 
-    by_ref_slot_types: Vec<Type>,
+    pub by_ref_slot_types: Vec<Type>,
 
-    stack_space_freed_by_caller: u32,
-    stack_space_freed_by_callee: u32,
+    pub stack_space_freed_by_caller: u32,
+    pub stack_space_freed_by_callee: u32,
 
     /// The registers the function is not required to preserve. Also called the _volatile / caller-saved registers_.
     /// All other registers are either _nonvolatile / callee-saved_ or special purpose (like the stack pointer).
-    volatile_registers: Vec<Register>,
+    pub volatile_registers: Vec<Register>,
 
-    pass_params: Vec<PassInfo>,
-    pass_ret: PassInfo,
+    pub pass_params: Vec<PassInfo>,
+    pub pass_ret: PassInfo,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
