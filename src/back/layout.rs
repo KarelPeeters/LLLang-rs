@@ -1,6 +1,7 @@
 use std::cmp::max;
+use crate::back::register::RSize;
 
-use crate::mid::ir::{ArrayType, Program, TupleType, Type, TypeInfo};
+use crate::mid::ir::{ArrayType, Program, TupleType, Type, TypeInfo, Value};
 
 //TODO cache all of this layout stuff somewhere
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -13,7 +14,6 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(size_bytes: u32, align_bytes: u32) -> Self {
-        assert!(size_bytes >= 0, "size must be >= 0, got {}", size_bytes);
         assert!(align_bytes >= 1, "alignment must be >= 1, got {}", align_bytes);
         assert!(align_bytes.count_ones() == 1, "alignment must be a power of two, got {}", align_bytes);
         assert!(size_bytes % align_bytes == 0, "size must be a multiple of alignment, got {} and {}", size_bytes, align_bytes);
@@ -36,12 +36,20 @@ impl Layout {
 
             &TypeInfo::Array(ArrayType { inner, length }) => {
                 let inner = Layout::for_type(prog, inner);
-                Layout::new(inner.size_bytes * (length as u32), inner.align_bytes)
+                Layout::new(inner.size_bytes * length, inner.align_bytes)
             }
             TypeInfo::Tuple(TupleType { fields }) => {
                 TupleLayout::for_types(prog, fields.iter().copied()).layout
             }
         }
+    }
+
+    pub fn for_value(prog: &Program, value: impl Into<Value>) -> Self {
+        Self::for_type(prog, prog.type_of_value(value.into()))
+    }
+
+    pub fn reg_size(&self) -> Option<RSize> {
+        RSize::from_bytes(self.size_bytes)
     }
 }
 

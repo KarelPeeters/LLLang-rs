@@ -8,6 +8,7 @@ pub enum RSize {
 
 impl RSize {
     pub const FULL: RSize = RSize::S64;
+    pub const ALL_DECREASING: &'static [RSize] = &[RSize::S64, RSize::S32, RSize::S16, RSize::S8];
 
     pub const fn index(self) -> usize {
         self as usize

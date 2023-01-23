@@ -361,7 +361,8 @@ pub enum InstructionInfo {
     /// Call `target` with arguments `args`.
     ///
     /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
-    // TODO add an expression variant of call that can't have have any side effects 
+    // TODO add an expression variant of call that can't have have any side effects
+    // TODO remove conv field? it's just a duplicate of the field in the target type
     Call { target: Value, args: Vec<Value>, conv: CallingConvention },
 
     /// Return `value` as-is.

@@ -7,15 +7,9 @@ use regalloc2 as r2;
 use crate::back::abi::{FunctionAbi, PassPosition};
 use crate::back::layout::{Layout, TupleLayout};
 use crate::back::register::RSize;
-use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
+use crate::back::vcode::{AsmContext, VConst, VInstruction, VMem, VopLarge, VopRC, VopRCM, VopRM, VSymbol, VTarget};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
-
-#[derive(Debug, Copy, Clone)]
-pub enum ValuePosition {
-    VReg(VReg),
-    Stack(usize),
-}
 
 #[derive(Default)]
 pub struct Symbols {
@@ -42,19 +36,36 @@ impl Symbols {
     }
 }
 
-pub struct ValueMapper {
-    next_vreg: usize,
-    slot_values: Vec<Value>,
+pub type MappedValue = VValue<VReg, StackPosition>;
 
-    value_map: HashMap<Value, ValuePosition>,
+pub struct ValueMapper<'p> {
+    next_vreg: usize,
+    prog: &'p Program,
+    map_param_or_instr: HashMap<Value, MappedValue>,
 }
 
-impl ValueMapper {
-    pub fn new() -> Self {
+#[derive(Debug, Copy, Clone)]
+pub enum StackPosition {
+    /// Proper IR slot.
+    Slot(StackSlot),
+    /// Either a function or block parameter.
+    Param(Parameter),
+    /// Used for instruction outputs.
+    Instr(Instruction),
+}
+
+impl StackPosition {
+    pub fn to_offset(&self, _: &AsmContext) -> usize {
+        todo!()
+    }
+}
+
+impl<'p> ValueMapper<'p> {
+    pub fn new(prog: &'p Program) -> Self {
         ValueMapper {
+            prog,
             next_vreg: 0,
-            slot_values: vec![],
-            value_map: Default::default(),
+            map_param_or_instr: Default::default(),
         }
     }
 
@@ -64,55 +75,80 @@ impl ValueMapper {
         VReg::new(index, RegClass::Int)
     }
 
-    pub fn get_or_new(&mut self, prog: &Program, value: Value) -> ValuePosition {
-        let next_vreg = &mut self.next_vreg;
+    fn map_param_or_instr(&mut self, value: Value, stack_pos: impl FnOnce() -> StackPosition) -> MappedValue {
+        if let Some(&result) = self.map_param_or_instr.get(&value) {
+            return result;
+        }
 
-        *self.value_map.entry(value).or_insert_with(|| {
-            let layout = Layout::for_type(prog, prog.type_of_value(value));
-            let result = if RSize::from_bytes(layout.size_bytes).is_some() {
-                // allocate vreg
-                let index = *next_vreg;
-                *next_vreg += 1;
-                ValuePosition::VReg(VReg::new(index, RegClass::Int))
-            } else {
-                // allocate stack position
-                let index = self.slot_values.len();
-                self.slot_values.push(value);
-                ValuePosition::Stack(index)
-            };
+        let layout = Layout::for_value(self.prog, value);
+        let result = if layout.reg_size().is_some() {
+            VValue::Small(self.new_vreg())
+        } else {
+            VValue::Large(stack_pos())
+        };
 
-            println!("      Mapping {:?} to {:?}", value, result);
-
-            result
-        })
+        self.map_param_or_instr.insert(value, result);
+        result
     }
 
-    // TODO entry block params normally have known locations
-    pub fn map_param(&mut self, prog: &Program, param: Parameter) -> ValuePosition {
-        self.get_or_new(prog, param.into())
+    pub fn map_param(&mut self, param: Parameter) -> MappedValue {
+        self.map_param_or_instr(param.into(), || StackPosition::Param(param))
     }
 
-    pub fn map_instr(&mut self, prog: &Program, instr: Instruction) -> ValuePosition {
-        self.get_or_new(prog, instr.into())
+    pub fn map_instr(&mut self, instr: Instruction) -> MappedValue {
+        self.map_param_or_instr(instr.into(), || StackPosition::Instr(instr))
     }
 
     pub fn vreg_count(&self) -> usize {
         self.next_vreg
     }
+
+    pub fn stack_positions(&self) -> impl Iterator<Item=StackPosition> + '_ {
+        self.map_param_or_instr.values()
+            .filter_map(|value| option_match!(value, &VValue::Large(pos) => pos))
+    }
 }
 
-pub struct Selector<'a> {
-    pub prog: &'a Program,
+pub struct Selector<'a, 'p> {
+    pub prog: &'p Program,
+    pub curr_func_abi: &'a FunctionAbi,
 
     pub symbols: &'a mut Symbols,
-    pub values: &'a mut ValueMapper,
-    pub slots: &'a HashMap<StackSlot, usize>,
+    pub values: &'a mut ValueMapper<'p>,
 
     pub instructions: &'a mut Vec<VInstruction>,
     pub expr_cache: &'a mut HashMap<Expression, VReg>,
 }
 
-impl Selector<'_> {
+// TODO make distinction between LValue and RValue like in front?
+#[derive(Debug, Copy, Clone)]
+pub enum VValue<S, L> {
+    Small(S),
+    Large(L),
+}
+
+impl<S: Copy, L: Copy> VValue<S, L> {
+    pub fn as_small(&self) -> Option<S> {
+        option_match!(self, &VValue::Small(inner) => inner)
+    }
+
+    pub fn as_large(&self) -> Option<L> {
+        option_match!(self, &VValue::Large(inner) => inner)
+    }
+}
+
+impl<S, L> VValue<S, L> {
+    // unfortunately we can't implement the From/Into traits
+    //   because they would conflict with the default identity impl
+    fn into<SF: From<S>, LF: From<L>>(self) -> VValue<SF, LF> {
+        match self {
+            VValue::Small(s) => VValue::Small(SF::from(s)),
+            VValue::Large(l) => VValue::Large(LF::from(l)),
+        }
+    }
+}
+
+impl Selector<'_, '_> {
     pub fn push(&mut self, instr: VInstruction) {
         let info = instr.to_inst_info();
         println!("    push {:?}", instr);
@@ -120,13 +156,6 @@ impl Selector<'_> {
         println!("      args {:?}  {:?}", info.operands, info.branch_block_params);
         println!("      info {:?}", info);
         self.instructions.push(instr);
-    }
-
-    #[allow(dead_code)]
-    fn dummy_reg(&mut self) -> VReg {
-        let reg = self.values.new_vreg();
-        self.push(VInstruction::DefAnyReg(reg));
-        reg
     }
 
     pub fn append_instr(&mut self, instr: Instruction) {
@@ -140,34 +169,49 @@ impl Selector<'_> {
         match *self.prog.get_instr(instr) {
             InstructionInfo::Load { addr, ty } => {
                 let layout = Layout::for_type(prog, ty);
-                let addr = self.append_value_to_reg(addr);
-                let dest = self.values.map_instr(prog, instr);
+
+                let src = VMem::at(self.append_value_to_reg(addr));
+                let dest = self.values.map_instr(instr);
 
                 match dest {
-                    ValuePosition::VReg(dest) => {
+                    VValue::Small(dest) => {
                         // TODO ensure we generate full size moves for reg->reg
-                        let rsize = RSize::from_bytes(layout.size_bytes).unwrap();
-                        self.push(VInstruction::MovReg(rsize, dest, VMem::at(addr).into()));
+                        let size = layout.reg_size().unwrap();
+                        self.push(VInstruction::MovReg { size, dest, src: src.into() });
                     }
-                    ValuePosition::Stack(dest) => {
-                        self.push(VInstruction::MovStackMem(layout, dest, addr))
+                    VValue::Large(dest) => {
+                        let tmp = self.values.new_vreg();
+                        self.push(VInstruction::MovLarge {
+                            layout,
+                            dest: dest.into(),
+                            src: src.into(),
+                            tmp,
+                        });
                     }
                 }
             }
             InstructionInfo::Store { addr, ty, value } => {
                 let layout = Layout::for_type(prog, ty);
+
                 // TODO ensure we can generate "store [esp+8], eax" if addr is stack slot
-                let addr = self.append_value_to_reg(addr);
-                let src = self.append_value_to_position(value);
+                let src = self.append_value(value);
+                let dest = VMem::at(self.append_value_to_reg(addr));
 
                 match src {
                     // TODO ensure we can generate "store [rax], 17" if value is const
-                    ValuePosition::VReg(src) => {
-                        let rsize = RSize::from_bytes(layout.size_bytes).unwrap();
-                        self.push(VInstruction::MovMem(rsize, VMem::at(addr).into(), src.into()))
+                    VValue::Small(src) => {
+                        let size = layout.reg_size().unwrap();
+                        let src = self.force_rc(src, size);
+                        self.push(VInstruction::MovMem { size, dest, src })
                     }
-                    ValuePosition::Stack(src) => {
-                        self.push(VInstruction::MovMemStack(layout, addr, src));
+                    VValue::Large(src) => {
+                        let tmp = self.values.new_vreg();
+                        self.push(VInstruction::MovLarge {
+                            layout,
+                            dest: dest.into(),
+                            src,
+                            tmp,
+                        });
                     }
                 }
             }
@@ -176,68 +220,93 @@ impl Selector<'_> {
                 let abi = FunctionAbi::for_type(prog, target_ty);
 
                 let reg_result = match abi.pass_ret.pos {
-                    PassPosition::Reg(reg) => Some(self.values.new_vreg()),
-                    PassPosition::StackSlot(_) => None,
+                    PassPosition::Reg(reg) => Some((self.values.new_vreg(), reg)),
+                    PassPosition::StackSlot(_) => {
+                        todo!("copy return value to correct stack position");
+                    }
                 };
-                let target = self.append_value_to_rcm(target);
+                let target = self.append_value_to_rcm_new(target);
 
                 // TODO re-order args to minimize register usage?
                 let mut reg_args = vec![];
-                for (arg, param_abi) in zip(args, &abi.pass_params) {
-                    // reg_args.push(arg);
+                for (&arg_value, param_abi) in zip(args, &abi.pass_params) {
+                    match param_abi.pos {
+                        PassPosition::Reg(arg_reg) => {
+                            let arg = self.append_value_to_reg(arg_value);
+                            reg_args.push((arg, arg_reg))
+                        }
+                        PassPosition::StackSlot(_) => {
+                            todo!("copy stack param to correct stack position")
+                        }
+                    }
                 }
-
-                // TODO use calling convention
-                // let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect_vec();
-                // let target = self.append_value_to_rcm(target);
-                // let result = self.values.map_instr(instr);
 
                 let mut clobbers = PRegSet::empty();
                 for reg in &abi.volatile_registers {
                     clobbers.add(PReg::new(reg.index(), RegClass::Int));
                 }
 
-                self.push(VInstruction::Call(target, reg_result, reg_args, clobbers));
+                self.push(VInstruction::Call { target, result: reg_result, reg_args, clobbers });
             }
             InstructionInfo::BlackBox { value } => {
-                let size = self.size_of_value(value);
-                let value = self.append_value_to_reg(value);
-                let result = self.values.map_instr(instr);
-                self.push(VInstruction::MovReg(size, result, value.into()))
+                let layout = self.layout_of_value(value);
+
+                let src = self.append_value(value);
+                let dest = self.values.map_instr(instr);
+
+                match dest {
+                    VValue::Small(dest) => {
+                        let src = src.as_small().unwrap();
+                        let size = layout.reg_size().unwrap();
+                        self.push(VInstruction::MovReg { size, dest, src });
+                    }
+                    VValue::Large(dest) => {
+                        let src = src.as_large().unwrap();
+                        let dest = dest.into();
+                        let tmp = self.values.new_vreg();
+                        self.push(VInstruction::MovLarge { layout, dest, src, tmp });
+                    }
+                }
             }
         }
     }
 
     pub fn append_terminator(&mut self, term: &Terminator) {
         self.expr_cache.clear();
-        let prog = self.prog;
 
         match *term {
             Terminator::Jump { ref target } => {
                 let target = self.append_target(target);
-                self.push(VInstruction::Jump(target))
+                self.push(VInstruction::Jump { target })
             }
             Terminator::Branch { cond, ref true_target, ref false_target } => {
                 let cond = self.append_value_to_reg(cond);
                 let true_target = self.append_target(true_target);
                 let false_target = self.append_target(false_target);
-                self.push(VInstruction::Branch(cond, true_target, false_target));
+                self.push(VInstruction::Branch { cond, true_target, false_target });
             }
             Terminator::Return { value } => {
-                let value = if prog.type_of_value(value) == prog.ty_void() {
-                    None
-                } else {
-                    Some(self.append_value_to_reg(value))
+                // TODO ensure we don't do any useless stuff for void
+
+
+                let value = match self.curr_func_abi.pass_ret.pos {
+                    PassPosition::Reg(value_reg) => {
+                        let value = self.append_value_to_reg(value);
+                        Some((value, value_reg))
+                    }
+                    PassPosition::StackSlot(_) => {
+                        todo!("write the return value to the right stack position");
+                    }
                 };
 
-                self.push(VInstruction::ReturnAndStackFree(value));
+                self.push(VInstruction::ReturnAndStackFree { value });
             }
             Terminator::Unreachable => {
                 self.push(VInstruction::Unreachable);
             }
             Terminator::LoopForever => {
                 let label = self.symbols.new_label();
-                self.push(VInstruction::LoopForever(label));
+                self.push(VInstruction::LoopForever { label });
             }
         }
     }
@@ -251,7 +320,7 @@ impl Selector<'_> {
     }
 
     fn append_mul(&mut self, left: Value, right: Value) -> VReg {
-        let size = self.size_of_value(left);
+        let size = self.reg_size_of_value(left).unwrap();
         // TODO handle this case, the registers are different and annoying
         assert!(size != RSize::S8, "Mul for byte not implemented yet");
 
@@ -260,13 +329,19 @@ impl Selector<'_> {
         let left = self.append_value_to_reg(left);
         let right = self.append_value_to_rm(right);
 
-        self.push(VInstruction::Mul(size, result_high, result_low, left, right));
+        self.push(VInstruction::Mul {
+            size,
+            dest_high: result_high,
+            dest_low: result_low,
+            left,
+            right,
+        });
 
         result_low
     }
 
     fn append_div_mod(&mut self, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
-        let size = self.size_of_value(left);
+        let size = self.reg_size_of_value(left).unwrap();
 
         // TODO handle this case, the registers are different and annoying
         assert!(size != RSize::S8, "Div for byte not implemented yet");
@@ -279,12 +354,22 @@ impl Selector<'_> {
         let rem = self.values.new_vreg();
 
         self.push(VInstruction::Clear(high));
-        self.push(VInstruction::DivMod(size, signed, high, low, div, quot, rem));
+        self.push(VInstruction::DivMod {
+            size,
+            signed,
+            left_high: high,
+            left_low: low,
+            right: div,
+            dest_quot: quot,
+            dest_rem: rem,
+        });
 
         (quot, rem)
     }
 
     fn append_arithmetic(&mut self, kind: ArithmeticOp, left: Value, right: Value) -> VReg {
+        let size = self.reg_size_of_value(left).unwrap();
+
         let instr = match kind {
             ArithmeticOp::Add => "add",
             ArithmeticOp::Sub => "sub",
@@ -297,11 +382,16 @@ impl Selector<'_> {
             ArithmeticOp::Mod(signed) => return self.append_div_mod(signed, left, right).1,
         };
 
-        let size = self.size_of_value(left);
         let result = self.values.new_vreg();
         let left = self.append_value_to_reg(left);
-        let right = self.append_value_to_rcm(right);
-        self.push(VInstruction::Binary(size, instr, result, left, right));
+        let right = self.append_value_to_rcm_new(right);
+        self.push(VInstruction::Binary {
+            size,
+            op: instr,
+            dest: result,
+            left,
+            right,
+        });
         result
     }
 
@@ -318,6 +408,8 @@ impl Selector<'_> {
                 self.append_arithmetic(kind, left, right)
             }
             ExpressionInfo::Comparison { kind, left, right } => {
+                let size = self.reg_size_of_value(left).unwrap();
+
                 // TODO use "test" when comparing with zero
                 //   see https://stackoverflow.com/questions/33721204/test-whether-a-register-is-zero-with-cmp-reg-0-vs-or-reg-reg/33724806#33724806
                 let set_instr = match kind {
@@ -335,16 +427,19 @@ impl Selector<'_> {
                     ComparisonOp::Lte(Signed::Unsigned) => "setbe",
                 };
 
-                let size = self.size_of_value(left);
                 let before = self.values.new_vreg();
                 let after = self.values.new_vreg();
                 let left = self.append_value_to_reg(left);
-                let right = self.append_value_to_rcm(right);
+                let right = self.append_value_to_rcm_new(right);
 
                 // moves potentially inserted by register allocation can't change the flags
                 self.push(VInstruction::Clear(before));
-                self.push(VInstruction::Cmp(size, left, right));
-                self.push(VInstruction::Setcc(set_instr, after, before));
+                self.push(VInstruction::Cmp { size, left, right, });
+                self.push(VInstruction::Setcc {
+                    cc: set_instr,
+                    dest: after,
+                    dest_before: before,
+                });
 
                 after
             }
@@ -358,20 +453,29 @@ impl Selector<'_> {
 
                 let base = self.append_value_to_reg(base);
                 let dest = self.values.new_vreg();
-                self.push(VInstruction::Binary(RSize::FULL, "add", dest, base, offset));
+
+                // TODO can we use LEA here as well?
+                self.push(VInstruction::Binary {
+                    size: RSize::FULL,
+                    op: "add",
+                    dest,
+                    left: base,
+                    right: offset,
+                });
                 dest
             }
             ExpressionInfo::PointerOffSet { ty, base, index } => {
+                // TODO add fallback for non-reg sized types
+                let size = self.reg_size_of_ty(ty).unwrap();
                 let dest = self.values.new_vreg();
                 let base = self.append_value_to_rc(base);
                 let index = self.append_value_to_reg(index);
-                let scale = self.size_of_ty(ty);
-                self.push(VInstruction::Lea(dest, base, index, scale));
+                self.push(VInstruction::Lea { dest, base, index, size });
                 dest
             }
             ExpressionInfo::Cast { ty, kind, value } => {
-                let size_before = self.size_of_value(value);
-                let size_after = self.size_of_ty(ty);
+                let size_before = self.reg_size_of_value(value).unwrap();
+                let size_after = self.reg_size_of_ty(ty).unwrap();
 
                 match kind {
                     CastKind::IntTruncate => {
@@ -381,7 +485,13 @@ impl Selector<'_> {
                     CastKind::IntExtend(signed) => {
                         let before = self.append_value_to_reg(value);
                         let after = self.values.new_vreg();
-                        self.push(VInstruction::Extend(signed, size_after, size_before, after, before));
+                        self.push(VInstruction::Extend {
+                            signed,
+                            size_after,
+                            size_before,
+                            dest: after,
+                            src: before,
+                        });
                         after
                     }
                 }
@@ -392,50 +502,71 @@ impl Selector<'_> {
         result
     }
 
-    fn append_value_to_rcm(&mut self, value: Value) -> VopRCM {
+    #[must_use]
+    fn append_value(&mut self, value: Value) -> VValue<VopRCM, VopLarge> {
+        let layout = self.layout_of_value(value);
+        let is_large = layout.size_bytes > RSize::FULL.bytes();
+
         match value {
             Value::Immediate(value) => match value {
-                Immediate::Void => todo!("void to operand"),
-                Immediate::Undef(_) => VopRCM::Undef,
-                Immediate::Const(cst) => VConst::Const(cst.value).into(),
+                Immediate::Void => VValue::Small(VopRCM::Undef),
+                Immediate::Undef(_) => if is_large {
+                    VValue::Large(VopLarge::Undef)
+                } else {
+                    VValue::Small(VopRCM::Undef)
+                },
+                Immediate::Const(cst) => {
+                    assert!(!is_large, "Large consts not yet supported");
+                    VValue::Small(VConst::Const(cst.value).into())
+                }
             },
             Value::Global(value) => {
-                VConst::Symbol(VSymbol::Global(value)).into()
+                assert!(!is_large, "Global values should be small");
+                VValue::Small(VConst::Symbol(VSymbol::Global(value)).into())
             }
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => {
-                    let index = self.map_slot_to_index(slot);
-                    VopRCM::Slot(index)
+                    // TODO add Vop version of slots so we can inline them into load/store instructions
+                    let dest = self.values.new_vreg();
+                    let pos = StackPosition::Slot(slot);
+                    self.push(VInstruction::StackPtr { dest, pos });
+                    VValue::Small(dest.into())
                 }
                 Scoped::Param(param) => self.values.map_param(param).into(),
                 Scoped::Instr(instr) => self.values.map_instr(instr).into(),
             },
-            Value::Expr(expr) => self.append_expr(expr).into(),
+            Value::Expr(expr) => {
+                assert!(!is_large, "Large expressions not yet supported");
+                VValue::Small(self.append_expr(expr).into())
+            }
         }
     }
 
-    fn append_value_to_position(&mut self, value: Value) -> ValuePosition {
-        todo!()
+    // TODO remove new from name
+    #[must_use]
+    fn append_value_to_rcm_new(&mut self, value: Value) -> VopRCM {
+        let value = self.append_value(value);
+        value.as_small().unwrap_or_else(|| panic!("Expected small VopRCM, got {:?}", value))
     }
 
     #[must_use]
     fn append_value_to_rc(&mut self, value: Value) -> VopRC {
-        let operand = self.append_value_to_rcm(value);
-        let size = self.size_of_value(value);
+        let operand = self.append_value_to_rcm_new(value);
+        let size = self.reg_size_of_value(value).unwrap();
         self.force_rc(operand, size)
     }
 
     #[must_use]
     fn append_value_to_rm(&mut self, value: Value) -> VopRM {
-        let operand = self.append_value_to_rcm(value);
-        let size = self.size_of_value(value);
+        let operand = self.append_value_to_rcm_new(value);
+        let size = self.reg_size_of_value(value).unwrap();
         self.force_rm(operand, size)
     }
 
     #[must_use]
     fn append_value_to_reg(&mut self, value: Value) -> VReg {
-        let size = self.size_of_value(value);
-        let operand = self.append_value_to_rcm(value);
+        let operand = self.append_value_to_rcm_new(value);
+        let size = self.reg_size_of_value(value).unwrap();
         self.force_reg(operand, size)
     }
 
@@ -445,7 +576,7 @@ impl Selector<'_> {
             VopRCM::Undef => VopRC::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => cst.into(),
-            VopRCM::Slot(_) | VopRCM::Mem(_) => self.force_reg(value, size).into(),
+            VopRCM::Mem(_) => self.force_reg(value, size).into(),
         }
     }
 
@@ -455,38 +586,37 @@ impl Selector<'_> {
             VopRCM::Undef => VopRM::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Mem(mem) => mem.into(),
-            VopRCM::Slot(_) | VopRCM::Const(_) => self.force_reg(value, size).into(),
+            VopRCM::Const(_) => self.force_reg(value, size).into(),
         }
     }
 
     #[must_use]
     fn force_reg(&mut self, value: VopRCM, size: RSize) -> VReg {
         match value {
-            VopRCM::Undef => self.dummy_reg(),
-            VopRCM::Reg(reg) => reg,
-            VopRCM::Slot(index) => {
-                assert!(size == RSize::FULL);
-                let reg = self.values.new_vreg();
-                self.push(VInstruction::SlotPtr(reg, index));
-                reg
+            VopRCM::Undef => {
+                let dest = self.values.new_vreg();
+                self.push(VInstruction::DefAnyReg(dest));
+                dest
             }
+            VopRCM::Reg(reg) => reg,
             VopRCM::Mem(_) | VopRCM::Const(_) => {
-                let reg = self.values.new_vreg();
-                self.push(VInstruction::MovReg(size, reg, value));
-                reg
+                let src = value;
+                let dest = self.values.new_vreg();
+                self.push(VInstruction::MovReg { size, dest, src });
+                dest
             }
         }
     }
 
-    fn map_slot_to_index(&mut self, slot: StackSlot) -> usize {
-        *self.slots.get(&slot).unwrap()
+    fn layout_of_value(&self, value: impl Into<Value>) -> Layout {
+        Layout::for_value(self.prog, value)
     }
 
-    fn layout_of_value(self, value: Value) -> Layout {
-        Layout::for_type(self.prog, self.prog.type_of_value(value))
+    fn reg_size_of_value(&self, value: impl Into<Value>) -> Option<RSize> {
+        self.layout_of_value(value).reg_size()
     }
 
-    fn reg_size_of_value(&self, value: Value) -> RSize {
-        self.reg_size_of_ty(self.prog.type_of_value(value))
+    fn reg_size_of_ty(&self, ty: Type) -> Option<RSize> {
+        Layout::for_type(self.prog, ty).reg_size()
     }
 }

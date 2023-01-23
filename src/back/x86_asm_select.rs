@@ -7,7 +7,7 @@ use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PR
 use regalloc2 as r2;
 use regalloc2::VReg;
 
-use crate::back::abi::{ABI_PARAM_REGS, FunctionAbi};
+use crate::back::abi::{FunctionAbi, PassPosition};
 use crate::back::register::{Register, RSize};
 use crate::back::selector::{Selector, Symbols, ValueMapper};
 use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, VInstruction, VSymbol};
@@ -47,7 +47,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         println!("Func {:?}", func);
 
         let func_info = prog.get_func(func);
-        let mut mapper = ValueMapper::default();
+        let mut mapper = ValueMapper::new(prog);
 
         let mut blocks = vec![];
         let mut v_instructions = vec![];
@@ -60,7 +60,8 @@ pub fn lower_new(prog: &mut Program) -> String {
         });
 
         // collect calling conventions
-        let mut call_layouts = vec![];
+        let curr_func_abi = FunctionAbi::for_type(prog, &func_info.func_ty);
+        let mut inner_call_abis = vec![];
         for &block in &blocks_ordered {
             for &instr in &prog.get_block(block).instructions {
                 let instr_info = prog.get_instr(instr);
@@ -73,42 +74,47 @@ pub fn lower_new(prog: &mut Program) -> String {
                     println!("{:#?}", layout);
 
                     // TODO compute aggregate values at once?
-                    call_layouts.push(layout);
+                    inner_call_abis.push(layout);
                 }
             }
         }
-
-        // map slots
-        let slots = func_info.slots.iter().enumerate().map(|(i, &slot)| (slot, i)).collect();
 
         for &block in &blocks_ordered {
             let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
             // setup builder
-            let mut params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();
-
             let range_start = v_instructions.len();
+            let mut expr_cache = Default::default();
             let mut builder = Selector {
                 prog,
+                curr_func_abi: &curr_func_abi,
                 symbols: &mut symbols,
                 values: &mut mapper,
-                slots: &slots,
                 instructions: &mut v_instructions,
-                expr_cache: &mut Default::default(),
+                expr_cache: &mut expr_cache,
             };
 
-            if block == func_info.entry {
+            let vreg_params = if block == func_info.entry {
                 // allocate stack at the start of the function
                 builder.push(VInstruction::StackAlloc);
 
                 // define function params for entry block as defs instead of block params
                 for (index, &param) in params.iter().enumerate() {
-                    // TODO use the proper ABI registers
-                    let preg = ABI_PARAM_REGS[index];
-                    builder.push(VInstruction::DefFixedReg(param, preg));
+                    match curr_func_abi.pass_params[index].pos {
+                        PassPosition::Reg(param_reg) => {
+                            let param = builder.values.map_param(param).as_small().unwrap();
+                            builder.push(VInstruction::DefFixedReg(param, param_reg));
+                        }
+                        PassPosition::StackSlot(_) => {}
+                    }
                 }
-                params.clear();
-            }
+                vec![]
+            } else {
+                // define standard block params that fit into registers as virtual block params
+                params.iter()
+                    .filter_map(|&param| builder.values.map_param(param).as_small())
+                    .collect_vec()
+            };
 
             // convert instructions to vcode
             for &instr in instructions {
@@ -128,7 +134,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                 }
             }).collect();
 
-            blocks.push(R2BlockInfo { inst_range, succs, preds, params });
+            blocks.push(R2BlockInfo { inst_range, succs, preds, params: vreg_params });
         };
 
         let inst_infos = v_instructions.iter().map(|inst| inst.to_inst_info()).collect();
@@ -155,9 +161,10 @@ pub fn lower_new(prog: &mut Program) -> String {
         println!("{:?}", result);
 
         // TODO do all of this properly, depending on the calling convention
+        // TODO consider IR slots, param slots and virtual slots allocated by the mapper
         let stack_layout = StackLayout {
-            slot_bytes: slots.len() * 8,
-            spill_bytes: result.num_spillslots * 8,
+            slot_bytes: 0 * 8,
+            spill_bytes: result.num_spillslots * RSize::FULL.bytes() as usize,
             param_bytes: 0,
         };
         let mut ctx = AsmContext {
