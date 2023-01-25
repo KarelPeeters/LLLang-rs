@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Write};
 use std::iter::zip;
+use env_logger::Builder;
 
 use itertools::Itertools;
+use log::LevelFilter;
 use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
@@ -20,8 +22,12 @@ use crate::mid::util::verify::verify;
 use crate::util::arena::{ArenaSet, IndexType};
 use crate::util::internal_iter::InternalIterator;
 
+const TRACE: bool = true;
+
 pub fn lower_new(prog: &mut Program) -> String {
-    // Builder::new().filter_level(LevelFilter::Trace).init();
+    if TRACE {
+        Builder::new().filter_level(LevelFilter::Trace).init();
+    }
 
     assert_eq!(prog.ptr_size_bits(), 64, "This backend only supports 64-bit");
 
@@ -62,7 +68,12 @@ pub fn lower_new(prog: &mut Program) -> String {
         });
 
         // collect information about the code inside of this function
-        let curr_func_abi_id = abis.push(FunctionAbi::for_type(prog, &func_info.func_ty));
+        let curr_func_abi = FunctionAbi::for_type(prog, &func_info.func_ty);
+        println!("Curr func:");
+        println!("{}", prog.format_type(func_info.ty));
+        println!("{:#?}", curr_func_abi);
+        let curr_func_abi_id = abis.push(curr_func_abi);
+
         let mut large_block_params = vec![];
         let mut large_instrs = vec![];
 
@@ -87,6 +98,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                     let func_ty = prog.get_type(ty).unwrap_func().unwrap();
                     let abi = FunctionAbi::for_type(prog, func_ty);
 
+                    println!("Calling to:");
                     println!("{}", prog.format_type(ty));
                     println!("{:#?}", abi);
 
@@ -164,18 +176,20 @@ pub fn lower_new(prog: &mut Program) -> String {
 
         let inst_infos = v_instructions.iter().map(|inst| inst.to_inst_info()).collect();
 
+        // TODO use more registers
+        let env = build_env(None);
+
         let func_wrapper = FuncWrapper {
             entry_block: symbols.map_block(func_info.entry),
             blocks,
             v_instructions,
             inst_infos,
             vregs: mapper.vreg_count(),
+            preg_mask: PRegSet::from(&env),
         };
 
-        // TODO use more registers
-        let env = build_env(4);
         let options = RegallocOptions {
-            verbose_log: false,
+            verbose_log: TRACE,
             validate_ssa: true,
         };
 
@@ -232,7 +246,13 @@ pub fn lower_new(prog: &mut Program) -> String {
         };
 
         // actually generate code
-        output.appendln(format_args!("{}:", VSymbol::Global(func.into()).to_asm(&ctx)));
+        let func_symbol = VSymbol::Global(func.into()).to_asm(&ctx);
+        let func_ty = prog.format_type(func_info.ty);
+        if let Some(debug_name) = &func_info.debug_name {
+            output.appendln(format_args!("{}: ; {:?} {}", func_symbol, debug_name, func_ty));
+        } else {
+            output.appendln(format_args!("{}: {}", func_symbol, func_ty));
+        }
 
         for &block in &blocks_ordered {
             let block_r2 = symbols.map_block(block);
@@ -343,14 +363,17 @@ impl Output {
     }
 }
 
-fn build_env(reg_count: usize) -> MachineEnv {
+fn build_env(limit_regs: Option<usize>) -> MachineEnv {
     // don't use stack pointer as general purpose register
     let mut regs = Register::ALL.iter()
         .filter(|&&reg| reg != Register::SP)
         .map(|reg| PReg::new(reg.index(), RegClass::Int))
         .collect_vec();
 
-    drop(regs.drain(reg_count..));
+    // TODO this doesn't work very well in the presence of clobbers registers any more
+    if let Some(limit_regs) = limit_regs{
+        drop(regs.drain(limit_regs..));
+    }
 
     MachineEnv {
         preferred_regs_by_class: [regs, vec![]],
@@ -366,6 +389,7 @@ struct FuncWrapper {
     v_instructions: Vec<VInstruction>,
     inst_infos: Vec<InstInfo>,
     vregs: usize,
+    preg_mask: PRegSet,
 }
 
 struct R2BlockInfo {
@@ -427,7 +451,8 @@ impl r2::Function for FuncWrapper {
     }
 
     fn inst_clobbers(&self, inst: Inst) -> PRegSet {
-        self.inst_infos[inst.0 as usize].clobbers
+        let clobbers = self.inst_infos[inst.0 as usize].clobbers;
+        mask_preg_set(clobbers, self.preg_mask)
     }
 
     fn num_vregs(&self) -> usize {
@@ -438,4 +463,14 @@ impl r2::Function for FuncWrapper {
         // TODO figure out what this is
         1
     }
+}
+
+fn mask_preg_set(set: PRegSet, mask: PRegSet) -> PRegSet {
+    let mut result = PRegSet::empty();
+    for preg in set {
+        if mask.contains(preg) {
+            result.add(preg);
+        }
+    }
+    result
 }

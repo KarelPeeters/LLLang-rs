@@ -233,8 +233,10 @@ impl Selector<'_, '_> {
                 let target_ty = prog.get_type(prog.type_of_value(target)).unwrap_func().unwrap();
                 let abi = FunctionAbi::for_type(prog, target_ty);
 
+                let result = self.values.map_instr(instr);
+
                 let reg_result = match abi.pass_ret.pos {
-                    PassPosition::Reg(reg) => Some((self.values.new_vreg(), reg)),
+                    PassPosition::Reg(reg) => Some((result.as_small().unwrap(), reg)),
                     PassPosition::StackSlot(_) => {
                         todo!("copy return value to correct stack position");
                     }
@@ -256,7 +258,13 @@ impl Selector<'_, '_> {
                 }
 
                 let mut clobbers = PRegSet::empty();
-                for reg in &abi.volatile_registers {
+                for &reg in &abi.volatile_registers {
+                    // don't mark return register as a clobber
+                    // TODO this cases unclear panic in regalloc2, maybe report as bug
+                    if abi.pass_ret.pos == PassPosition::Reg(reg) {
+                        continue;
+                    }
+
                     clobbers.add(PReg::new(reg.index(), RegClass::Int));
                 }
 
