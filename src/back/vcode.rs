@@ -1,4 +1,5 @@
 use std::cmp::min_by_key;
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use derive_more::From;
@@ -8,7 +9,7 @@ use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VR
 use crate::back::layout::Layout;
 use crate::back::register::{Register, RSize};
 use crate::back::selector::StackPosition;
-use crate::mid::ir::{Block, Global, Program, Signed};
+use crate::mid::ir::{Block, Global, Instruction, Parameter, Program, Signed, StackSlot};
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::IndexType;
 
@@ -94,6 +95,9 @@ pub enum VInstruction {
     Setcc { cc: &'static str, dest: VReg, dest_before: VReg },
 
     // terminators
+    // TODO insert moves for phis somewhere?
+    //   for jumps right before the jump, for branches right at the start of each target?
+    //   ... yikes
     Jump { target: VTarget },
     // TODO make sure we end up generating good branch code
     Branch { cond: VReg, true_target: VTarget, false_target: VTarget },
@@ -101,7 +105,7 @@ pub enum VInstruction {
     Unreachable,
     LoopForever { label: VSymbol },
 
-    /// increase the stack size at the start of the function
+    /// allocate the stack at the function entry
     StackAlloc,
 }
 
@@ -130,7 +134,7 @@ impl VOperand for VopLarge {
 #[derive(Debug)]
 struct VopLargeUndef;
 
-struct StackOffset(pub usize);
+struct StackOffset(pub u32);
 
 impl StackOffset {
     fn to_asm(&self) -> String {
@@ -148,7 +152,7 @@ impl VopLarge {
         matches!(self, VopLarge::Undef)
     }
 
-    fn to_asm_offset(self, ctx: &AsmContext, offset: usize) -> Result<String, VopLargeUndef> {
+    fn to_asm_offset(self, ctx: &AsmContext, offset: u32) -> Result<String, VopLargeUndef> {
         match self {
             VopLarge::Undef => Err(VopLargeUndef),
             VopLarge::Stack(position) => {
@@ -430,28 +434,16 @@ impl AsmContext<'_> {
 
 #[derive(Debug, Clone)]
 pub struct StackLayout {
-    pub slot_bytes: usize,
-    pub spill_bytes: usize,
-    pub param_bytes: usize,
-}
+    /// allocated at the entry of the function.
+    pub alloc_bytes: u32,
+    /// freed just before returning from the function
+    pub free_bytes: u32,
 
-impl StackLayout {
-    // TODO this depends on the calling convention
-    pub fn alloc_bytes(&self) -> usize {
-        self.slot_bytes + self.spill_bytes
-    }
+    pub slot_offsets: HashMap<StackSlot, u32>,
+    pub param_offsets: HashMap<Parameter, u32>,
+    pub instr_offsets: HashMap<Instruction, u32>,
 
-    pub fn free_bytes(&self) -> usize {
-        self.param_bytes + self.slot_bytes + self.spill_bytes
-    }
-
-    pub fn spill_offset(&self, index: usize) -> usize {
-        index * 4
-    }
-
-    pub fn slot_offset(&self, index: usize) -> usize {
-        index * 4 + self.spill_bytes
-    }
+    // TODO call and return offsets, per calling conv
 }
 
 impl VInstruction {
@@ -610,15 +602,15 @@ impl VInstruction {
                 }
 
                 let mut bytes_left = layout.size_bytes;
-                let mut result= String::new();
+                let mut result = String::new();
 
                 for &size in RSize::ALL_DECREASING {
                     while bytes_left >= size.bytes() {
                         let offset = layout.size_bytes - bytes_left;
                         bytes_left -= size.bytes();
 
-                        let dest_str = dest.to_asm_offset(ctx, offset as usize).unwrap();
-                        let src_str = src.to_asm_offset(ctx, offset as usize).unwrap();
+                        let dest_str = dest.to_asm_offset(ctx, offset).unwrap();
+                        let src_str = src.to_asm_offset(ctx, offset).unwrap();
                         let tmp_str = tmp.to_asm(ctx, size);
 
                         write!(&mut result, "mov {}, {}\nmov {}, {}", tmp_str, src_str, dest_str, tmp_str).unwrap();
@@ -719,7 +711,7 @@ impl VInstruction {
                 s
             }
             VInstruction::ReturnAndStackFree { value: _value } => {
-                let bytes = ctx.stack_layout.free_bytes();
+                let bytes = ctx.stack_layout.free_bytes;
                 if bytes != 0 {
                     format!("add rsp, {}\nret 0", bytes)
                 } else {
@@ -731,7 +723,7 @@ impl VInstruction {
                 format!("{}: jmp {}", label.to_asm(ctx), label.to_asm(ctx))
             }
             VInstruction::StackAlloc => {
-                let bytes = ctx.stack_layout.alloc_bytes();
+                let bytes = ctx.stack_layout.alloc_bytes;
                 if bytes != 0 {
                     format!("sub rsp, {}", bytes)
                 } else {

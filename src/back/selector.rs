@@ -10,6 +10,10 @@ use crate::back::register::RSize;
 use crate::back::vcode::{AsmContext, VConst, VInstruction, VMem, VopLarge, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
+use crate::util::arena::ArenaSet;
+
+// TODO put this in a better spot
+new_index_type!(pub FunctionAbiId);
 
 #[derive(Default)]
 pub struct Symbols {
@@ -41,6 +45,8 @@ pub type MappedValue = VValue<VReg, StackPosition>;
 pub struct ValueMapper<'p> {
     next_vreg: usize,
     prog: &'p Program,
+
+    // TODO maybe just remove this field? we don't really need it anymore
     map_param_or_instr: HashMap<Value, MappedValue>,
 }
 
@@ -48,15 +54,25 @@ pub struct ValueMapper<'p> {
 pub enum StackPosition {
     /// Proper IR slot.
     Slot(StackSlot),
+
     /// Either a function or block parameter.
     Param(Parameter),
     /// Used for instruction outputs.
     Instr(Instruction),
+
+    CallParam(FunctionAbiId, usize),
+    CallReturn(FunctionAbiId, usize),
 }
 
 impl StackPosition {
-    pub fn to_offset(&self, _: &AsmContext) -> usize {
-        todo!()
+    pub fn to_offset(&self, ctx: &AsmContext) -> u32 {
+        match *self {
+            StackPosition::Slot(slot) => *ctx.stack_layout.slot_offsets.get(&slot).unwrap(),
+            StackPosition::Param(_) => todo!(),
+            StackPosition::Instr(_) => todo!(),
+            StackPosition::CallParam(_, _) => todo!(),
+            StackPosition::CallReturn(_, _) => todo!(),
+        }
     }
 }
 
@@ -102,15 +118,13 @@ impl<'p> ValueMapper<'p> {
     pub fn vreg_count(&self) -> usize {
         self.next_vreg
     }
-
-    pub fn stack_positions(&self) -> impl Iterator<Item=StackPosition> + '_ {
-        self.map_param_or_instr.values()
-            .filter_map(|value| option_match!(value, &VValue::Large(pos) => pos))
-    }
 }
 
 pub struct Selector<'a, 'p> {
     pub prog: &'p Program,
+
+    pub abis: &'a ArenaSet<FunctionAbiId, FunctionAbi>,
+    pub curr_func_abi_id: FunctionAbiId,
     pub curr_func_abi: &'a FunctionAbi,
 
     pub symbols: &'a mut Symbols,
@@ -287,8 +301,6 @@ impl Selector<'_, '_> {
             }
             Terminator::Return { value } => {
                 // TODO ensure we don't do any useless stuff for void
-
-
                 let value = match self.curr_func_abi.pass_ret.pos {
                     PassPosition::Reg(value_reg) => {
                         let value = self.append_value_to_reg(value);
@@ -314,9 +326,10 @@ impl Selector<'_, '_> {
     fn append_target(&mut self, target: &Target) -> VTarget {
         self.expr_cache.clear();
         let &Target { block, ref args } = target;
-        let args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
 
-        VTarget { block, args }
+        let reg_args = args.iter().map(|&arg| self.append_value_to_reg(arg)).collect();
+        // TODO where to put moves for struct arg/param pairs?
+        VTarget { block, args: reg_args }
     }
 
     fn append_mul(&mut self, left: Value, right: Value) -> VReg {
@@ -434,7 +447,7 @@ impl Selector<'_, '_> {
 
                 // moves potentially inserted by register allocation can't change the flags
                 self.push(VInstruction::Clear(before));
-                self.push(VInstruction::Cmp { size, left, right, });
+                self.push(VInstruction::Cmp { size, left, right });
                 self.push(VInstruction::Setcc {
                     cc: set_instr,
                     dest: after,

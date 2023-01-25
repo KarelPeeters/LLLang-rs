@@ -28,7 +28,7 @@ mod constants {
 }
 
 /// All sizes are in bytes.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct FunctionAbi {
     /// Stack space that needs to be allocated by the callee, for register parameter shadow space and stack parameters.
     /// This does **not** include the return address location pushed by `call` or additional slots necessary for passing
@@ -50,20 +50,20 @@ pub struct FunctionAbi {
     pub pass_ret: PassInfo,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct PassInfo {
     pub pos: PassPosition,
     pub by: PassBy,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum PassPosition {
     Reg(Register),
     // index into ptr-sized stackslot buffer?
     StackSlot(usize),
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum PassBy {
     Value,
     // index indo by_ref_slot_types

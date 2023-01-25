@@ -17,6 +17,9 @@ impl Layout {
         assert!(align_bytes >= 1, "alignment must be >= 1, got {}", align_bytes);
         assert!(align_bytes.count_ones() == 1, "alignment must be a power of two, got {}", align_bytes);
         assert!(size_bytes % align_bytes == 0, "size must be a multiple of alignment, got {} and {}", size_bytes, align_bytes);
+        if size_bytes != 0 {
+            assert!(size_bytes >= align_bytes, "size cannot be smaller than alignment, got {} and {}", size_bytes, align_bytes);
+        }
 
         Layout { size_bytes, align_bytes }
     }
@@ -25,7 +28,12 @@ impl Layout {
         match prog.get_type(ty) {
             TypeInfo::Void => Layout::new(0, 1),
 
-            TypeInfo::Pointer { .. } | TypeInfo::Func(_) => Layout::new(4, 4),
+            TypeInfo::Pointer { .. } | TypeInfo::Func(_) => {
+                // TODO this is kind of sketch, where do we check that this matches register size?
+                assert!(prog.ptr_size_bits() % 8 == 0);
+                let size_bytes = prog.ptr_size_bits() / 8;
+                Layout::new(size_bytes, size_bytes)
+            },
 
             TypeInfo::Integer { bits: 1 } => Layout::new(1, 1),
             TypeInfo::Integer { bits: 8 } => Layout::new(1, 1),
@@ -35,6 +43,7 @@ impl Layout {
             TypeInfo::Integer { bits } => panic!("Integer with {} bits not yet supported", bits),
 
             &TypeInfo::Array(ArrayType { inner, length }) => {
+                // TODO consider supporting alignment > size, which means we need additional padding in arrays
                 let inner = Layout::for_type(prog, inner);
                 Layout::new(inner.size_bytes * length, inner.align_bytes)
             }
