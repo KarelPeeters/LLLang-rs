@@ -10,10 +10,11 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::abi::{FunctionAbi, PassPosition};
-use crate::back::layout::{Layout, TupleLayout};
+use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::back::register::{Register, RSize};
-use crate::back::selector::{FunctionAbiId, Selector, Symbols, ValueMapper};
-use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, VInstruction, VSymbol};
+use crate::back::selector::{FunctionAbiId, Selector, StackPosition, Symbols, ValueMapper};
+use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, StackOffset, VInstruction, VSymbol};
+use crate::back::vcode::VopRC::Reg;
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, InstructionInfo, Program};
@@ -136,15 +137,37 @@ pub fn lower_new(prog: &mut Program) -> String {
                 builder.push(VInstruction::StackAlloc);
 
                 // define function params for entry block as defs instead of block params
+                let mut fixed_regs = vec![];
+                let mut param_loads = vec![];
+
                 for (index, &param) in params.iter().enumerate() {
                     match abis[curr_func_abi_id].pass_params[index].pos {
                         PassPosition::Reg(param_reg) => {
                             let param = builder.values.map_param(param).as_small().unwrap();
-                            builder.push(VInstruction::DefFixedReg(param, param_reg));
+                            fixed_regs.push((param, param_reg));
                         }
-                        PassPosition::StackSlot(_) => {}
+                        PassPosition::StackSlot { stack_offset } => {
+                            if let Some(rsize) = Layout::for_type(prog, prog.get_param(param).ty).reg_size() {
+                                let dest = builder.values.map_param(param).as_small().unwrap();
+                                param_loads.push(VInstruction::MovRegStack {
+                                    size: rsize,
+                                    dest,
+                                    src: StackPosition::OffsetPreAlloc { stack_offset },
+                                });
+                            }
+
+                            // TODO do we need to do something for large values here?
+                        }
                     }
                 }
+
+                if !fixed_regs.is_empty() {
+                    builder.push(VInstruction::DefFixedRegs(fixed_regs));
+                }
+                for load in param_loads {
+                    builder.push(load);
+                }
+
                 vec![]
             } else {
                 // define standard block params that fit into registers as virtual block params
@@ -210,9 +233,11 @@ pub fn lower_new(prog: &mut Program) -> String {
         slot_layouts.extend(large_block_params.iter().map(|&param| Layout::for_value(prog, param)));
         slot_layouts.extend(large_instrs.iter().map(|&instr| Layout::for_value(prog, instr)));
 
-        println!("slot_layouts:");
-        for layout in &slot_layouts {
-            println!("  {:?}", layout);
+        if !slot_layouts.is_empty() {
+            println!("slot_layouts:");
+            for layout in &slot_layouts {
+                println!("  {:?}", layout);
+            }
         }
 
         let slot_layout = TupleLayout::from_layouts(slot_layouts.iter().copied());
@@ -222,7 +247,9 @@ pub fn lower_new(prog: &mut Program) -> String {
             .map(|&abi| abis[abi].stack_space_allocated_by_caller)
             .max().unwrap_or(0);
 
-        let mut offsets = slot_layout.offsets.iter().map(|&o| o + max_call_space).collect_vec();
+        let mut offsets = slot_layout.offsets.iter()
+            .map(|&o| StackOffset(o + max_call_space))
+            .collect_vec();
         offsets.reverse();
 
         let slot_offsets = func_info.slots.iter().map(|&slot| (slot, offsets.pop().unwrap())).collect();
@@ -231,13 +258,25 @@ pub fn lower_new(prog: &mut Program) -> String {
 
         let curr_func_abi = &abis[curr_func_abi_id];
 
+        // target max of slot + child alignment IF ANY
+        //    assuming only curr alignment (if we need to do dynamic stuff, store stack ptr somewhere)
+        let return_ptr_size = RSize::FULL.bytes();
+        let alloc_bytes = next_multiple(
+            slot_layout.layout.size_bytes + max_call_space + return_ptr_size,
+            curr_func_abi.stack_alignment_bytes
+        ) - return_ptr_size;
+
         let stack_layout = StackLayout {
-            alloc_bytes: RSize::FULL.bytes() + slot_layout.layout.size_bytes + max_call_space,
-            free_bytes: curr_func_abi.stack_space_freed_by_callee,
+            alloc_bytes,
+            free_bytes: alloc_bytes + curr_func_abi.stack_space_freed_by_callee,
             slot_offsets,
             param_offsets,
             instr_offsets,
+            call_alloc_delta_bytes: alloc_bytes + return_ptr_size,
         };
+
+        println!("slot_layout: {:?}", slot_layout);
+        println!("stack_layout: {:?}", stack_layout);
 
         let mut ctx = AsmContext {
             prog,
@@ -365,8 +404,9 @@ impl Output {
 
 fn build_env(limit_regs: Option<usize>) -> MachineEnv {
     // don't use stack pointer as general purpose register
+    //   also don't use base pointer for now, it's just hard to read and we might need it later
     let mut regs = Register::ALL.iter()
-        .filter(|&&reg| reg != Register::SP)
+        .filter(|&&reg| reg != Register::SP && reg != Register::BP)
         .map(|reg| PReg::new(reg.index(), RegClass::Int))
         .collect_vec();
 

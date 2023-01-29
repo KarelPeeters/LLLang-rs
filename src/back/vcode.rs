@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 use derive_more::From;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
 
 use crate::back::layout::Layout;
@@ -18,8 +19,8 @@ use crate::util::arena::IndexType;
 pub enum VInstruction {
     /// Mark the given register as defined.
     DefAnyReg(VReg),
-    /// Mark the given register as defined.
-    DefFixedReg(VReg, Register),
+    /// Mark the given registers as defined.
+    DefFixedRegs(Vec<(VReg, Register)>),
 
     /// Set the given register to zero.
     Clear(VReg),
@@ -28,6 +29,12 @@ pub enum VInstruction {
     MovReg { size: RSize, dest: VReg, src: VopRCM },
     /// `dest = src`
     MovMem { size: RSize, dest: VMem, src: VopRC },
+
+    // TODO remove this once we find a better way to represent stack addresses
+    /// `stack[dest_offset] = src`
+    MovStackReg { size: RSize, dest: StackPosition, src: VopRC },
+    // TODO zero/sign extend?
+    MovRegStack { size: RSize, dest: VReg, src: StackPosition },
 
     /// `dest = src`
     MovLarge {
@@ -132,17 +139,19 @@ impl VOperand for VopLarge {
 }
 
 #[derive(Debug)]
-struct VopLargeUndef;
+pub struct VopLargeUndef;
 
-struct StackOffset(pub u32);
+#[derive(Debug, Copy, Clone)]
+pub struct StackOffset(pub u32);
 
 impl StackOffset {
     fn to_asm(&self) -> String {
         let offset = self.0;
+        let sp_str = Register::SP.to_symbol(RSize::FULL);
         if offset == 0 {
-            "[esp]".to_string()
+            format!("[{sp_str}]")
         } else {
-            format!("[esp + {}]", offset)
+            format!("[{sp_str} + {offset}]")
         }
     }
 }
@@ -156,11 +165,13 @@ impl VopLarge {
         match self {
             VopLarge::Undef => Err(VopLargeUndef),
             VopLarge::Stack(position) => {
-                let base = position.to_offset(ctx);
+                todo!("investigate what this is trying to do")
+
+                // let base = position.to_offset(ctx);
                 // TODO stronger that check that uses the size of this value instead of only the stack pos?
-                assert!(base >= offset, "Offset out of bounds");
-                let total = base - offset;
-                Ok(StackOffset(total).to_asm())
+                // assert!(base >= offset, "Offset out of bounds");
+                // let total = base - offset;
+                // Ok(StackOffset(total).to_asm())
             }
             VopLarge::Mem(mem) => {
                 let mem_offset = VMem::at_offset(mem.reg, mem.offset + offset as isize);
@@ -439,9 +450,11 @@ pub struct StackLayout {
     /// freed just before returning from the function
     pub free_bytes: u32,
 
-    pub slot_offsets: HashMap<StackSlot, u32>,
-    pub param_offsets: HashMap<Parameter, u32>,
-    pub instr_offsets: HashMap<Instruction, u32>,
+    pub slot_offsets: HashMap<StackSlot, StackOffset>,
+    pub param_offsets: HashMap<Parameter, StackOffset>,
+    pub instr_offsets: HashMap<Instruction, StackOffset>,
+
+    pub call_alloc_delta_bytes: u32,
 
     // TODO call and return offsets, per calling conv
 }
@@ -454,8 +467,10 @@ impl VInstruction {
             VInstruction::DefAnyReg(dest) => {
                 operands.push_def(dest);
             }
-            VInstruction::DefFixedReg(dest, dest_reg) => {
-                operands.push_fixed_def(dest, dest_reg);
+            VInstruction::DefFixedRegs(ref regs) => {
+                for &(dest, dest_reg) in regs {
+                    operands.push_fixed_def(dest, dest_reg);
+                }
             }
             VInstruction::Clear(dest) => {
                 operands.push_def(dest);
@@ -471,6 +486,13 @@ impl VInstruction {
             }
             VInstruction::MovMem { size: _, dest, src } => {
                 operands.push_use(src);
+                operands.push_def(dest);
+            }
+
+            VInstruction::MovStackReg { size: _, dest: _, src } => {
+                operands.push_use(src);
+            }
+            VInstruction::MovRegStack { size: _, dest, src: _ } => {
                 operands.push_def(dest);
             }
 
@@ -568,9 +590,12 @@ impl VInstruction {
         match *self {
             VInstruction::DefAnyReg(dest) =>
                 format!("; def any {}", dest.to_asm(ctx, RSize::FULL)),
-            VInstruction::DefFixedReg(dest, dest_reg) => {
-                assert!(ctx.map_reg(dest).is_reg(dest_reg));
-                format!("; def fixed {}", dest.to_asm(ctx, RSize::FULL))
+            VInstruction::DefFixedRegs(ref regs) => {
+                let content = regs.iter().map(|&(dest, dest_reg)| {
+                    assert!(ctx.map_reg(dest).is_reg(dest_reg));
+                    dest.to_asm(ctx, RSize::FULL)
+                }).join(", ");
+                format!("; def fixed {}", content)
             }
             VInstruction::Clear(dest) => {
                 let dest = dest.to_asm(ctx, RSize::FULL);
@@ -594,6 +619,18 @@ impl VInstruction {
                 } else {
                     format!("mov {} {}, {}", size.keyword(), dest_str, source_str)
                 }
+            }
+            VInstruction::MovStackReg { size, dest, src } => {
+                let dest_str = dest.to_offset(ctx).to_asm();
+                let src_str = src.to_asm(ctx, size);
+                if let VopRC::Reg(_) = src {
+                    format!("mov {}, {}", dest_str, src_str)
+                } else {
+                    format!("mov {} {}, {}", size.keyword(), dest_str, src_str)
+                }
+            }
+            VInstruction::MovRegStack { size, dest, src } => {
+                format!("mov {}, {}", dest.to_asm(ctx, size), src.to_offset(ctx).to_asm())
             }
             VInstruction::MovLarge { layout, dest, src, tmp } => {
                 // TODO add better way to skip useless instructions
@@ -634,13 +671,13 @@ impl VInstruction {
             }
             VInstruction::StackPtr { dest, pos } => {
                 let dest = dest.to_asm(ctx, RSize::FULL);
-                let sp_str = Register::SP.to_symbol(RSize::FULL);
                 let offset = pos.to_offset(ctx);
+                let sp_str = Register::SP.to_symbol(RSize::FULL);
 
-                if offset == 0 {
+                if offset.0 == 0 {
                     format!("mov {dest}, {sp_str}")
                 } else {
-                    format!("lea {dest}, [{sp_str} + {offset}]")
+                    format!("lea {dest}, {}", offset.to_asm())
                 }
             }
             VInstruction::Binary { size, op: instr, dest, left, right } => {

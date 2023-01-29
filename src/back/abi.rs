@@ -27,6 +27,8 @@ mod constants {
     pub const WIN64_ABI_CALL_NON_VOLATILE_REGS: &[Register] = &[B, BP, DI, SI, SP, R12, R13, R14, R15];
 }
 
+// TODO add a way to tell functions that they can clobber part of the parent stack range (eg for params in win64)
+
 /// All sizes are in bytes.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct FunctionAbi {
@@ -59,8 +61,7 @@ pub struct PassInfo {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum PassPosition {
     Reg(Register),
-    // index into ptr-sized stackslot buffer?
-    StackSlot(usize),
+    StackSlot { stack_offset: u32 },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -127,11 +128,12 @@ impl FunctionAbi {
                 PassBy::Value
             };
 
-            let pos = if let Some(&reg) = WIN64_ABI_PARAM_REGS.get(param_index) {
+            let pos = if let Some(&reg) = WIN64_ABI_PARAM_REGS.get(param_index as usize) {
                 PassPosition::Reg(reg)
             } else {
                 // don't subtract reg count, we still allocate shadow stack space for those
-                PassPosition::StackSlot(param_index)
+                let stack_offset = RSize::FULL.bytes() * param_index;
+                PassPosition::StackSlot { stack_offset }
             };
 
             PassInfo { pos, by }
@@ -143,7 +145,7 @@ impl FunctionAbi {
             stack_space_allocated_by_caller: stack_space,
             stack_alignment_bytes: 16,
             stack_space_freed_by_caller: 0,
-            stack_space_freed_by_callee: stack_space,
+            stack_space_freed_by_callee: 0,
             volatile_registers: WIN64_ABI_CALL_VOLATILE_REGS.to_owned(),
             by_ref_slot_types: ref_slot_types,
             pass_params,
@@ -206,15 +208,15 @@ mod test {
             PassInfo { pos: PassPosition::Reg(Register::D), by: PassBy::Value },
             PassInfo { pos: PassPosition::Reg(Register::R8), by: PassBy::Value },
             PassInfo { pos: PassPosition::Reg(Register::R9), by: PassBy::Value },
-            PassInfo { pos: PassPosition::StackSlot(4), by: PassBy::Value },
-            PassInfo { pos: PassPosition::StackSlot(5), by: PassBy::Value },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 4 * 8 }, by: PassBy::Value },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 5 * 8 }, by: PassBy::Value },
         ];
         let expected = FunctionAbi {
             stack_space_allocated_by_caller: 6 * 8,
             stack_alignment_bytes: 16,
             by_ref_slot_types: vec![],
             stack_space_freed_by_caller: 0,
-            stack_space_freed_by_callee: 6 * 8,
+            stack_space_freed_by_callee: 0,
             volatile_registers: WIN64_ABI_CALL_VOLATILE_REGS.to_owned(),
             pass_params: expected_pass_params,
             pass_ret: PassInfo { pos: PassPosition::Reg(Register::A), by: PassBy::Value },
@@ -244,7 +246,7 @@ mod test {
             stack_alignment_bytes: 16,
             by_ref_slot_types: vec![],
             stack_space_freed_by_caller: 0,
-            stack_space_freed_by_callee: 4 * 8,
+            stack_space_freed_by_callee: 0,
             volatile_registers: WIN64_ABI_CALL_VOLATILE_REGS.to_owned(),
             pass_params: expected_pass_params,
             pass_ret: PassInfo { pos: PassPosition::Reg(Register::A), by: PassBy::Value },
@@ -273,17 +275,17 @@ mod test {
             PassInfo { pos: PassPosition::Reg(Register::D), by: PassBy::Ref(1) },
             PassInfo { pos: PassPosition::Reg(Register::R8), by: PassBy::Value },
             PassInfo { pos: PassPosition::Reg(Register::R9), by: PassBy::Ref(2) },
-            PassInfo { pos: PassPosition::StackSlot(4), by: PassBy::Value },
-            PassInfo { pos: PassPosition::StackSlot(5), by: PassBy::Ref(3) },
-            PassInfo { pos: PassPosition::StackSlot(6), by: PassBy::Value },
-            PassInfo { pos: PassPosition::StackSlot(7), by: PassBy::Value },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 4 * 8 }, by: PassBy::Value },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 5 * 8 }, by: PassBy::Ref(3) },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 6 * 8 }, by: PassBy::Value },
+            PassInfo { pos: PassPosition::StackSlot { stack_offset: 7 * 8 }, by: PassBy::Value },
         ];
         let expected = FunctionAbi {
             stack_space_allocated_by_caller: 8 * 8,
             stack_alignment_bytes: 16,
             by_ref_slot_types: vec![ty_struct_ret, ty_struct_arg, ty_struct_arg, ty_struct_arg],
             stack_space_freed_by_caller: 0,
-            stack_space_freed_by_callee: 8 * 8,
+            stack_space_freed_by_callee: 0,
             volatile_registers: WIN64_ABI_CALL_VOLATILE_REGS.to_owned(),
             pass_params: expected_pass_params,
             pass_ret: PassInfo { pos: PassPosition::Reg(Register::C), by: PassBy::Ref(0) },

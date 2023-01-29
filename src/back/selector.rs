@@ -7,7 +7,7 @@ use regalloc2 as r2;
 use crate::back::abi::{FunctionAbi, PassPosition};
 use crate::back::layout::{Layout, TupleLayout};
 use crate::back::register::RSize;
-use crate::back::vcode::{AsmContext, VConst, VInstruction, VMem, VopLarge, VopRC, VopRCM, VopRM, VSymbol, VTarget};
+use crate::back::vcode::{AsmContext, StackOffset, VConst, VInstruction, VMem, VopLarge, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::util::arena::ArenaSet;
@@ -54,24 +54,25 @@ pub struct ValueMapper<'p> {
 pub enum StackPosition {
     /// Proper IR slot.
     Slot(StackSlot),
-
     /// Either a function or block parameter.
     Param(Parameter),
     /// Used for instruction outputs.
     Instr(Instruction),
 
-    CallParam(FunctionAbiId, usize),
-    CallReturn(FunctionAbiId, usize),
+    OffsetPostAlloc { stack_offset: u32 },
+    OffsetPreAlloc { stack_offset: u32 },
 }
 
 impl StackPosition {
-    pub fn to_offset(&self, ctx: &AsmContext) -> u32 {
+    pub fn to_offset(&self, ctx: &AsmContext) -> StackOffset {
         match *self {
             StackPosition::Slot(slot) => *ctx.stack_layout.slot_offsets.get(&slot).unwrap(),
-            StackPosition::Param(_) => todo!(),
-            StackPosition::Instr(_) => todo!(),
-            StackPosition::CallParam(_, _) => todo!(),
-            StackPosition::CallReturn(_, _) => todo!(),
+            StackPosition::Param(param) => *ctx.stack_layout.param_offsets.get(&param).unwrap(),
+            StackPosition::Instr(instr) => *ctx.stack_layout.instr_offsets.get(&instr).unwrap(),
+
+            // TODO pick better names for this stuff
+            StackPosition::OffsetPostAlloc { stack_offset } => StackOffset(stack_offset),
+            StackPosition::OffsetPreAlloc { stack_offset } => StackOffset(stack_offset + ctx.stack_layout.call_alloc_delta_bytes),
         }
     }
 }
@@ -237,22 +238,30 @@ impl Selector<'_, '_> {
 
                 let reg_result = match abi.pass_ret.pos {
                     PassPosition::Reg(reg) => Some((result.as_small().unwrap(), reg)),
-                    PassPosition::StackSlot(_) => {
+                    PassPosition::StackSlot { .. } => {
                         todo!("copy return value to correct stack position");
                     }
                 };
                 let target = self.append_value_to_rcm_new(target);
 
-                // TODO re-order args to minimize register usage?
                 let mut reg_args = vec![];
                 for (&arg_value, param_abi) in zip(args, &abi.pass_params) {
                     match param_abi.pos {
                         PassPosition::Reg(arg_reg) => {
+                            // TODO support large args here?
                             let arg = self.append_value_to_reg(arg_value);
                             reg_args.push((arg, arg_reg))
                         }
-                        PassPosition::StackSlot(_) => {
-                            todo!("copy stack param to correct stack position")
+                        PassPosition::StackSlot { stack_offset } => {
+                            // TODO support large args here?
+                            let size = self.reg_size_of_value(arg_value).unwrap();
+                            let arg = self.append_value_to_rc(arg_value);
+
+                            self.push(VInstruction::MovStackReg {
+                                size,
+                                dest: StackPosition::OffsetPostAlloc { stack_offset },
+                                src: arg,
+                            });
                         }
                     }
                 }
@@ -314,7 +323,7 @@ impl Selector<'_, '_> {
                         let value = self.append_value_to_reg(value);
                         Some((value, value_reg))
                     }
-                    PassPosition::StackSlot(_) => {
+                    PassPosition::StackSlot { .. } => {
                         todo!("write the return value to the right stack position");
                     }
                 };
