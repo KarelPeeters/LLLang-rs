@@ -119,6 +119,7 @@ impl FunctionAbi {
             let param_index = next_param_index;
             next_param_index += 1;
 
+            // TODO structs cannot be passed in registers, even if they fit
             let param_layout = Layout::for_type(prog, param);
 
             let by = if win64_passed_by_ref(param_layout) {

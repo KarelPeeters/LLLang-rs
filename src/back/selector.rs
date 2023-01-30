@@ -4,7 +4,7 @@ use std::iter::zip;
 use regalloc2::{Inst, PReg, PRegSet, RegClass, VReg};
 use regalloc2 as r2;
 
-use crate::back::abi::{FunctionAbi, PassPosition};
+use crate::back::abi::{FunctionAbi, PassBy, PassPosition};
 use crate::back::layout::{Layout, TupleLayout};
 use crate::back::register::RSize;
 use crate::back::vcode::{AsmContext, StackOffset, VConst, VInstruction, VMem, VopLarge, VopRC, VopRCM, VopRM, VSymbol, VTarget};
@@ -127,6 +127,7 @@ pub struct Selector<'a, 'p> {
     pub abis: &'a ArenaSet<FunctionAbiId, FunctionAbi>,
     pub curr_func_abi_id: FunctionAbiId,
     pub curr_func_abi: &'a FunctionAbi,
+    pub return_ref_addr: Option<VReg>,
 
     pub symbols: &'a mut Symbols,
     pub values: &'a mut ValueMapper<'p>,
@@ -232,20 +233,33 @@ impl Selector<'_, '_> {
             }
             InstructionInfo::Call { target, ref args, conv: _ } => {
                 let target_ty = prog.get_type(prog.type_of_value(target)).unwrap_func().unwrap();
-                let abi = FunctionAbi::for_type(prog, target_ty);
+                let target_abi = FunctionAbi::for_type(prog, target_ty);
 
                 let result = self.values.map_instr(instr);
+                let mut reg_args = vec![];
 
-                let reg_result = match abi.pass_ret.pos {
-                    PassPosition::Reg(reg) => Some((result.as_small().unwrap(), reg)),
+                let reg_result = match target_abi.pass_ret.pos {
+                    PassPosition::Reg(reg) => {
+                        match target_abi.pass_ret.by {
+                            PassBy::Value => Some((result.as_small().unwrap(), reg)),
+                            PassBy::Ref(_) => {
+                                // immediately store result into the instruction output slot
+                                let result_pos = result.as_large().unwrap();
+                                let result_ptr = self.values.new_vreg();
+                                self.push(VInstruction::StackPtr { dest: result_ptr, pos: result_pos });
+                                let reg = unwrap_match!(self.curr_func_abi.pass_ret.pos, PassPosition::Reg(reg) => reg);
+                                reg_args.push((result_ptr, reg));
+                                None
+                            },
+                        }
+                    }
                     PassPosition::StackSlot { .. } => {
                         todo!("copy return value to correct stack position");
                     }
                 };
                 let target = self.append_value_to_rcm_new(target);
 
-                let mut reg_args = vec![];
-                for (&arg_value, param_abi) in zip(args, &abi.pass_params) {
+                for (&arg_value, param_abi) in zip(args, &target_abi.pass_params) {
                     match param_abi.pos {
                         PassPosition::Reg(arg_reg) => {
                             // TODO support large args here?
@@ -267,10 +281,10 @@ impl Selector<'_, '_> {
                 }
 
                 let mut clobbers = PRegSet::empty();
-                for &reg in &abi.volatile_registers {
+                for &reg in &target_abi.volatile_registers {
                     // don't mark return register as a clobber
                     // TODO this cases unclear panic in regalloc2, maybe report as bug
-                    if abi.pass_ret.pos == PassPosition::Reg(reg) {
+                    if target_abi.pass_ret.pos == PassPosition::Reg(reg) {
                         continue;
                     }
 
@@ -318,10 +332,30 @@ impl Selector<'_, '_> {
             }
             Terminator::Return { value } => {
                 // TODO ensure we don't do any useless stuff for void
-                let value = match self.curr_func_abi.pass_ret.pos {
+                let pass_ret = self.curr_func_abi.pass_ret;
+                let value = match pass_ret.pos {
                     PassPosition::Reg(value_reg) => {
-                        let value = self.append_value_to_reg(value);
-                        Some((value, value_reg))
+                        match pass_ret.by {
+                            PassBy::Value => {
+                                let value = self.append_value_to_reg(value);
+                                Some((value, value_reg))
+                            }
+                            PassBy::Ref(_) => {
+                                let return_ref_addr = self.return_ref_addr.unwrap();
+                                let layout = self.layout_of_value(value);
+                                let value = self.append_value(value).as_large().unwrap();
+
+                                let tmp = self.values.new_vreg();
+                                self.push(VInstruction::MovLarge {
+                                    layout,
+                                    dest: VopLarge::Mem(VMem::at(return_ref_addr)),
+                                    src: value,
+                                    tmp,
+                                });
+
+                                None
+                            }
+                        }
                     }
                     PassPosition::StackSlot { .. } => {
                         todo!("write the return value to the right stack position");
@@ -478,21 +512,26 @@ impl Selector<'_, '_> {
                 let layout = TupleLayout::for_types(prog, tuple_ty.fields.iter().copied());
 
                 let offset = layout.offsets[index as usize];
-                let offset = BitInt::from_unsigned(RSize::FULL.bits(), offset as UStorage).unwrap();
-                let offset = VConst::Const(offset).into();
-
                 let base = self.append_value_to_reg(base);
-                let dest = self.values.new_vreg();
 
-                // TODO can we use LEA here as well?
-                self.push(VInstruction::Binary {
-                    size: RSize::FULL,
-                    op: "add",
-                    dest,
-                    left: base,
-                    right: offset,
-                });
-                dest
+                if offset == 0 {
+                    base
+                } else {
+                    let offset = BitInt::from_unsigned(RSize::FULL.bits(), offset as UStorage).unwrap();
+                    let offset = VConst::Const(offset).into();
+
+                    let dest = self.values.new_vreg();
+
+                    // TODO can we use LEA here as well?
+                    self.push(VInstruction::Binary {
+                        size: RSize::FULL,
+                        op: "add",
+                        dest,
+                        left: base,
+                        right: offset,
+                    });
+                    dest
+                }
             }
             ExpressionInfo::PointerOffSet { ty, base, index } => {
                 // TODO add fallback for non-reg sized types

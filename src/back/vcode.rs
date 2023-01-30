@@ -165,13 +165,11 @@ impl VopLarge {
         match self {
             VopLarge::Undef => Err(VopLargeUndef),
             VopLarge::Stack(position) => {
-                todo!("investigate what this is trying to do")
-
-                // let base = position.to_offset(ctx);
-                // TODO stronger that check that uses the size of this value instead of only the stack pos?
-                // assert!(base >= offset, "Offset out of bounds");
-                // let total = base - offset;
-                // Ok(StackOffset(total).to_asm())
+                let base = position.to_offset(ctx).0;
+                // TODO stronger check that uses the size of this value instead of only the stack pos?
+                assert!(base >= offset, "Offset out of bounds");
+                let total = base - offset;
+                Ok(StackOffset(total).to_asm())
             }
             VopLarge::Mem(mem) => {
                 let mem_offset = VMem::at_offset(mem.reg, mem.offset + offset as isize);
@@ -650,7 +648,8 @@ impl VInstruction {
                         let src_str = src.to_asm_offset(ctx, offset).unwrap();
                         let tmp_str = tmp.to_asm(ctx, size);
 
-                        write!(&mut result, "mov {}, {}\nmov {}, {}", tmp_str, src_str, dest_str, tmp_str).unwrap();
+                        writeln!(&mut result, "mov {}, {}", tmp_str, src_str).unwrap();
+                        writeln!(&mut result, "mov {}, {}", dest_str, tmp_str).unwrap();
                     }
                 }
 

@@ -9,12 +9,11 @@ use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PR
 use regalloc2 as r2;
 use regalloc2::VReg;
 
-use crate::back::abi::{FunctionAbi, PassPosition};
+use crate::back::abi::{FunctionAbi, PassBy, PassPosition};
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::back::register::{Register, RSize};
 use crate::back::selector::{FunctionAbiId, Selector, StackPosition, Symbols, ValueMapper};
 use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, StackOffset, VInstruction, VSymbol};
-use crate::back::vcode::VopRC::Reg;
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, InstructionInfo, Program};
@@ -73,6 +72,8 @@ pub fn lower_new(prog: &mut Program) -> String {
         println!("Curr func:");
         println!("{}", prog.format_type(func_info.ty));
         println!("{:#?}", curr_func_abi);
+
+        let return_ref_addr = if matches!(curr_func_abi.pass_ret.by, PassBy::Ref(_)) { Some(mapper.new_vreg()) } else { None };
         let curr_func_abi_id = abis.push(curr_func_abi);
 
         let mut large_block_params = vec![];
@@ -125,6 +126,7 @@ pub fn lower_new(prog: &mut Program) -> String {
                 abis: &abis,
                 curr_func_abi: &abis[curr_func_abi_id],
                 curr_func_abi_id,
+                return_ref_addr,
 
                 symbols: &mut symbols,
                 values: &mut mapper,
@@ -140,8 +142,14 @@ pub fn lower_new(prog: &mut Program) -> String {
                 let mut fixed_regs = vec![];
                 let mut param_loads = vec![];
 
+                let curr_func_abi = &abis[curr_func_abi_id];
+                if let Some(return_ref_addr) = return_ref_addr {
+                    let reg = unwrap_match!(curr_func_abi.pass_ret.pos, PassPosition::Reg(reg) => reg);
+                    fixed_regs.push((return_ref_addr, reg));
+                }
+
                 for (index, &param) in params.iter().enumerate() {
-                    match abis[curr_func_abi_id].pass_params[index].pos {
+                    match curr_func_abi.pass_params[index].pos {
                         PassPosition::Reg(param_reg) => {
                             let param = builder.values.map_param(param).as_small().unwrap();
                             fixed_regs.push((param, param_reg));
