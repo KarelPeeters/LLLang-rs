@@ -1,6 +1,9 @@
 use std::mem::swap;
 use std::num::ParseIntError;
 
+use indexmap::IndexSet;
+use itertools::Itertools;
+
 use TokenType as TT;
 
 use crate::front::ast;
@@ -37,7 +40,7 @@ pub enum ParseError {
 
 macro_rules! declare_tokens {
     ($($token:ident$(($string:literal))?,)*) => {
-        #[derive(Eq, PartialEq, Copy, Clone, Debug)]
+        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
         pub enum TokenType {
             $($token,)*
         }
@@ -364,37 +367,11 @@ struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
     last_popped_end: Pos,
     restrictions: Restrictions,
+
+    /// Token types that would have been accepted as the next token.
+    /// This is used as the suggestions in "unexpected token" error messages.
+    allowed_token_types: IndexSet<TT>,
 }
-
-const EXPR_START_TOKENS: &[TT] = &[
-    TT::Return,
-    TT::Ampersand,
-    TT::DoubleAmpersand,
-    TT::Star,
-    TT::Minus,
-    TT::IntLit,
-    TT::True,
-    TT::False,
-    TT::Id,
-    TT::OpenB,
-];
-
-const TYPE_START_TOKENS: &[TT] = &[
-    TT::Underscore,
-    TT::Void,
-    TT::Bool,
-    TT::U8,
-    TT::U16,
-    TT::U32,
-    TT::I8,
-    TT::I16,
-    TT::I32,
-    TT::Ampersand,
-    TT::DoubleAmpersand,
-    TT::Id,
-    TT::OpenB,
-    TT::OpenS
-];
 
 #[derive(Debug, Copy, Clone)]
 enum ParseBinaryOp {
@@ -516,6 +493,7 @@ impl<'s> Parser<'s> {
     fn pop(&mut self) -> Result<Token> {
         let token = self.tokenizer.advance()?;
         self.last_popped_end = token.span.end;
+        self.allowed_token_types.clear();
         Ok(token)
     }
 
@@ -528,6 +506,7 @@ impl<'s> Parser<'s> {
     }
 
     fn at(&mut self, ty: TT) -> bool {
+        self.allowed_token_types.insert(ty);
         self.peek().ty == ty
     }
 
@@ -542,14 +521,11 @@ impl<'s> Parser<'s> {
 
     /// pop and return the next token if the type matches, otherwise return an error
     fn expect(&mut self, ty: TT, description: &'static str) -> Result<Token> {
+        self.allowed_token_types.insert(ty);
         if self.at(ty) {
             self.pop()
         } else {
-            Err(Self::unexpected_token(
-                self.peek(),
-                &[ty],
-                description,
-            ))
+            Err(self.unexpected_token(description))
         }
     }
 
@@ -562,19 +538,30 @@ impl<'s> Parser<'s> {
     }
 
     /// pop and return the next token if the type matches any of the given types, otherwise return an error
-    fn expect_any(&mut self, tys: &'static [TT], description: &'static str) -> Result<Token> {
+    fn expect_any(&mut self, tys: &[TT], description: &'static str) -> Result<Token> {
+        self.allowed_token_types.extend(tys.iter().copied());
         if tys.contains(&self.peek().ty) {
             Ok(self.pop()?)
         } else {
-            Err(Self::unexpected_token(self.peek(), tys, description))
+            Err(self.unexpected_token(description))
         }
     }
 
-    fn unexpected_token(token: &Token, allowed: &[TT], description: &'static str) -> ParseError {
+    fn peek_any(&mut self, tys: &[TT], description: &'static str) -> Result<&Token> {
+        self.allowed_token_types.extend(tys.iter().copied());
+        if tys.contains(&self.peek().ty) {
+            Ok(self.peek())
+        } else {
+            Err(self.unexpected_token(description))
+        }
+    }
+
+    fn unexpected_token(&mut self, description: &'static str) -> ParseError {
+        let token = self.peek();
         ParseError::Token {
             ty: token.ty,
             pos: token.span.start,
-            allowed: allowed.to_vec(),
+            allowed: self.allowed_token_types.iter().copied().collect_vec(),
             description,
         }
     }
@@ -622,7 +609,8 @@ impl<'s> Parser<'s> {
     }
 
     fn item(&mut self) -> Result<ast::Item> {
-        let token = self.peek();
+        const START_ITEM: &[TokenType] = &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use];
+        let token = self.peek_any(START_ITEM, "start of item")?;
 
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
@@ -630,7 +618,7 @@ impl<'s> Parser<'s> {
             TT::Const => self.const_().map(ast::Item::Const),
             TT::Use => self.use_decl().map(ast::Item::UseDecl),
             TT::Type => self.type_alias().map(ast::Item::TypeAlias),
-            _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use], "start of item"))
+            _ => unreachable!()
         }
     }
 
@@ -732,7 +720,9 @@ impl<'s> Parser<'s> {
     }
 
     fn statement(&mut self) -> Result<ast::Statement> {
-        let token = self.peek();
+        const START_STATEMENT: &[TT] = &[TT::Let, TT::If, TT::Loop, TT::While, TT::For, TT::OpenC];
+        let token = self.peek_any(START_STATEMENT, "statement start")?;
+
         let start_pos = token.span.start;
 
         let (kind, need_semi) = match token.ty {
@@ -1111,7 +1101,7 @@ impl<'s> Parser<'s> {
                 })
             }
 
-            _ => Err(Self::unexpected_token(self.peek(), EXPR_START_TOKENS, "expression"))
+            _ => Err(self.unexpected_token("expression"))
         }
     }
 
@@ -1264,7 +1254,7 @@ impl<'s> Parser<'s> {
                     kind: ast::TypeKind::Array { inner: Box::new(inner), length },
                 })
             }
-            _ => Err(Self::unexpected_token(self.peek(), TYPE_START_TOKENS, "type declaration")),
+            _ => Err(self.unexpected_token("type declaration")),
         }
     }
 }
@@ -1282,6 +1272,7 @@ pub fn parse_module(file: FileId, input: &str) -> Result<ast::ModuleContent> {
         tokenizer: Tokenizer::new(file, input)?,
         last_popped_end: Pos { file, line: 1, col: 1 },
         restrictions: Restrictions::NONE,
+        allowed_token_types: Default::default(),
     };
     parser.module()
 }
