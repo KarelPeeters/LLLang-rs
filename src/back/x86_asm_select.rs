@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Write};
 use std::iter::zip;
-use env_logger::Builder;
 
+use env_logger::Builder;
 use itertools::Itertools;
 use log::LevelFilter;
 use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
@@ -10,6 +10,7 @@ use regalloc2 as r2;
 use regalloc2::VReg;
 
 use crate::back::abi::{FunctionAbi, PassBy, PassPosition};
+use crate::back::abi_normalize::abi_normalize;
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::back::register::{Register, RSize};
 use crate::back::selector::{FunctionAbiId, Selector, StackPosition, Symbols, ValueMapper};
@@ -35,8 +36,12 @@ pub fn lower_new(prog: &mut Program) -> String {
     // TODO merge edges without any moves again
     split_critical_edges(prog);
     verify(prog).unwrap();
+    abi_normalize(prog);
+    // TODO verify again
+    // verify(prog).unwrap();
 
     std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
+    verify(prog).unwrap();
 
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
@@ -271,7 +276,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         let return_ptr_size = RSize::FULL.bytes();
         let alloc_bytes = next_multiple(
             slot_layout.layout.size_bytes + max_call_space + return_ptr_size,
-            curr_func_abi.stack_alignment_bytes
+            curr_func_abi.stack_alignment_bytes,
         ) - return_ptr_size;
 
         let stack_layout = StackLayout {
@@ -419,7 +424,7 @@ fn build_env(limit_regs: Option<usize>) -> MachineEnv {
         .collect_vec();
 
     // TODO this doesn't work very well in the presence of clobbers registers any more
-    if let Some(limit_regs) = limit_regs{
+    if let Some(limit_regs) = limit_regs {
         drop(regs.drain(limit_regs..));
     }
 

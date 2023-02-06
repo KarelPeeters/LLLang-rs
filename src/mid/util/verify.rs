@@ -245,20 +245,22 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
             ensure_type_match(prog, pos, prog.type_of_value(value), ty)?;
         }
         &InstructionInfo::Call { target, ref args, conv } => {
+            // ensure target is a function
             let target_ty = prog.type_of_value(target);
             let target_func_ty = prog.get_type(target_ty).unwrap_func()
                 .ok_or_else(|| VerifyError::ExpectedFunctionType(pos, ts(target_ty)))?;
 
+            // check calling conv
+            if conv != target_func_ty.conv {
+                return Err(VerifyError::WrongCallingConvention(target, target_func_ty.conv, pos, conv));
+            }
+
+            // check the params
             if target_func_ty.params.len() != args.len() {
                 return Err(VerifyError::WrongCallParamCount(pos, ts(target_ty), args.len()));
             }
-
             for (&param, &arg) in zip(&target_func_ty.params, args) {
                 ensure_type_match(prog, pos, param, prog.type_of_value(arg))?;
-            }
-
-            if conv != target_func_ty.conv {
-                return Err(VerifyError::WrongCallingConvention(target, target_func_ty.conv, pos, conv));
             }
         }
         InstructionInfo::BlackBox { value: _ } => {}
