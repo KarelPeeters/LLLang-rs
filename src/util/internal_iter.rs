@@ -102,6 +102,25 @@ pub trait InternalIterator: Sized {
         self.for_each(|_| result += 1);
         result
     }
+
+    fn single(self) -> Option<Self::Item> {
+        let mut first = None;
+        let result = self.try_for_each_impl(|curr| {
+            match first {
+                None => {
+                    first = Some(curr);
+                    ControlFlow::Continue(())
+                }
+                Some(_) => {
+                    ControlFlow::Break(())
+                }
+            }
+        });
+        match result {
+            ControlFlow::Continue(_) => first,
+            ControlFlow::Break(_) => None,
+        }
+    }
 }
 
 /// Types that can be used in [InternalIterator::collect] or [InternalIterator::sink].
@@ -110,6 +129,7 @@ pub trait FromInternalIterator<T> {
 }
 
 // boring wrapper types
+#[derive(Debug, Clone)]
 pub struct Map<I, F>(I, F);
 
 impl<T, I: InternalIterator, F: FnMut(I::Item) -> T> InternalIterator for Map<I, F> {
@@ -122,6 +142,7 @@ impl<T, I: InternalIterator, F: FnMut(I::Item) -> T> InternalIterator for Map<I,
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct FilterMap<I, F>(I, F);
 
 impl<T, I: InternalIterator, F: FnMut(I::Item) -> Option<T>> InternalIterator for FilterMap<I, F> {
@@ -138,6 +159,7 @@ impl<T, I: InternalIterator, F: FnMut(I::Item) -> Option<T>> InternalIterator fo
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Filter<I, F>(I, F);
 
 impl<I: InternalIterator, F: FnMut(&I::Item) -> bool> InternalIterator for Filter<I, F> {
@@ -193,5 +215,48 @@ impl<T> FromInternalIterator<T> for Vec<T> {
 impl<T> FromInternalIterator<T> for VecDeque<T> {
     fn push(&mut self, value: T) {
         self.push_back(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WrapIterator<I>(I);
+
+pub trait IterExt: Iterator + Sized {
+    fn into_internal(self) -> WrapIterator<Self>;
+    fn single(self) -> Option<Self::Item>;
+}
+
+impl<I: Iterator> IterExt for I {
+    fn into_internal(self) -> WrapIterator<Self> {
+        WrapIterator(self)
+    }
+
+    fn single(self) -> Option<Self::Item> {
+        self.into_internal().single()
+    }
+}
+
+impl<I: Iterator> InternalIterator for WrapIterator<I> {
+    type Item = I::Item;
+
+    fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
+        for x in self.0 {
+            f(x)?;
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::util::internal_iter::IterExt;
+
+    #[test]
+    fn single() {
+        let none: Option<&i32> = None;
+        assert_eq!([].iter().single(), none);
+        assert_eq!([1].iter().single(), Some(&1));
+        assert_eq!([1, 2].iter().single(), none);
+        assert_eq!([1, 2, 3].iter().single(), none);
     }
 }
