@@ -13,6 +13,7 @@ use crate::back::abi::{FunctionAbi, PassBy, PassPosition};
 use crate::back::abi_normalize::abi_normalize;
 use crate::back::layout::{Layout, next_multiple, TupleLayout};
 use crate::back::register::{Register, RSize};
+use crate::back::replace_large_values::replace_large_values;
 use crate::back::selector::{FunctionAbiId, Selector, StackPosition, Symbols, ValueMapper};
 use crate::back::vcode::{AllocPos, AsmContext, InstInfo, StackLayout, StackOffset, VInstruction, VSymbol};
 use crate::mid::analyse::usage::BlockUsage;
@@ -35,12 +36,13 @@ pub fn lower_new(prog: &mut Program) -> String {
     // the register allocator requires us to split critical edges
     // TODO merge edges without any moves again
     split_critical_edges(prog);
+    std::fs::write("ignored/back/back_0.ir", format!("{}", prog)).unwrap();
     verify(prog).unwrap();
     abi_normalize(prog);
-    // TODO verify again
-    // verify(prog).unwrap();
-
-    std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
+    std::fs::write("ignored/back/back_1.ir", format!("{}", prog)).unwrap();
+    verify(prog).unwrap();
+    // replace_large_values(prog);
+    std::fs::write("ignored/back/back_2.ir", format!("{}", prog)).unwrap();
     verify(prog).unwrap();
 
     let use_info = UseInfo::new(prog);
