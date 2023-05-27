@@ -103,27 +103,36 @@ declare_tokens![
     LessEqual("<="),
     Less("<"),
 
-    Plus("+"),
-    Minus("-"),
-    Slash("/"),
-    Percent("%"),
-
     // TODO find a better and more general solution to token overlaps
     //   (probably by rewriting the tokenizer to split tokens on-demand)
     DoubleAmpersand("&&"),
     DoublePipe("||"),
+    DoubleColon("::"),
+
+    PlusEq("+="),
+    MinusEq("-="),
+    StarEq("*="),
+    SlashEq("/="),
+    PercentEq("%="),
+    AmpersandEq("&="),
+    PipeEq("|="),
+    HatEq("^="),
+
+    Plus("+"),
+    Minus("-"),
+    Star("*"),
+    Slash("/"),
+    Percent("%"),
+    Ampersand("&"),
+    Pipe("|"),
+    Hat("^"),
 
     Dot("."),
-    DoubleColon("::"),
     Semi(";"),
     Colon(":"),
     QuestionMark("?"),
     Comma(","),
     Eq("="),
-    Ampersand("&"),
-    Star("*"),
-    Pipe("|"),
-    Hat("^"),
 
     OpenB("("),
     CloseB(")"),
@@ -441,6 +450,17 @@ const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
     BinOpInfo { level: 8, token: TT::Star, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Mul) },
     BinOpInfo { level: 8, token: TT::Slash, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Div) },
     BinOpInfo { level: 8, token: TT::Percent, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Mod) },
+];
+
+const BINARY_ASSIGNMENT_OPERATORS: &[(TT, ast::BinaryOp)] = &[
+    (TT::PipeEq, ast::BinaryOp::Or),
+    (TT::HatEq, ast::BinaryOp::Xor),
+    (TT::AmpersandEq, ast::BinaryOp::And),
+    (TT::PlusEq, ast::BinaryOp::Add),
+    (TT::MinusEq, ast::BinaryOp::Sub),
+    (TT::StarEq, ast::BinaryOp::Mul),
+    (TT::SlashEq, ast::BinaryOp::Div),
+    (TT::PercentEq, ast::BinaryOp::Mod),
 ];
 
 struct PrefixOpInfo {
@@ -813,6 +833,16 @@ impl<'s> Parser<'s> {
                     let right = self.expression_boxed()?;
                     ast::StatementKind::Assignment(ast::Assignment {
                         span: Span::new(left.span.start, right.span.end),
+                        left,
+                        right,
+                    })
+                } else if let Some(&(_, op)) = BINARY_ASSIGNMENT_OPERATORS.iter().find(|&&(ty, _)| self.at(ty)) {
+                    // binary assignment
+                    self.pop()?;
+                    let right = self.expression_boxed()?;
+                    ast::StatementKind::BinaryAssignment(ast::BinaryAssignment {
+                        span: Span::new(left.span.start, right.span.end),
+                        op,
                         left,
                         right,
                     })

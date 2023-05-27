@@ -316,9 +316,19 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 Ok(())
             }
             ast::StatementKind::Assignment(assign) => {
-                let addr_ty = self.visit_expr(scope, &assign.left)?;
-                let value_ty = self.visit_expr(scope, &assign.right)?;
-                self.problem.equal(addr_ty, value_ty);
+                let left_ty = self.visit_expr(scope, &assign.left)?;
+                let right_ty = self.visit_expr(scope, &assign.right)?;
+                self.problem.equal(left_ty, right_ty);
+                Ok(())
+            }
+            ast::StatementKind::BinaryAssignment(assign) => {
+                let left_ty = self.visit_expr(scope, &assign.left)?;
+                let right_ty = self.visit_expr(scope, &assign.right)?;
+
+                let origin = Origin::BinaryAssignment(assign);
+                let result_ty = self.visit_binary_op(origin, assign.op, left_ty, right_ty)?;
+
+                self.problem.equal(left_ty, result_ty);
                 Ok(())
             }
             ast::StatementKind::If(if_stmt) => {

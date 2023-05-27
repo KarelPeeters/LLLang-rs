@@ -191,18 +191,20 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     #[must_use]
+    fn append_load_typed(&mut self, block: ir::Block, addr: TypedValue) -> TypedValue {
+        let inner_ty = *self.types[addr.ty].unwrap_ptr()
+            .expect("Address should have pointer type");
+        let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
+
+        let loaded = self.append_load(block, addr.ir, inner_ty_ir);
+        TypedValue { ty: inner_ty, ir: loaded }
+    }
+
+    #[must_use]
     fn append_load_lr(&mut self, block: ir::Block, value: LRValue) -> TypedValue {
         match value {
-            LRValue::Left(value) => {
-                let inner_ty = *self.types[value.ty].unwrap_ptr()
-                    .expect("Left should have pointer type");
-                let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
-
-                let loaded = self.append_load(block, value.ir, inner_ty_ir);
-                TypedValue { ty: inner_ty, ir: loaded }
-            }
-            LRValue::Right(value) =>
-                value,
+            LRValue::Left(value) => self.append_load_typed(block, value),
+            LRValue::Right(value) => value,
         }
     }
 
@@ -291,6 +293,41 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         Ok(end_start)
     }
 
+    fn append_binary_op(&mut self, kind: ast::BinaryOp, value_left: TypedValue, value_right: TypedValue) -> ir::Value {
+        if let Some(&inner_ty) = self.types[value_left.ty].unwrap_ptr() {
+            //pointer offset
+            let offset_ir = match kind {
+                ast::BinaryOp::Add =>
+                    value_right.ir,
+                ast::BinaryOp::Sub =>
+                    self.append_negate(value_left.ir),
+                _ => panic!("Unexpected binary op kind for pointer result type, should be add or sub")
+            };
+
+            let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
+            self.prog.define_expr(ir::ExpressionInfo::PointerOffSet {
+                base: value_left.ir,
+                ty: inner_ty_ir,
+                index: offset_ir,
+            }).into()
+        } else {
+            //basic binary operation
+            assert_eq!(value_left.ty, value_right.ty);
+            let arg_ty = match self.types[value_left.ty] {
+                TypeInfo::Bool => BinaryArgType::Bool,
+                TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
+                TypeInfo::IntSize(signed) => BinaryArgType::Int(signed),
+                _ => panic!(),
+            };
+            self.prog.define_expr(binary_op_to_expr(
+                kind,
+                arg_ty,
+                value_left.ir,
+                value_right.ir,
+            )).into()
+        }
+    }
+
     fn append_expr(
         &mut self,
         flow: Flow,
@@ -355,38 +392,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                     self.append_expr_loaded(after_left, scope, right)?;
 
                 let result_ty = self.expr_type(expr);
-                let result = if let Some(&inner_ty) = self.types[result_ty].unwrap_ptr() {
-                    //pointer offset
-                    let offset_ir = match kind {
-                        ast::BinaryOp::Add =>
-                            value_right.ir,
-                        ast::BinaryOp::Sub =>
-                            self.append_negate(value_right.ir),
-                        _ => panic!("Unexpected binary op kind for pointer result type, should be add or sub")
-                    };
-
-                    let inner_ty_ir = self.types.map_type(self.prog, inner_ty);
-                    self.prog.define_expr(ir::ExpressionInfo::PointerOffSet {
-                        base: value_left.ir,
-                        ty: inner_ty_ir,
-                        index: offset_ir,
-                    }).into()
-                } else {
-                    //basic binary operation
-                    assert_eq!(value_left.ty, value_right.ty);
-                    let arg_ty = match self.types[value_left.ty] {
-                        TypeInfo::Bool => BinaryArgType::Bool,
-                        TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
-                        TypeInfo::IntSize(signed) => BinaryArgType::Int(signed),
-                        _ => panic!(),
-                    };
-                    self.prog.define_expr(binary_op_to_expr(
-                        *kind,
-                        arg_ty,
-                        value_left.ir,
-                        value_right.ir,
-                    )).into()
-                };
+                let result = self.append_binary_op(*kind, value_left, value_right);
 
                 (after_right, LRValue::Right(TypedValue { ty: result_ty, ir: result }))
             }
@@ -771,10 +777,22 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             }
             ast::StatementKind::Assignment(assign) => {
                 let (after_addr, addr) = self.append_expr_lvalue(flow, scope, &assign.left)?;
-                let (after_value, value) =
+                let (after_right, right) =
                     self.append_expr_loaded(after_addr, scope, &assign.right)?;
-                self.append_store(after_value.block, addr.ir, value.ir);
-                Ok(after_value)
+
+                self.append_store(after_right.block, addr.ir, right.ir);
+                Ok(after_right)
+            }
+            ast::StatementKind::BinaryAssignment(assign) => {
+                let (after_left, addr) = self.append_expr_lvalue(flow, scope, &assign.left)?;
+                let (after_right, right) =
+                    self.append_expr_loaded(after_left, scope, &assign.right)?;
+
+                let left = self.append_load_typed(after_right.block, addr);
+                let result = self.append_binary_op(assign.op, left, right);
+
+                self.append_store(after_right.block, addr.ir, result);
+                Ok(after_right)
             }
             ast::StatementKind::If(if_stmt) => {
                 let (cond_end, cond) =

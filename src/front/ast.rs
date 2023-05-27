@@ -134,6 +134,7 @@ pub struct Statement {
 pub enum StatementKind {
     Declaration(Declaration),
     Assignment(Assignment),
+    BinaryAssignment(BinaryAssignment),
     Expression(Box<Expression>),
     If(IfStatement),
     Loop(LoopStatement),
@@ -154,6 +155,14 @@ pub struct Declaration {
 #[derive(Debug)]
 pub struct Assignment {
     pub span: Span,
+    pub left: Box<Expression>,
+    pub right: Box<Expression>,
+}
+
+#[derive(Debug)]
+pub struct BinaryAssignment {
+    pub span: Span,
+    pub op: BinaryOp,
     pub left: Box<Expression>,
     pub right: Box<Expression>,
 }

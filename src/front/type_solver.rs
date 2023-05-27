@@ -34,6 +34,7 @@ enum PostCheck {
 #[derive(Copy, Clone)]
 pub enum Origin<'ast> {
     FullyKnown,
+    BinaryAssignment(&'ast ast::BinaryAssignment),
     Expression(&'ast ast::Expression),
     Declaration(&'ast ast::Declaration),
     ForIndex(&'ast ast::ForStatement),
@@ -43,6 +44,7 @@ impl std::fmt::Debug for Origin<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Origin::FullyKnown => write!(f, "Origin::FullyKnown"),
+            Origin::BinaryAssignment(a) => write!(f, "Origin::BinaryAssignment({:?})", a.span),
             Origin::Expression(a) => write!(f, "Origin::Expression({:?})", a.span),
             Origin::Declaration(a) => write!(f, "Origin::Declaration({:?})", a.span),
             Origin::ForIndex(a) => write!(f, "Origin::ForIndex({:?})", a.span),
