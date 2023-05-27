@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front::ast;
 use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
 use crate::mid::ir::Signed;
-use crate::util::{IndexMutTwice, zip_eq};
+use crate::util::{IndexMutTwice, VecExt, zip_eq};
 
 type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
@@ -240,9 +240,10 @@ impl<'ast> TypeProblem<'ast> {
         }
 
         //map types back to cst types (and check that all types were indeed inferred)
+        let mut stack = vec![];
         let state = (0..self.state.len()).map(|i| {
             let var = TypeVar(i);
-            let ty = self.get_solution(types, var);
+            let ty = self.get_solution(types, var, &mut stack);
 
             let state = &self.state[i];
             let ty_info = &types[ty];
@@ -347,16 +348,27 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Get the type inferred for the given TypeVar.
-    fn get_solution(&self, types: &mut TypeStore<'ast>, var: TypeVar) -> Type {
+    fn get_solution(&self, types: &mut TypeStore<'ast>, var: TypeVar, stack: &mut Vec<TypeVar>) -> Type {
+        if let Some(start) = stack.index_of(&var) {
+            let origins = stack[start..].iter().map(|&var| self.state[var.0].origin).collect_vec();
+            panic!("Infinite recursion in type inference involving {:?} with {:?}", &stack[start..], origins);
+        }
+        stack.push(var);
+
         let state = &self.state[var.0];
-        if let Some(info) = &state.info {
-            let info = info.map_ty(&mut |&var| self.get_solution(types, var));
+        let result = if let Some(info) = &state.info {
+            let info = info.map_ty(&mut |&var| self.get_solution(types, var, stack));
             types.define_type(info)
         } else if state.default_void {
             types.type_void()
         } else {
             panic!("Failed to infer type for {:?} with origin {:?}", var, self.state[var.0].origin)
-        }
+        };
+
+        let prev_last = stack.pop();
+        assert_eq!(prev_last, Some(var));
+
+        result
     }
 
     /// Apply the requirement that both TypeVars match. Returns whether any progress was made.
