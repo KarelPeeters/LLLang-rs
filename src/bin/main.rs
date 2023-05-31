@@ -19,6 +19,7 @@ use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
 use lllang::mid::render::render;
 use lllang::mid::util::verify::{verify, VerifyError};
+use lllang::tools::{run_link, run_nasm};
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -278,35 +279,24 @@ fn render_ir_as_svg(prog: &mid::ir::Program, path: impl AsRef<Path>) -> CompileR
 }
 
 fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {
-    println!("----Assemble---");
-    let result = Command::new("nasm")
-        .current_dir(asm_path.parent().unwrap())
-        .arg("-O0")
-        .arg("-fwin64")
-        .arg("-g")
-        .arg(asm_path.file_name().unwrap())
-        .status().with_context(|| "Running nasm")?;
+    let path_obj = asm_path.with_extension("obj");
+    let path_exe = asm_path.with_extension("exe");
 
+    println!("----Assemble---");
+    let result = run_nasm(asm_path, &path_obj)
+        .with_context(|| "Running nasm")?;
     if !result.success() {
         return Err(CompileError::Assemble);
     }
 
-    let result = Command::new(r#"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.29.30133\bin\Hostx64\x64\link.exe"#)
-        .current_dir(asm_path.parent().unwrap())
-        .arg("/nologo")
-        .arg("/debug")
-        .arg("/subsystem:console")
-        .arg("/nodefaultlib")
-        .arg("/entry:main")
-        .arg(asm_path.with_extension("obj").file_name().unwrap())
-        .arg(r#"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64\kernel32.lib"#)
-        .status().with_context(|| "Running link.exe")?;
-
+    println!("----Link-------");
+    let result = run_link(&path_obj, &path_exe)
+        .with_context(|| "Running linker")?;
     if !result.success() {
         return Err(CompileError::Link);
     }
 
-    Ok(asm_path.with_extension("exe"))
+    Ok(path_exe)
 }
 
 fn run_exe(exe_path: &Path) -> std::io::Result<()> {
