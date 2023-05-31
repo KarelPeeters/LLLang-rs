@@ -22,7 +22,7 @@ use crate::util::arena::IndexType;
 use crate::util::internal_iter::InternalIterator;
 
 pub fn lower_new(prog: &mut Program) -> String {
-    Builder::new().filter_level(LevelFilter::Trace).init();
+    // Builder::new().filter_level(LevelFilter::Trace).init();
 
     assert_eq!(prog.ptr_size_bits(), 64, "This backend only supports 64-bit");
 
