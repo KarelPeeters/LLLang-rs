@@ -68,8 +68,8 @@ pub fn lower_new(prog: &mut Program) -> String {
         let slots = func_info.slots.iter().enumerate().map(|(i, &slot)| (slot, i)).collect();
 
         for &block in &blocks_ordered {
+            let BlockInfo { params, instructions, terminator, debug_name: _ } = prog.get_block(block);
             println!("  Block {:?} -> {:?}", block, symbols.map_block(block).0);
-            let BlockInfo { params, instructions, terminator } = prog.get_block(block);
 
             // setup builder
             let mut params = params.iter().map(|&param| mapper.map_param(param)).collect_vec();

@@ -56,7 +56,7 @@ pub fn verify(prog: &Program) -> Result {
 
         // TODO this way of visiting blocks means we never verify unreachable blocks. Is that okay?
         prog.reachable_blocks(func_info.entry).try_for_each(|block| {
-            let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
+            let BlockInfo { params, instructions, terminator: _, debug_name: _ } = prog.get_block(block);
             let block_pos = BlockPos { func, block };
 
             declarer.declare_block(func, block)?;
@@ -99,7 +99,7 @@ pub fn verify(prog: &Program) -> Result {
         }
 
         for &block in dom_info.blocks() {
-            let BlockInfo { params: _, instructions, terminator } = prog.get_block(block);
+            let BlockInfo { params: _, instructions, terminator, debug_name: _ } = prog.get_block(block);
             let block_pos = BlockPos { func, block };
 
             // check instructions

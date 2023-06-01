@@ -300,6 +300,7 @@ impl FunctionInfo {
             params,
             instructions: vec![],
             terminator: Terminator::Unreachable,
+            debug_name: None,
         });
 
         Self::new_given_parts(func_ty, ty, entry)
@@ -332,6 +333,8 @@ pub struct BlockInfo {
     pub params: Vec<Parameter>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
+    // TODO check whether this (and other) debug names are propagated and rendered whenever possible
+    pub debug_name: Option<String>,
 }
 
 impl BlockInfo {
@@ -341,6 +344,7 @@ impl BlockInfo {
             params: Vec::new(),
             instructions: Vec::new(),
             terminator: Terminator::Unreachable,
+            debug_name: None,
         }
     }
 }

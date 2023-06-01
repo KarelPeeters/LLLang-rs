@@ -35,6 +35,7 @@ impl Program {
             let old_instrs = old_block_info.instructions.clone();
             // we don't need to do anything extra for terminator, this is already a deep clone
             let new_terminator = old_block_info.terminator.clone();
+            let debug_name = old_block_info.debug_name.clone();
 
             let new_params = old_params.iter().map(|&old_param| {
                 let &ParameterInfo { ty } = self.get_param(old_param);
@@ -56,6 +57,7 @@ impl Program {
                 // we replace terminator and instruction args later
                 instructions: new_instructions,
                 terminator: new_terminator,
+                debug_name,
             };
             let new_block = self.define_block(new_block_info);
             (old_block, new_block)

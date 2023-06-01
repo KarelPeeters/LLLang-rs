@@ -180,7 +180,7 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         // block params are tracked separately
-        let BlockInfo { params: _, instructions, terminator } = state.prog.get_block(block);
+        let BlockInfo { params: _, instructions, terminator, debug_name: _ } = state.prog.get_block(block);
 
         // mark side effect instructions as used
         for &instr in instructions {
@@ -332,7 +332,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
     let prog_blocks = &mut prog.nodes.blocks;
     let prog_funcs = &mut prog.nodes.funcs;
 
-    let BlockInfo { params, instructions, terminator } = &mut prog_blocks[block];
+    let BlockInfo { params, instructions, terminator, debug_name: _ } = &mut prog_blocks[block];
 
     // remove block params if we're allowed to
     if !keep_params {

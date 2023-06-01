@@ -113,10 +113,15 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
     // remove the call instruction itself
     block_before_info.instructions.pop().unwrap();
 
+    let before_name = block_before_info.debug_name.as_ref().map(|name| format!("{}_before", name));
+    let after_name = block_before_info.debug_name.as_ref().map(|name| format!("{}_after", name));
+    block_before_info.debug_name = before_name;
+
     let block_after_info = BlockInfo {
         params: vec![return_param],
         instructions: instrs_after,
         terminator: term_after,
+        debug_name: after_name,
     };
     let block_after = prog.define_block(block_after_info);
 
@@ -149,7 +154,7 @@ fn run_inline_call(prog: &mut Program, use_info: &UseInfo, inlined_call: Inlined
 
 fn fn_instruction_count(prog: &Program, func: Function) -> usize {
     prog.reachable_blocks(prog.get_func(func).entry).map(|block| {
-        let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
+        let BlockInfo { params, instructions, terminator: _, debug_name: _ } = prog.get_block(block);
         params.len() + instructions.len() + 1
     }).sum()
 }

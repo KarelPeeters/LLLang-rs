@@ -38,6 +38,7 @@ pub fn split_critical_edges(prog: &mut Program) -> bool {
                         params: vec![],
                         instructions: vec![],
                         terminator: Terminator::Jump { target },
+                        debug_name: None, // TODO proper debug name
                     });
 
                     Some(Target { block: new_block, args: vec![] })

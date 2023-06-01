@@ -29,7 +29,7 @@ impl Visitor for GcVisitor {
     }
 
     fn visit_block(&mut self, state: &mut VisitState, block: Block) {
-        let BlockInfo { params, instructions, terminator } = state.prog.get_block(block);
+        let BlockInfo { params, instructions, terminator, debug_name: _ } = state.prog.get_block(block);
 
         state.add_values(params.iter().copied());
         state.add_values(instructions.iter().copied());

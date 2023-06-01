@@ -213,7 +213,13 @@ impl<'a, W: Write> Renderer<'a, W> {
         let block_info = prog.get_block(block);
 
         let rows = &mut String::new();
-        write!(rows, r#"<tr><td align="center" colspan="3"><b>block_{}</b></td></tr>"#, block.index())?;
+
+        let name = if let Some(name) = &block_info.debug_name {
+            format!("block_{} {:?}", block.index(), name)
+        } else {
+            format!("block_{}", block.index())
+        };
+        write!(rows, r#"<tr><td align="center" colspan="3"><b>{}</b></td></tr>"#, name)?;
 
         for &param in &block_info.params {
             let ty = prog.type_of_value(param.into());

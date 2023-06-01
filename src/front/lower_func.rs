@@ -903,6 +903,12 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     fn append_nested_block(&mut self, flow: Flow, scope: &Scope<ScopedItem>, block: &'ast ast::Block) -> Result<'ast, Flow> {
+        // TODO actually collect which lines of code are part of this block, for each block separately
+        let debug_name = &mut self.prog.get_block_mut(flow.block).debug_name;
+        if debug_name.is_none() {
+            *debug_name = Some(format!("{}_{:?}", self.func_debug_name, block.span));
+        }
+
         let mut inner_scope = scope.nest();
 
         block.statements.iter()
