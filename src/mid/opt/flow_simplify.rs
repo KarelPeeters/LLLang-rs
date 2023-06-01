@@ -102,6 +102,7 @@ fn is_empty_unreachable(prog: &Program, block: Block) -> bool {
 }
 
 // TODO is there a way to merge find_block, find_target and find_term? they're all pretty similar...
+// TODO replace all of this ad-hoc stuff with a proper "graph solver" thing
 fn find_block(prog: &Program, start: Block) -> (usize, Block) {
     let mut skipped = 0;
     let mut blocks_seen = HashSet::new();
