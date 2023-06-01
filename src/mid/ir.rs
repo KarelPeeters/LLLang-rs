@@ -85,6 +85,7 @@ pub struct Program {
 }
 
 impl Program {
+    // TODO fix this documentation
     /// Return the program representing `fn main() -> void { unreachable(); }`
     pub fn new(ptr_size_bits: u32) -> Self {
         let mut types = ArenaSet::default();
@@ -731,6 +732,8 @@ pub struct DataInfo {
     pub bytes: Vec<u8>,
 }
 
+// TODO assert there are no conflicting extern names
+// TODO rename name to symbol?
 #[derive(Debug, Clone)]
 pub struct ExternInfo {
     pub name: String,
