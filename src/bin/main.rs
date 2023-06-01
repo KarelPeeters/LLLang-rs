@@ -17,9 +17,8 @@ use lllang::{back, front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
-use lllang::mid::render::render;
 use lllang::mid::util::verify::{verify, VerifyError};
-use lllang::tools::{run_link, run_nasm};
+use lllang::tools::{render_ir_as_svg, run_link, run_nasm};
 
 #[derive(Debug, From)]
 enum CompileError {
@@ -236,7 +235,8 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     write_ir(&ir_program)?;
     verify(&ir_program)?;
 
-    render_ir_as_svg(&ir_program, &ir_file)?;
+    render_ir_as_svg(&ir_program, &ir_file)
+        .with_context(|| "Rendering")?;
 
     println!("----Optimize---");
     let ir_opt_file = ll_path.with_file_name(format!("{name}_opt.ir"));
@@ -247,7 +247,8 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
     }
     File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
         .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
-    render_ir_as_svg(&ir_program, &ir_opt_file)?;
+    render_ir_as_svg(&ir_program, &ir_opt_file)
+        .with_context(|| "Rendering")?;
     verify(&ir_program)?;
 
     println!("----Backend----");
@@ -257,25 +258,6 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
         .write_all(asm.as_bytes()).with_context(|| "Writing to ASM file")?;
 
     Ok(asm_file)
-}
-
-fn render_ir_as_svg(prog: &mid::ir::Program, path: impl AsRef<Path>) -> CompileResult<()> {
-    let path = path.as_ref();
-
-    let render_file = path.with_extension("gv");
-    let mut render_writer = File::create(&render_file)
-        .with_context(|| format!("Creating render file {:?}", render_file))?;
-    render(prog, &mut render_writer)
-        .with_context(|| "Writing to render file")?;
-
-    let dot_output = Command::new("dot").arg(render_file).arg("-Tsvg").output()
-        .with_context(|| "Running dot")?;
-    eprintln!("{}", std::str::from_utf8(&dot_output.stderr).unwrap());
-    let render_file = path.with_extension("svg");
-    std::fs::write(render_file, dot_output.stdout)
-        .with_context(|| "Writing svg")?;
-
-    Ok(())
 }
 
 fn compile_asm_to_exe(asm_path: &Path) -> CompileResult<PathBuf> {

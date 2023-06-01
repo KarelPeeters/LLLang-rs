@@ -21,6 +21,7 @@ enum Error {
     Fmt(std::fmt::Error),
 }
 
+// TODO rename to include what format we are writing?
 pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
     let result = Renderer::new(prog).render(&mut f);
 

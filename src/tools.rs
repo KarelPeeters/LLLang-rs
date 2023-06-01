@@ -1,5 +1,9 @@
+use std::fs::File;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
+
+use crate::mid;
+use crate::mid::render::render;
 
 // TODO use env vars or auto discovery for these tools
 // TODO get these to work on linux
@@ -31,4 +35,19 @@ pub fn run_link(path_obj_in: &Path, path_exe_out: &Path) -> std::io::Result<Exit
         .arg(path_obj_in)
         .arg(r#"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64\kernel32.lib"#)
         .status()
+}
+
+pub fn render_ir_as_svg(prog: &mid::ir::Program, path: impl AsRef<Path>) -> std::io::Result<()> {
+    let path = path.as_ref();
+
+    let render_file = path.with_extension("gv");
+    let mut render_writer = File::create(&render_file)?;
+    render(prog, &mut render_writer)?;
+
+    let dot_output = Command::new("dot").arg(render_file).arg("-Tsvg").output()?;
+    eprintln!("{}", std::str::from_utf8(&dot_output.stderr).unwrap());
+    let render_file = path.with_extension("svg");
+    std::fs::write(render_file, dot_output.stdout)?;
+
+    Ok(())
 }
