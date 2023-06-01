@@ -146,7 +146,11 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
             }
         }
         ExpressionInfo::TupleFieldPtr { .. } => {}
-        ExpressionInfo::PointerOffSet { .. } => {}
+        ExpressionInfo::PointerOffSet { ty: _, base, index } => {
+            if index.is_const_zero() {
+                return base;
+            }
+        }
     }
 
     expr.into()
