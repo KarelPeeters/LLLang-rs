@@ -4,6 +4,8 @@ use itertools::Itertools;
 
 pub use constants::WIN64_ABI_PARAM_REGS as ABI_PARAM_REGS;
 pub use constants::WIN64_ABI_RETURN_REG as ABI_RETURN_REG;
+pub use constants::WIN64_ABI_CALL_VOLATILE_REGS as ABI_VOLATILE_REGS;
+
 
 use crate::back::abi::constants::{WIN64_ABI_CALL_VOLATILE_REGS, WIN64_ABI_PARAM_REGS, WIN64_ABI_RETURN_REG};
 use crate::back::layout::Layout;

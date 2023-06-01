@@ -4,7 +4,8 @@ use std::fmt::Write;
 use derive_more::From;
 use indexmap::IndexMap;
 use regalloc2::{Allocation, AllocationKind, Operand, PReg, PRegSet, RegClass, VReg};
-use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG};
+use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG, ABI_VOLATILE_REGS};
+use crate::back::layout::next_multiple;
 
 use crate::back::register::{Register, RSize};
 use crate::mid::ir::{Block, Global, Program, Signed};
@@ -413,6 +414,12 @@ impl VInstruction {
                 }
                 operands.push_use(target);
                 operands.push_fixed_def(result, ABI_RETURN_REG);
+
+                for &clobber in ABI_VOLATILE_REGS {
+                    if clobber != ABI_RETURN_REG {
+                        operands.push_clobber(clobber);
+                    }
+                }
             }
             VInstruction::Cmp(_size, left, right) | VInstruction::Test(_size, left, right) => {
                 operands.push_use(left);
@@ -569,6 +576,8 @@ impl VInstruction {
             }
             VInstruction::ReturnAndStackFree(_value) => {
                 let bytes = ctx.stack_layout.free_bytes();
+                let bytes = next_multiple(bytes as u32 + 4*8 + 8, 16) - 8;
+
                 if bytes != 0 {
                     format!("add rsp, {}\nret 0", bytes)
                 } else {
@@ -580,7 +589,11 @@ impl VInstruction {
                 format!("{}: jmp {}", label.to_asm(ctx), label.to_asm(ctx))
             }
             VInstruction::StackAlloc => {
+                // TODO properly fix this
+
                 let bytes = ctx.stack_layout.alloc_bytes();
+                let bytes = next_multiple(bytes as u32 + 4*8 + 8, 16) - 8;
+
                 if bytes != 0 {
                     format!("sub rsp, {}", bytes)
                 } else {
@@ -637,6 +650,10 @@ impl Operands {
             RegOperand::Adaptive(reg) => self.push(Operand::reg_def(reg)),
             RegOperand::Use(reg) => self.push(Operand::reg_use(reg)),
         });
+    }
+
+    fn push_clobber(&mut self, reg: Register) {
+        self.clobbers.add(PReg::new(reg.index(), RegClass::Int));
     }
 }
 

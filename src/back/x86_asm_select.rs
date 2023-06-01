@@ -38,11 +38,14 @@ pub fn lower_new(prog: &mut Program) -> String {
 
     let mut output = Output::new(true);
 
+    // TODO assert that main_func has the right signature
     let main_func = *prog.root_functions.get("main").unwrap();
     output.appendln("main:");
     output.appendln(format_args!("    call func_{}", main_func.index()));
+    output.appendln(format_args!("    sub rsp, 40"));
     output.appendln(format_args!("    mov rcx, rax"));
     output.appendln(format_args!("    call ExitProcess"));
+    output.appendln(format_args!("    hlt"));
     output.appendln("");
 
     for (func, _) in &prog.nodes.funcs {
