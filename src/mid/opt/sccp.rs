@@ -483,7 +483,13 @@ impl<'a> State<'a> {
 
             Value::Expr(expr) => {
                 if self.expr_visited.insert(expr) {
-                    self.visit_expr(expr)
+                    self.visit_expr(expr);
+
+                    // evaluate all expression operands so they have a chance to be optimized
+                    //   visit_expr already evaluates most of them, but is not guaranteed to
+                    self.prog.get_expr(expr).operands().for_each(|(operand, _)| {
+                        self.eval(operand);
+                    });
                 }
                 *self.values.get(&value).unwrap()
             }
