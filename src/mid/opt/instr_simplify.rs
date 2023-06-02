@@ -109,6 +109,14 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
                     return prog.define_expr(new_expr).into();
                 }
             }
+
+            // replace -const with +(-const)
+            if kind == ArithmeticOp::Sub && right.is_const() {
+                let right = right.as_const().unwrap();
+                let right_neg = Const::new(right.ty, right.value.negate());
+                let new_expr = ExpressionInfo::Arithmetic { kind: ArithmeticOp::Add, left, right: right_neg.into() };
+                return prog.define_expr(new_expr).into();
+            }
         }
         ExpressionInfo::Comparison { kind, left, right } => {
             let properties = kind.properties();

@@ -110,6 +110,10 @@ impl BitInt {
         }
     }
 
+    pub fn negate(self) -> Self {
+        Self::from_signed(self.bits, -self.signed()).unwrap()
+    }
+
     pub fn display_value(self) -> impl Display {
         struct Wrapper(BitInt);
 
