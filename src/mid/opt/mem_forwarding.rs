@@ -1,10 +1,13 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
+use itertools::Itertools;
+
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, InstructionInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
+use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, InstructionInfo, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
 use crate::mid::util::lattice::Lattice;
+use crate::util::zip_eq;
 
 /// Optimize load/store instructions:
 /// * replace loads with previously stored values
@@ -234,7 +237,7 @@ fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block
 type LatticeCache = HashMap<(Block, Location), Lattice>;
 
 fn find_value_for_location_at_instr(
-    prog: &Program,
+    prog: &mut Program,
     use_info: &UseInfo,
     func: Function,
     loc: Location,
@@ -261,7 +264,7 @@ fn find_value_for_location_at_instr(
 
 /// The same as [find_value_for_location_at_instr] except we don't manage the cache here.
 fn find_value_for_location_at_instr_inner(
-    prog: &Program,
+    prog: &mut Program,
     use_info: &UseInfo,
     func: Function,
     loc: Location,
@@ -302,20 +305,58 @@ fn find_value_for_location_at_instr_inner(
     }
 
     // otherwise the value is the merge of the value at the end of each predecessor
-    Lattice::fold(use_info[block].iter().map(|usage| {
+    let predecessors = &use_info[block];
+
+    let mut pred_func_entry = false;
+    let pred_values = predecessors.iter().map(|usage| {
         match usage {
             // we've reached the start of the function, depending on the origin the value is undef or overdef
-            BlockUsage::FuncEntry(_) => match pointer_origin(prog, func, loc.ptr) {
-                Origin::Undef => Lattice::Undef,
-                Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
-                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
-            },
+            BlockUsage::FuncEntry(_) => {
+                pred_func_entry |= true;
+                match pointer_origin(prog, func, loc.ptr) {
+                    Origin::Undef => Lattice::Undef,
+                    Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
+                    Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
+                }
+            }
             // continue searching along the preceding block
             BlockUsage::Target { pos, kind: _ } => {
                 find_value_for_location_at_instr(prog, use_info, func, loc, pos.block, None, cache)
             }
         }
-    }))
+    }).collect_vec();
+
+    let merged = Lattice::fold(pred_values.iter().copied());
+
+    let merged_overdef = matches!(merged, Lattice::Overdef);
+    let pred_all_known = || pred_values.iter().all(|v| matches!(v, Lattice::Known(_) | Lattice::Undef));
+
+    // TODO instead of disallowing function entry usage, add a dummy block if necessary
+    if !pred_func_entry && merged_overdef && pred_all_known() {
+        // we know all pred values separately, but we can't merge them
+        // => we can merge them at runtime with a block param!
+
+        // define new block param
+        let param = prog.define_param(ParameterInfo { ty: loc.ty });
+        prog.get_block_mut(block).params.push(param);
+
+        // add corresponding block args
+        for (pred, value) in zip_eq(predecessors, pred_values) {
+            let value = value.as_value_of_type(prog, loc.ty);
+
+            match pred {
+                BlockUsage::FuncEntry(_) => unreachable!(),
+                BlockUsage::Target { pos, kind } => {
+                    let target = kind.get_target_mut(&mut prog.get_block_mut(pos.block).terminator);
+                    target.args.push(value.unwrap());
+                }
+            }
+        }
+
+        return Lattice::Known(param.into());
+    }
+
+    merged
 }
 
 fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> Alias {
