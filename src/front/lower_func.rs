@@ -595,6 +595,11 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let black_box = self.append_instr(flow_after.block, ir::InstructionInfo::BlackBox { value: value.ir });
                 (flow_after, LRValue::Right(TypedValue { ty: value.ty, ir: black_box.into() }))
             }
+            ast::ExpressionKind::Unreachable => {
+                self.prog.get_block_mut(flow.block).terminator = ir::Terminator::Unreachable;
+                //continue writing dead code
+                (self.new_flow(false), self.never_value(self.expr_type(expr)))
+            }
         };
 
         //check that the returned value's type is indeed expect_ty

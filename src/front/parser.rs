@@ -91,6 +91,7 @@ declare_tokens![
     Break("break"),
     Continue("continue"),
     BlackBox("__blackbox"),
+    Unreachable("__unreachable"),
 
     Underscore("_"),
     Arrow("->"),
@@ -1147,6 +1148,15 @@ impl<'s> Parser<'s> {
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::BlackBox { value },
+                })
+            }
+            TT::Unreachable => {
+                self.pop()?;
+                self.expect(TT::OpenB, "unreachable start")?;
+                self.expect(TT::CloseB, "unreachable end")?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::Unreachable,
                 })
             }
 

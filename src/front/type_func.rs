@@ -281,6 +281,10 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
             ast::ExpressionKind::BlackBox { value } => {
                 self.visit_expr(scope, value)?
             }
+            ast::ExpressionKind::Unreachable => {
+                // TODO use never type once that existrs
+                self.problem.unknown_default_void(expr_origin)
+            }
         };
 
         let prev = self.expr_type_map.insert(expr as *const _, result);

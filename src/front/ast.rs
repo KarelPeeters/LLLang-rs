@@ -224,6 +224,7 @@ pub enum ExpressionKind {
     BlackBox {
         value: Box<Expression>,
     },
+    Unreachable,
 
     ArrayIndex {
         target: Box<Expression>,
