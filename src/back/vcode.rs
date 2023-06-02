@@ -111,7 +111,9 @@ impl VConst {
     pub fn to_asm(&self, ctx: &AsmContext, size: RSize) -> String {
         match self {
             VConst::Const(value) => {
-                assert_eq!(value.bits(), size.bits(), "Tried to store {:?} in {:?}", value, size);
+                let value_bits = if value.bits() == 1 { 64 } else { value.bits() };
+                assert_eq!(value_bits, size.bits(), "Tried to store {:?} in {:?}", value, size);
+
                 min_by_key(
                     format!("{}", value.unsigned()),
                     format!("{}", value.signed()),
