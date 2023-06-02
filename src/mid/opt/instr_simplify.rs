@@ -81,8 +81,8 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
         ExpressionInfo::Arithmetic { kind, left, right } => {
             let properties = kind.properties();
 
-            // subtract value from itself
-            if left == right && kind == ArithmeticOp::Sub {
+            // value cancels itself itself
+            if left == right && (kind == ArithmeticOp::Sub || kind == ArithmeticOp::Xor) {
                 let bits = prog.types[ty_expr].unwrap_int().unwrap();
                 return Const::new(ty_expr, BitInt::zero(bits)).into();
             }
@@ -115,16 +115,7 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
 
             // compare value with itself
             if left == right {
-                let result = match kind {
-                    ComparisonOp::Eq => true,
-                    ComparisonOp::Neq => false,
-                    ComparisonOp::Gt(_) => false,
-                    ComparisonOp::Gte(_) => true,
-                    ComparisonOp::Lt(_) => false,
-                    ComparisonOp::Lte(_) => true,
-                };
-
-                return prog.const_bool(result).into();
+                return prog.const_bool(properties.result_self).into();
             }
 
             // move constants to the right

@@ -450,6 +450,7 @@ pub struct ArithmeticProperties {
 pub struct ComparisonProperties {
     pub commuted: ComparisonOp,
     pub negated: ComparisonOp,
+    pub result_self: bool,
 }
 
 impl ArithmeticOp {
@@ -488,12 +489,12 @@ impl ComparisonOp {
         use ComparisonProperties as Props;
         use ComparisonOp as Op;
         match self {
-            Op::Eq => Props::new(Op::Eq, Op::Neq),
-            Op::Neq => Props::new(Op::Neq, Op::Eq),
-            Op::Gt(signed) => Props::new(Op::Lt(signed), Op::Lte(signed)),
-            Op::Gte(signed) => Props::new(Op::Lte(signed), Op::Lt(signed)),
-            Op::Lt(signed) => Props::new(Op::Gt(signed), Op::Gte(signed)),
-            Op::Lte(signed) => Props::new(Op::Gte(signed), Op::Gt(signed)),
+            Op::Eq => Props::new(Op::Eq, Op::Neq, true),
+            Op::Neq => Props::new(Op::Neq, Op::Eq, false),
+            Op::Gt(signed) => Props::new(Op::Lt(signed), Op::Lte(signed), false),
+            Op::Gte(signed) => Props::new(Op::Lte(signed), Op::Lt(signed), true),
+            Op::Lt(signed) => Props::new(Op::Gt(signed), Op::Gte(signed), false),
+            Op::Lte(signed) => Props::new(Op::Gte(signed), Op::Gt(signed), true),
         }
     }
 }
