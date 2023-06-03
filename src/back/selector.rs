@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use regalloc2::{Inst, RegClass, VReg};
 use regalloc2 as r2;
+
 use crate::back::layout::TupleLayout;
 use crate::back::register::RSize;
-
 use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
@@ -178,8 +178,8 @@ impl Selector<'_> {
         VTarget { block, args }
     }
 
-    fn append_mul(&mut self, left: Value, right: Value) -> VReg {
-        let size = self.size_of_value(left);
+    fn append_mul(&mut self, ty: Type, left: Value, right: Value) -> VReg {
+        let size = self.size_of_ty(ty);
         // TODO handle this case, the registers are different and annoying
         assert!(size != RSize::S8, "Mul for byte not implemented yet");
 
@@ -193,8 +193,8 @@ impl Selector<'_> {
         result_low
     }
 
-    fn append_div_mod(&mut self, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
-        let size = self.size_of_value(left);
+    fn append_div_mod(&mut self, ty: Type, signed: Signed, left: Value, right: Value) -> (VReg, VReg) {
+        let size = self.size_of_ty(ty);
 
         // TODO handle this case, the registers are different and annoying
         assert!(size != RSize::S8, "Div for byte not implemented yet");
@@ -212,20 +212,20 @@ impl Selector<'_> {
         (quot, rem)
     }
 
-    fn append_arithmetic(&mut self, kind: ArithmeticOp, left: Value, right: Value) -> VReg {
+    fn append_arithmetic(&mut self, kind: ArithmeticOp, ty: Type, left: Value, right: Value) -> VReg {
         let instr = match kind {
             ArithmeticOp::Add => "add",
             ArithmeticOp::Sub => "sub",
-            ArithmeticOp::Mul => return self.append_mul(left, right),
+            ArithmeticOp::Mul => return self.append_mul(ty, left, right),
             ArithmeticOp::And => "and",
             ArithmeticOp::Or => "or",
             ArithmeticOp::Xor => "xor",
 
-            ArithmeticOp::Div(signed) => return self.append_div_mod(signed, left, right).0,
-            ArithmeticOp::Mod(signed) => return self.append_div_mod(signed, left, right).1,
+            ArithmeticOp::Div(signed) => return self.append_div_mod(ty, signed, left, right).0,
+            ArithmeticOp::Mod(signed) => return self.append_div_mod(ty, signed, left, right).1,
         };
 
-        let size = self.size_of_value(left);
+        let size = self.size_of_ty(ty);
         let result = self.vregs.new_vreg();
         let left = self.append_value_to_reg(left);
         let right = self.append_value_to_rcm(right);
@@ -242,8 +242,8 @@ impl Selector<'_> {
         let prog = self.prog;
 
         let result = match *prog.get_expr(expr) {
-            ExpressionInfo::Arithmetic { kind, left, right } => {
-                self.append_arithmetic(kind, left, right)
+            ExpressionInfo::Arithmetic { kind, ty, left, right } => {
+                self.append_arithmetic(kind, ty, left, right)
             }
             ExpressionInfo::Comparison { kind, left, right } => {
                 // TODO use "test" when comparing with zero
@@ -288,15 +288,15 @@ impl Selector<'_> {
                 let dest = self.vregs.new_vreg();
                 self.push(VInstruction::Binary(RSize::FULL, "add", dest, base, offset));
                 dest
-            },
+            }
             ExpressionInfo::PointerOffSet { ty, base, index } => {
-                let dest =self.vregs.new_vreg();
+                let dest = self.vregs.new_vreg();
                 let base = self.append_value_to_rc(base);
                 let index = self.append_value_to_reg(index);
                 let scale = self.size_of_ty(ty);
                 self.push(VInstruction::Lea(dest, base, index, scale));
                 dest
-            },
+            }
             ExpressionInfo::Cast { ty, kind, value } => {
                 let size_before = self.size_of_value(value);
                 let size_after = self.size_of_ty(ty);
@@ -313,7 +313,7 @@ impl Selector<'_> {
                         after
                     }
                 }
-            },
+            }
         };
 
         self.expr_cache.insert(expr, result);

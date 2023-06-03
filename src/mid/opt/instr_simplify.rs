@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
@@ -36,7 +36,7 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
                 InstructionInfo::Call { target, args: _, conv: _ } => {
                     unreachable = target.is_const_zero() || target.is_undef();
                 }
-                InstructionInfo::BlackBox { .. } => {},
+                InstructionInfo::BlackBox { .. } => {}
             };
 
             if unreachable {
@@ -73,29 +73,29 @@ pub fn instr_simplify(prog: &mut Program) -> bool {
 }
 
 fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
-    let ty_expr = prog.type_of_value(expr.into());
-
     match *prog.get_expr(expr) {
         // most binary simplifications are already handled in SCCP, where they have more information
         // TODO this may change when we add equality to the SCCP lattice (see "combining analysis")
-        ExpressionInfo::Arithmetic { kind, left, right } => {
+        ExpressionInfo::Arithmetic { kind, ty, left, right } => {
             let properties = kind.properties();
 
             // value cancels itself itself
             if left == right && (kind == ArithmeticOp::Sub || kind == ArithmeticOp::Xor) {
-                let bits = prog.types[ty_expr].unwrap_int().unwrap();
-                return Const::new(ty_expr, BitInt::zero(bits)).into();
+                let bits = prog.types[ty].unwrap_int().unwrap();
+                return Const::new(ty, BitInt::zero(bits)).into();
             }
 
             // combine constants
             if right.is_const() && properties.associative {
                 if let Value::Expr(left) = left {
-                    if let &ExpressionInfo::Arithmetic { kind: left_kind, left: left_left, right: left_right } = prog.get_expr(left) {
+                    if let &ExpressionInfo::Arithmetic { kind: left_kind, ty: left_ty, left: left_left, right: left_right } = prog.get_expr(left) {
+                        assert_eq!(left_ty, ty);
+
                         if left_kind == kind && left_right.is_const() {
-                            let new_expr_right = ExpressionInfo::Arithmetic { kind, left: left_right, right };
+                            let new_expr_right = ExpressionInfo::Arithmetic { kind, ty, left: left_right, right };
                             let new_expr_right = prog.define_expr(new_expr_right);
 
-                            let new_expr = ExpressionInfo::Arithmetic { kind, left: left_left, right: new_expr_right.into() };
+                            let new_expr = ExpressionInfo::Arithmetic { kind, ty, left: left_left, right: new_expr_right.into() };
                             return prog.define_expr(new_expr).into();
                         }
                     }
@@ -105,7 +105,7 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
             // move constants to the right
             if let Some(commuted) = properties.commuted {
                 if left.is_const() && !right.is_const() {
-                    let new_expr = ExpressionInfo::Arithmetic { kind: commuted, left: right, right: left };
+                    let new_expr = ExpressionInfo::Arithmetic { kind: commuted, ty, left: right, right: left };
                     return prog.define_expr(new_expr).into();
                 }
             }
@@ -114,7 +114,7 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
             if kind == ArithmeticOp::Sub && right.is_const() {
                 let right = right.as_const().unwrap();
                 let right_neg = Const::new(right.ty, right.value.negate());
-                let new_expr = ExpressionInfo::Arithmetic { kind: ArithmeticOp::Add, left, right: right_neg.into() };
+                let new_expr = ExpressionInfo::Arithmetic { kind: ArithmeticOp::Add, ty, left, right: right_neg.into() };
                 return prog.define_expr(new_expr).into();
             }
         }

@@ -181,7 +181,7 @@ impl InternalIterator for OperandIterator<&ExpressionInfo> {
 
     fn try_for_each_impl<B>(self, mut f: impl FnMut(Self::Item) -> ControlFlow<B>) -> ControlFlow<B> {
         match *self.0 {
-            ExpressionInfo::Arithmetic { kind: _, left, right } |
+            ExpressionInfo::Arithmetic { kind: _, ty: _, left, right } |
             ExpressionInfo::Comparison { kind: _, left, right } => {
                 f((left, ExprOperand::BinaryOperandLeft))?;
                 f((right, ExprOperand::BinaryOperandRight))?;

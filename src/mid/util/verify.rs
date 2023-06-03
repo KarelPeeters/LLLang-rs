@@ -273,8 +273,11 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
     let pos = Position::Expr(expr);
 
     match *expr_info {
-        ExpressionInfo::Arithmetic { kind: _, left, right } => {
-            ensure_matching_int_values(prog, pos, left, right)?;
+        ExpressionInfo::Arithmetic { kind: _, ty, left, right } => {
+            ensure_int_type(prog, pos, ty, None)?;
+
+            ensure_type_match(prog, pos, left, ty)?;
+            ensure_type_match(prog, pos, right, ty)?;
         }
         ExpressionInfo::Comparison { kind: _, left, right } => {
             ensure_matching_int_values(prog, pos, left, right)?;

@@ -54,22 +54,23 @@ impl BinaryArgType {
     }
 }
 
-fn binary_op_to_expr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, left: ir::Value, right: ir::Value) -> ir::ExpressionInfo {
+fn binary_op_to_expr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, arg_ty_ir: ir::Type, left: ir::Value, right: ir::Value) -> ir::ExpressionInfo {
     match ast_kind {
         ast::BinaryOp::Add => {
             arg_ty.unwrap_int();
-            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Add, ty: arg_ty_ir, left, right }
         }
         ast::BinaryOp::Sub => {
             arg_ty.unwrap_int();
-            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Sub, ty: arg_ty_ir, left, right }
         }
         ast::BinaryOp::Mul => {
             arg_ty.unwrap_int();
-            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, left, right }
+            ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mul, ty: arg_ty_ir, left, right }
         }
-        ast::BinaryOp::Div => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(arg_ty.unwrap_int()), left, right },
-        ast::BinaryOp::Mod => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(arg_ty.unwrap_int()), left, right },
+        ast::BinaryOp::Div => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Div(arg_ty.unwrap_int()), ty: arg_ty_ir, left, right },
+        ast::BinaryOp::Mod => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Mod(arg_ty.unwrap_int()), ty: arg_ty_ir, left, right },
+
         ast::BinaryOp::Gte => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Gte(arg_ty.unwrap_int()), left, right },
         ast::BinaryOp::Gt => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Gt(arg_ty.unwrap_int()), left, right },
         ast::BinaryOp::Lte => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Lte(arg_ty.unwrap_int()), left, right },
@@ -77,9 +78,10 @@ fn binary_op_to_expr(ast_kind: ast::BinaryOp, arg_ty: BinaryArgType, left: ir::V
 
         ast::BinaryOp::Eq => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Eq, left, right },
         ast::BinaryOp::Neq => ir::ExpressionInfo::Comparison { kind: ir::ComparisonOp::Neq, left, right },
-        ast::BinaryOp::And => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::And, left, right },
-        ast::BinaryOp::Or => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, left, right },
-        ast::BinaryOp::Xor => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, left, right },
+
+        ast::BinaryOp::And => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::And, ty: arg_ty_ir, left, right },
+        ast::BinaryOp::Or => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Or, ty: arg_ty_ir, left, right },
+        ast::BinaryOp::Xor => ir::ExpressionInfo::Arithmetic { kind: ir::ArithmeticOp::Xor, ty: arg_ty_ir, left, right },
     }
 }
 
@@ -163,6 +165,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         self.prog.define_expr(ir::ExpressionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Sub,
+            ty: ty_ir,
             left: ir::Const { ty: ty_ir, value: BitInt::zero(bits) }.into(),
             right: value,
         }).into()
@@ -175,6 +178,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
         self.prog.define_expr(ir::ExpressionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Xor,
+            ty: ty_ir,
             left: value,
             right: self.prog.const_bool(true).into(),
         }).into()
@@ -313,15 +317,21 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         } else {
             //basic binary operation
             assert_eq!(value_left.ty, value_right.ty);
-            let arg_ty = match self.types[value_left.ty] {
+
+            let arg_ty_ir = self.types.map_type(self.prog, value_left.ty);
+            let arg_ty_info = &self.types[value_left.ty];
+
+            let arg_ty = match *arg_ty_info {
                 TypeInfo::Bool => BinaryArgType::Bool,
                 TypeInfo::Int(info) => BinaryArgType::Int(info.signed),
                 TypeInfo::IntSize(signed) => BinaryArgType::Int(signed),
                 _ => panic!(),
             };
+
             self.prog.define_expr(binary_op_to_expr(
                 kind,
                 arg_ty,
+                arg_ty_ir,
                 value_left.ir,
                 value_right.ir,
             )).into()
@@ -886,6 +896,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                     let inc = s.prog.define_expr(ir::ExpressionInfo::Arithmetic {
                         kind: ir::ArithmeticOp::Add,
+                        ty: index_ty_ir,
                         left: load,
                         right: const_one.into(),
                     }).into();

@@ -354,7 +354,8 @@ impl<'a, W: Write> Renderer<'a, W> {
         let t = |ty| prog.format_type(ty).to_string();
 
         match *expr_info {
-            ExpressionInfo::Arithmetic { kind, left, right } =>
+            // type already included as a separate column
+            ExpressionInfo::Arithmetic { kind, ty:_, left, right } =>
                 vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],
             ExpressionInfo::Comparison { kind, left, right } =>
                 vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],

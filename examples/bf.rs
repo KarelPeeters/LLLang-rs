@@ -202,6 +202,7 @@ fn zero_memory(prog: &mut Program, block_start: Block, base: Value, length: usiz
     });
     let next_i = prog.define_expr(ExpressionInfo::Arithmetic {
         kind: ArithmeticOp::Add,
+        ty: ty_int,
         left: curr_i.into(),
         right: const_int_one.into(),
     });
@@ -384,6 +385,7 @@ fn increment_addr(prog: &mut Program, block: Block, addr: Value, ty: Type, kind:
     });
     let add = prog.define_expr(ExpressionInfo::Arithmetic {
         kind,
+        ty,
         left: load.into(),
         right: cst_one.into(),
     });

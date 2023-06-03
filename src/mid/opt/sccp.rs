@@ -333,7 +333,7 @@ impl<'a> State<'a> {
                 // just always assume overdef, maybe this will change when we add const pointers
                 self.eval(base).map_known(|_| Lattice::Overdef)
             }
-            ExpressionInfo::Arithmetic { kind, left, right } => {
+            ExpressionInfo::Arithmetic { kind, ty: _, left, right } => {
                 // TODO test whether this correct handles all of the edge cases in mul and div
                 self.eval_binary(left, right, |ty, left, right| {
                     let left_unsigned = Wrapping(left.unsigned());

@@ -381,7 +381,7 @@ pub enum ExpressionInfo {
     ///Perform binary arithmetic operation `kind(left, right)`;
     ///
     /// `Arithmetic { kind, left: iN, right: iN } -> iN`
-    Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
+    Arithmetic { kind: ArithmeticOp, ty: Type, left: Value, right: Value },
 
     /// Perform binary comparison operation `kind(left, right)`;
     ///
@@ -512,20 +512,19 @@ pub enum CastKind {
 }
 
 impl ExpressionInfo {
-    //TODO this implementation is prone to infinite recursion!
     pub fn ty(&self, prog: &Program) -> Type {
         match *self {
-            ExpressionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
+            ExpressionInfo::Arithmetic { ty, .. } => ty,
             ExpressionInfo::Comparison { .. } => prog.ty_bool,
             ExpressionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             ExpressionInfo::PointerOffSet { .. } => prog.ty_ptr,
-            ExpressionInfo::Cast { ty: after_ty, .. } => after_ty,
+            ExpressionInfo::Cast { ty, .. } => ty,
         }
     }
 
     pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
         match self {
-            ExpressionInfo::Arithmetic { kind: _, left, right } => {
+            ExpressionInfo::Arithmetic { kind: _, ty: _, left, right } => {
                 *left = f(*left);
                 *right = f(*right);
             }
