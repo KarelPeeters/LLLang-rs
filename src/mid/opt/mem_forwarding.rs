@@ -290,10 +290,15 @@ fn find_value_for_location_at_instr_inner(
     let block_info = prog.get_block(block);
     let index = index.unwrap_or(block_info.instructions.len());
 
+    // find the earliest load that aliases
+    // we pick the earliest one so all later loads immediately converge to the same one
+    let mut first_matching_load = None;
+    let mut memory_clobbered = false;
+
     // first see if any instruction before the load aliases
     for &instr in block_info.instructions[0..index].iter().rev() {
-        match prog.get_instr(instr) {
-            &InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
+        match *prog.get_instr(instr) {
+            InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
                 let store_loc = Location { ptr: store_ptr, ty: store_ty };
                 match locations_alias(prog, func, loc, store_loc) {
                     // propagate undef
@@ -301,9 +306,27 @@ fn find_value_for_location_at_instr_inner(
                     // we know the exact value last stored to the pointer!
                     LocAlias::Exactly => return Lattice::Known(value),
                     // we have to give up
-                    LocAlias::UnknownOrPartial => return Lattice::Overdef,
+                    LocAlias::UnknownOrPartial => {
+                        memory_clobbered = true;
+                        break;
+                    }
                     // continue walking backwards
                     LocAlias::No => {}
+                }
+            }
+
+            // see if we can reuse an earlier load
+            InstructionInfo::Load { addr: load_addr, ty: load_ty } => {
+                let load_loc = Location { ptr: load_addr, ty: load_ty };
+                match locations_alias(prog, func, loc, load_loc) {
+                    // unclear, we could reuse if the type matches but is that useful?
+                    LocAlias::Undef => {}
+                    // we can't reuse the load
+                    LocAlias::UnknownOrPartial | LocAlias::No => {}
+                    // we can reuse it
+                    LocAlias::Exactly => {
+                        first_matching_load = Some(instr);
+                    }
                 }
             }
 
@@ -311,12 +334,20 @@ fn find_value_for_location_at_instr_inner(
             // TODO we can do better for calls:
             //   * side effect free functions
             //   * if we don't leak a slot to external or to this call the function can't store to it
-            InstructionInfo::Call { .. } => return Lattice::Overdef,
-            InstructionInfo::BlackBox { .. } => return Lattice::Overdef,
-
-            // no memory writes
-            InstructionInfo::Load { .. } => {}
+            InstructionInfo::Call { .. } | InstructionInfo::BlackBox { .. } => {
+                memory_clobbered = true;
+                break;
+            }
         }
+    }
+
+    // we can't walk backwards any more, something clobbered memory
+    if memory_clobbered {
+        return match first_matching_load {
+            // we did find a matching load we can reuse!
+            Some(load) => Lattice::Known(load.into()),
+            None => Lattice::Overdef,
+        };
     }
 
     // otherwise the value is the merge of the value at the end of each predecessor
@@ -342,15 +373,12 @@ fn find_value_for_location_at_instr_inner(
     }).collect_vec();
 
     let merged = Lattice::fold(pred_values.iter().copied());
-
     let merged_overdef = matches!(merged, Lattice::Overdef);
-    let pred_all_known = || pred_values.iter().all(|v| matches!(v, Lattice::Known(_) | Lattice::Undef));
 
+    // if merging failed, try merging at runtime instead
     // TODO instead of disallowing function entry usage, add a dummy block if necessary
-    if !pred_func_entry && merged_overdef && pred_all_known() {
-        // we know all pred values separately, but we can't merge them
-        // => we can merge them at runtime with a block param!
-
+    let pred_all_known = || pred_values.iter().all(|v| matches!(v, Lattice::Known(_) | Lattice::Undef));
+    if merged_overdef && !pred_func_entry && pred_all_known() {
         // define new block param
         let param = prog.define_param(ParameterInfo { ty: loc.ty });
         prog.get_block_mut(block).params.push(param);
@@ -369,6 +397,13 @@ fn find_value_for_location_at_instr_inner(
         }
 
         return Lattice::Known(param.into());
+    }
+
+    // fallback to reusing a load if possible
+    if merged_overdef {
+        if let Some(load) = first_matching_load {
+            return Lattice::Known(load.into());
+        }
     }
 
     merged
