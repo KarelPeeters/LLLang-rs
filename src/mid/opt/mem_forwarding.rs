@@ -88,14 +88,29 @@ struct Location {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum Alias {
-    /// At least one of the pointers if undefined
+enum PtrAlias {
+    /// At least one of the pointers is undefined.
     Undef,
-    /// Both storages point to the same place
+    /// Both pointers refer to exactly the same address.
     Exactly,
-    /// We don't have enough information to say anything
+    /// We don't know whether the pointers alias.
+    Unknown,
+    /// Both pointers always refer to different addresses.
+    No,
+    /// If loads and stores only use the given type, this is the same as [PtrAlias::No].
+    /// Otherwise the same as [PtrAlias::Unknown].
+    NoIfType(Type),
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum LocAlias {
+    /// At least one of the locations is undefined.
+    Undef,
+    /// The locations overlap exactly.
+    Exactly,
+    /// We don't know whether the locations overlap or they overlap partially.
     UnknownOrPartial,
-    /// Both storages definitely don't overlap at all
+    /// The locations don't overlap at all.
     No,
 }
 
@@ -204,9 +219,9 @@ fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block
                 let load_loc = Location { ptr: addr, ty };
                 match locations_alias(prog, func, loc, load_loc) {
                     // could alias, we have to assume live
-                    Alias::Exactly | Alias::UnknownOrPartial => return Some(Liveness::MaybeLive),
+                    LocAlias::Exactly | LocAlias::UnknownOrPartial => return Some(Liveness::MaybeLive),
                     // can't alias, keep going
-                    Alias::Undef | Alias::No => {}
+                    LocAlias::Undef | LocAlias::No => {}
                 }
             }
             // (exactly) aliasing store => dead
@@ -215,10 +230,10 @@ fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block
                 match locations_alias(prog, func, loc, store_loc) {
                     // value is overwritten, we know the previous one is dead
                     // TODO a "covering" alias is enough already, it doesn't have to be exact
-                    Alias::Exactly => return Some(Liveness::Dead),
+                    LocAlias::Exactly => return Some(Liveness::Dead),
                     // may not be overwritten, keep going
                     // TODO maybe we can do something better with undef here?
-                    Alias::Undef | Alias::UnknownOrPartial | Alias::No => {}
+                    LocAlias::Undef | LocAlias::UnknownOrPartial | LocAlias::No => {}
                 }
             }
 
@@ -282,13 +297,13 @@ fn find_value_for_location_at_instr_inner(
                 let store_loc = Location { ptr: store_ptr, ty: store_ty };
                 match locations_alias(prog, func, loc, store_loc) {
                     // propagate undef
-                    Alias::Undef => return Lattice::Undef,
+                    LocAlias::Undef => return Lattice::Undef,
                     // we know the exact value last stored to the pointer!
-                    Alias::Exactly => return Lattice::Known(value),
+                    LocAlias::Exactly => return Lattice::Known(value),
                     // we have to give up
-                    Alias::UnknownOrPartial => return Lattice::Overdef,
+                    LocAlias::UnknownOrPartial => return Lattice::Overdef,
                     // continue walking backwards
-                    Alias::No => {}
+                    LocAlias::No => {}
                 }
             }
 
@@ -359,103 +374,142 @@ fn find_value_for_location_at_instr_inner(
     merged
 }
 
-fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> Alias {
+fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> LocAlias {
     let same_ty = left.ty == right.ty;
 
     match pointers_alias(prog, func, left.ptr, right.ptr) {
-        Alias::Undef => Alias::Undef,
-        Alias::Exactly => {
+        PtrAlias::Undef => LocAlias::Undef,
+        PtrAlias::Unknown => LocAlias::UnknownOrPartial,
+        PtrAlias::No => LocAlias::No,
+
+        PtrAlias::Exactly => {
             if same_ty {
-                Alias::Exactly
+                LocAlias::Exactly
             } else {
-                Alias::UnknownOrPartial
+                LocAlias::UnknownOrPartial
             }
         }
-        Alias::UnknownOrPartial => Alias::UnknownOrPartial,
-        Alias::No => Alias::No,
+        PtrAlias::NoIfType(expected_ty) => {
+            if same_ty && left.ty == expected_ty {
+                LocAlias::No
+            } else {
+                LocAlias::UnknownOrPartial
+            }
+        }
     }
 }
 
-fn pointers_alias(prog: &Program, func: Function, ptr_left: Value, ptr_right: Value) -> Alias {
-    let ptr_left = simplify_ptr(prog, ptr_left);
-    let ptr_right = simplify_ptr(prog, ptr_right);
+fn pointers_alias(prog: &Program, func: Function, ptr_left: Value, ptr_right: Value) -> PtrAlias {
+    let simple_left = core_ptr(prog, ptr_left);
+    let simple_right = core_ptr(prog, ptr_right);
 
-    if ptr_left.is_undef() || ptr_right.is_undef() {
-        return Alias::Undef;
+    if simple_left.base.is_undef() || simple_right.base.is_undef() {
+        return PtrAlias::Undef;
     }
-    if ptr_left == ptr_right {
-        return Alias::Exactly;
-    }
-
-    let alias_from_origin = origins_alias(pointer_origin(prog, func, ptr_left), pointer_origin(prog, func, ptr_right));
-    if let Alias::No = alias_from_origin {
-        return alias_from_origin;
+    if simple_left == simple_right {
+        return PtrAlias::Exactly;
     }
 
-    if let (Some(expr_left), Some(expr_right)) = (ptr_left.as_expr(), ptr_right.as_expr()) {
-        match (prog.get_expr(expr_left), prog.get_expr(expr_right)) {
-            (
-                &ExpressionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
-                &ExpressionInfo::PointerOffSet { ty: inner_ty_right, base: base_right, index: index_right },
-            ) => {
-                let base_alias = pointers_alias(prog, func, base_left, base_right);
-                if base_alias == Alias::Undef {
-                    return Alias::Undef;
-                }
-                if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
-                    return base_alias;
-                }
-                // the zero-size type case is already handled by simplify_ptr
+    if simple_left.base == simple_right.base {
+        match (simple_left.offset, simple_right.offset) {
+            (Offset::None, Offset::None) => unreachable!(),
+
+            // zero offset compared to non-zero offset
+            (Offset::None, Offset::Pointer(ty, index)) | (Offset::Pointer(ty, index), Offset::None) => {
+                assert!(!prog.is_zero_sized_type(ty) && index != 0);
+                return PtrAlias::NoIfType(ty);
             }
 
-            (
-                &ExpressionInfo::TupleFieldPtr { base: base_left, index: index_left, tuple_ty: tuple_ty_left },
-                &ExpressionInfo::TupleFieldPtr { base: base_right, index: index_right, tuple_ty: tuple_ty_right },
-            ) => {
-                let base_alias = pointers_alias(prog, func, base_left, base_right);
-                if base_alias == Alias::Undef {
-                    return Alias::Undef;
+            (Offset::Pointer(left_ty, left_index), Offset::Pointer(right_ty, right_index)) => {
+                if left_ty == right_ty {
+                    return if left_index == right_index {
+                        PtrAlias::Exactly
+                    } else {
+                        PtrAlias::NoIfType(left_ty)
+                    };
                 }
-                if tuple_ty_left == tuple_ty_right && index_left == index_right {
-                    return base_alias;
-                }
+            }
+
+            (Offset::TupleField(left_ty, left_index), Offset::TupleField(right_ty, right_index)) => {
+                if left_ty == right_ty {
+                    return if left_index == right_index {
+                        PtrAlias::Exactly
+                    } else {
+                        PtrAlias::NoIfType(left_ty)
+                    };
+                };
             }
 
             _ => {}
         }
+
+        // bases still match, so origin check won't achieve anything anyway
+        return PtrAlias::Unknown;
     }
 
-    Alias::UnknownOrPartial
+    let origin_left = pointer_origin(prog, func, simple_left.base);
+    let origin_right = pointer_origin(prog, func, simple_right.base);
+    if !origins_can_alias(origin_left, origin_right) {
+        return PtrAlias::No;
+    }
+
+    PtrAlias::Unknown
 }
 
-fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct CorePtr {
+    base: Value,
+    offset: Offset,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Offset {
+    None,
+    Pointer(Type, i64),
+    TupleField(Type, u32),
+}
+
+fn core_ptr(prog: &Program, ptr: Value) -> CorePtr {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
     if let Some(expr) = ptr.as_expr() {
         match *prog.get_expr(expr) {
             ExpressionInfo::PointerOffSet { ty, base, index } => {
                 if prog.is_zero_sized_type(ty) {
-                    return simplify_ptr(prog, base);
+                    return core_ptr(prog, base);
                 }
-                if let Some(cst) = index.as_const() {
-                    if cst.is_zero() {
-                        return simplify_ptr(prog, base);
-                    }
+                if let Some(index) = index.as_const() {
+                    assert_eq!(prog.get_type(index.ty).unwrap_int(), Some(prog.ptr_size_bits()));
+                    let index = index.value.signed();
+
+                    return match index {
+                        0 => core_ptr(prog, base),
+                        _ => CorePtr { base, offset: Offset::Pointer(ty, index) }
+                    };
                 }
             }
-            ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {
+            ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } => {
                 // index == 0 is not enough to decay to base pointer, since the layout of tuples is decided by the backend
                 // however, single-element tuples are still guaranteed to have the same layout as the single item inside them
                 let field_count = prog.get_type(tuple_ty).unwrap_tuple().unwrap().fields.len();
-                if field_count == 0 || field_count == 1 {
-                    return simplify_ptr(prog, base);
+                assert!(field_count > 0);
+                if field_count == 1 {
+                    return core_ptr(prog, base);
                 }
+
+                return CorePtr {
+                    base,
+                    offset: Offset::TupleField(tuple_ty, index),
+                };
             }
-            _ => {}
+            _ => panic!("Unexpected pointer-yielding expression {:?}", expr),
         }
     }
 
-    ptr
+    CorePtr {
+        base: ptr,
+        offset: Offset::None,
+    }
 }
 
 // TODO do some proper dataflow analysis here
@@ -506,24 +560,19 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
     }
 }
 
-fn origins_alias(left: Origin, right: Origin) -> Alias {
+fn origins_can_alias(left: Origin, right: Origin) -> bool {
     match (left, right) {
-        (Origin::Undef, _) | (_, Origin::Undef) => Alias::Undef,
-        (Origin::Unknown, _) | (_, Origin::Unknown) => Alias::UnknownOrPartial,
-        (Origin::FuncExternal, Origin::FuncExternal) => Alias::UnknownOrPartial,
+        (Origin::Undef, _) | (_, Origin::Undef) => false,
 
-        (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
-            if left == right {
-                Alias::Exactly
-            } else {
-                Alias::No
-            }
-        }
-        (Origin::FuncAnyStackSlot, Origin::FuncAnyStackSlot) => Alias::UnknownOrPartial,
-        (Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot) | (Origin::FuncAnyStackSlot, Origin::FuncStackSlot(_)) => Alias::UnknownOrPartial,
+        (Origin::Unknown, _) | (_, Origin::Unknown) => true,
+        (Origin::FuncExternal, Origin::FuncExternal) => true,
 
-        (Origin::FuncExternal, Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot) => Alias::No,
-        (Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot, Origin::FuncExternal) => Alias::No,
+        (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => left == right,
+        (Origin::FuncAnyStackSlot, Origin::FuncAnyStackSlot) => true,
+        (Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot) | (Origin::FuncAnyStackSlot, Origin::FuncStackSlot(_)) => true,
+
+        (Origin::FuncExternal, Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot) => false,
+        (Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot, Origin::FuncExternal) => false,
     }
 }
 

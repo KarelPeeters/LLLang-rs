@@ -403,6 +403,7 @@ pub enum ExpressionInfo {
     ///
     /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
     // TODO clarify whether index is signed or unsigned
+    // TODO rename to ArrayOffset?
     PointerOffSet { ty: Type, base: Value, index: Value },
 
     /// Convert `value` to `ty`. `kind` specifies additional semantics this cast will have.
