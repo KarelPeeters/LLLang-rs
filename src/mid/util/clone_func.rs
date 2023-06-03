@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use itertools::Itertools;
 use crate::mid::analyse::usage::TermUsage;
@@ -18,17 +18,17 @@ impl Program {
         let old_blocks = self.reachable_blocks(self.get_func(func).entry).collect_vec();
 
         let mut new_slots = vec![];
-        let map_slot: HashMap<_, _> = old_slots.iter().map(|&old_slot| {
+        let map_slot: IndexMap<_, _> = old_slots.iter().map(|&old_slot| {
             let &StackSlotInfo { inner_ty, ref debug_name } = self.get_slot(old_slot);
             let new_slot = self.define_slot(StackSlotInfo { inner_ty, debug_name: debug_name.clone() });
             new_slots.push(new_slot);
             (old_slot, new_slot)
         }).collect();
 
-        let mut map_param = HashMap::new();
-        let mut map_instr = HashMap::new();
+        let mut map_param = IndexMap::new();
+        let mut map_instr = IndexMap::new();
 
-        let map_block: HashMap<_, _> = old_blocks.iter().map(|&old_block| {
+        let map_block: IndexMap<_, _> = old_blocks.iter().map(|&old_block| {
             let old_block_info = self.get_block(old_block);
 
             let old_params = old_block_info.params.clone();
@@ -117,10 +117,10 @@ struct ValueMapper<'a> {
     func: Function,
     recursive: bool,
 
-    map_slot: &'a HashMap<StackSlot, StackSlot>,
-    map_param: &'a HashMap<Parameter, Value>,
-    map_instr: &'a HashMap<Instruction, Instruction>,
-    map_expr: HashMap<Expression, Expression>,
+    map_slot: &'a IndexMap<StackSlot, StackSlot>,
+    map_param: &'a IndexMap<Parameter, Value>,
+    map_instr: &'a IndexMap<Instruction, Instruction>,
+    map_expr: IndexMap<Expression, Expression>,
 
     prog_exprs: &'a mut Arena<Expression, ExpressionInfo>,
 }
