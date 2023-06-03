@@ -31,6 +31,8 @@ pub enum VerifyError {
     TupleIndexOutOfBounds(Expression, TypeString, u32, u32),
 
     EntryBlockUsedAsTarget(DomPosition, Block),
+
+    CyclicExpression(Vec<Expression>),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -70,10 +72,6 @@ pub fn verify(prog: &Program) -> Result {
         })?;
     }
 
-    // check types and value domination
-    //   also collect expressions for type checking
-    let mut expressions = HashSet::new();
-
     for (func, func_info) in &prog.nodes.funcs {
         let dom_info = &DomInfo::new(prog, func);
         let func_pos = DomPosition::FuncEntry(func);
@@ -82,7 +80,8 @@ pub fn verify(prog: &Program) -> Result {
             prog,
             declarer: &declarer,
             dom_info,
-            expressions: &mut expressions,
+            expressions: HashSet::new(),
+            expr_loop_path: vec![],
         };
 
         // check function type match
@@ -141,20 +140,6 @@ pub fn verify(prog: &Program) -> Result {
         }
     }
 
-    // type check expressions recursively
-    let mut todo_expressions: VecDeque<_> = expressions.drain().collect();
-    let mut expressions_visited = expressions;
-    while let Some(expr) = todo_expressions.pop_front() {
-        if !expressions_visited.insert(expr) {
-            continue;
-        }
-
-        let expr_info = prog.get_expr(expr);
-        expr_info.operands().filter_map(|(value, _)| value.as_expr()).sink_to(&mut todo_expressions);
-
-        check_expr_types(prog, expr)?;
-    }
-
     Ok(())
 }
 
@@ -163,7 +148,8 @@ struct Context<'a> {
     declarer: &'a FuncDeclareChecker,
     dom_info: &'a DomInfo,
 
-    expressions: &'a mut HashSet<Expression>,
+    expressions: HashSet<Expression>,
+    expr_loop_path: Vec<Expression>,
 }
 
 impl<'a> Context<'a> {
@@ -220,15 +206,47 @@ impl<'a> Context<'a> {
             }
 
             Value::Expr(expr) => {
-                assert!(root.is_none());
-                self.expressions.insert(expr);
+                self.check_expression(expr)?;
 
+                assert!(root.is_none());
                 self.prog.expr_tree_leaf_iter(expr).try_for_each(|(inner, _, _)| {
                     assert!(!inner.is_expr());
                     self.check_value_usage_impl(inner, usage.clone(), Some(expr))
                 })
             }
         }
+    }
+
+    fn check_expression(&mut self, expr: Expression) -> Result<()> {
+        if !self.expressions.insert(expr) {
+            return Ok(());
+        }
+
+        check_expr_types(self.prog, expr)?;
+
+        assert!(self.expr_loop_path.is_empty());
+        if let Err(()) = self.find_expr_cycle(expr) {
+            assert!(self.expr_loop_path.len() >= 2);
+            return Err(VerifyError::CyclicExpression(self.expr_loop_path.clone()));
+        }
+
+        Ok(())
+    }
+
+    fn find_expr_cycle(&mut self, expr: Expression) -> std::result::Result<(), ()> {
+        if self.expr_loop_path.contains(&expr) {
+            self.expr_loop_path.push(expr);
+            return Err(());
+        }
+
+        self.expr_loop_path.push(expr);
+
+        self.prog.get_expr(expr).operands().filter_map(|(value, op)| value.as_expr()).try_for_each(|operand| {
+            self.find_expr_cycle(operand)
+        })?;
+
+        assert_eq!(self.expr_loop_path.pop(), Some(expr));
+        Ok(())
     }
 }
 

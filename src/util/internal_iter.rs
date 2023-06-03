@@ -51,6 +51,7 @@ pub trait InternalIterator: Sized {
         }
     }
 
+    // TODO refactor this to be more similar to vec.extend
     fn sink_to<R: FromInternalIterator<Self::Item>>(self, result: &mut R) {
         self.for_each(|item| result.push(item));
     }
@@ -90,7 +91,7 @@ pub trait InternalIterator: Sized {
 
     fn sum(self) -> Self::Item where Self::Item: Copy + Sum<Self::Item> {
         // we abuse the way std::iter::Sum works a lot, but it should be fine
-        let mut curr = std::iter::empty().sum();
+        let mut curr = iter::empty().sum();
         self.for_each(|item| {
             curr = iter::once(curr).chain(iter::once(item)).sum();
         });
@@ -203,6 +204,18 @@ impl Try for () {
             ControlFlow::Continue(()) => (),
             ControlFlow::Break(_) => unreachable!(),
         }
+    }
+}
+
+impl<B> Try for ControlFlow<B, ()> {
+    type B = B;
+
+    fn to_control_flow(self) -> ControlFlow<Self::B> {
+        self
+    }
+
+    fn from_control_flow(control: ControlFlow<Self::B>) -> Self {
+        control
     }
 }
 

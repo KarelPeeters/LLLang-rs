@@ -35,43 +35,63 @@ pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
 
 struct Renderer<'a, W: Write> {
     prog: &'a Program,
-    func_expressions: IndexMap<Function, IndexSet<Expression>>,
-    other_expressions: IndexSet<Expression>,
+    marker: ExpressionMarker,
 
     // this is a hack so we don't have to repeat the W bound in every member function
     ph: PhantomData<W>,
 }
 
-impl<'a, W: Write> Renderer<'a, W> {
-    pub fn new(prog: &'a Program) -> Self {
-        let use_info = UseInfo::new(prog);
+#[derive(Default)]
+struct ExpressionMarker {
+    func_expressions: IndexMap<Function, IndexSet<Expression>>,
+    other_expressions: IndexSet<Expression>,
+}
 
-        let mut func_expressions: IndexMap<Function, IndexSet<Expression>> = IndexMap::new();
-        let mut other_expressions: IndexSet<Expression> = use_info.values().filter_map(|v| v.as_expr()).collect();
-
-        let mut mark_expr = |func, expr| {
-            let set = func_expressions.entry(func).or_default();
-            set.insert(expr);
-            other_expressions.remove(&expr);
+impl ExpressionMarker {
+    fn new(prog: &Program, use_info: &UseInfo) -> Self {
+        let mut marker = Self {
+            func_expressions: IndexMap::new(),
+            other_expressions: use_info.expressions().clone(),
         };
 
         for value in use_info.values() {
             if let Value::Expr(expr) = value {
                 for usage in &use_info[value] {
                     if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
-                        mark_expr(func, expr);
-
-                        prog.expr_tree_iter(expr).try_for_each(|(value, _, _)| {
-                            if let Value::Expr(value) = value {
-                                mark_expr(func, value);
-                            }
-                        });
+                        marker.mark(prog, func, expr);
                     }
                 }
             }
         }
 
-        Self { prog, func_expressions, other_expressions, ph: PhantomData }
+        marker
+    }
+
+    fn mark(&mut self, prog: &Program, func: Function, expr: Expression) {
+        // an expression being part of multiple functions is fine,
+        //   it (and its operands) will just be rendered twice
+        let set = self.func_expressions.entry(func).or_default();
+        let is_new = set.insert(expr);
+        self.other_expressions.remove(&expr);
+
+        if is_new {
+            // we don't use the expression tree infrastructure since that breaks if there is recursion
+            //   and we want the renderer to work even with invalid IR
+            prog.get_expr(expr).operands().for_each(|(operand, _)| {
+                if let Some(operand) = operand.as_expr() {
+                    self.mark(prog, func, operand)
+                }
+            });
+        }
+    }
+}
+
+impl<'a, W: Write> Renderer<'a, W> {
+    pub fn new(prog: &'a Program) -> Self {
+        let use_info = UseInfo::new(prog);
+        let marker = ExpressionMarker::new(prog, &use_info);
+
+        Self { prog, marker, ph: PhantomData }
     }
 
     fn render(&self, f: &mut W) -> Result {
@@ -92,7 +112,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         }
 
         // render expressions that aren't used in any function
-        self.render_expressions(f, "global", &self.other_expressions)?;
+        self.render_expressions(f, "global", &self.marker.other_expressions)?;
 
         self.render_data(f)?;
 
@@ -171,7 +191,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         writeln!(f, "func_{}_entry -> block_{};", func.index(), func_info.entry.index())?;
 
         // expressions
-        if let Some(expressions) = self.func_expressions.get(&func) {
+        if let Some(expressions) = self.marker.func_expressions.get(&func) {
             self.render_expressions(f, &format!("func_{}", func.index()), expressions)?;
         }
 
