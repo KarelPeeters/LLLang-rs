@@ -1,11 +1,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use itertools::Itertools;
-
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, InstructionInfo, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
+use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
@@ -18,24 +16,42 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
     let mut loads_replaced = 0;
     let mut stores_removed = 0;
 
-    // replace loads
-    let mut lattice_cache = LatticeCache::default();
+    // collect loads to replace
+    let mut replacements = vec![];
     for func in use_info.funcs() {
+        // reset cache per function
+        let mut state = State {
+            cache: Default::default(),
+            undo: vec![],
+            prog,
+            use_info: &use_info,
+            func,
+        };
+
         for &block in use_info.func_blocks(func) {
-            let instrs = prog.get_block(block).instructions.clone();
+            let instrs = state.prog.get_block(block).instructions.clone();
 
             for (index, &instr) in instrs.iter().enumerate() {
-                let instr_info = prog.get_instr(instr);
+                let instr_info = state.prog.get_instr(instr);
                 if let &InstructionInfo::Load { addr, ty: load_ty } = instr_info {
                     let loc = Location { ptr: addr, ty: load_ty };
-                    let lattice = find_value_for_location_at_instr(prog, &use_info, func, loc, block, Some(index), &mut lattice_cache);
 
-                    if let Some(value) = lattice.as_value_of_type(prog, load_ty) {
-                        loads_replaced += 1;
-                        use_info.replace_value_usages(prog, instr.into(), value);
+                    let lattice = state.find_value_for_loc_at(loc, block, Some(index));
+
+                    if let Some(value) = lattice.as_value_of_type(state.prog, load_ty) {
+                        replacements.push((instr, value));
                     }
                 }
             }
+        }
+    }
+
+    // actually do replacements
+    // (after collecting them to ensure we don't cause bugs by modifying the program in-place)
+    for (instr, value) in replacements {
+        let users_replaced = use_info.replace_value_usages(prog, instr.into(), value);
+        if users_replaced > 0 {
+            loads_replaced += 1;
         }
     }
 
@@ -247,166 +263,259 @@ fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block
     None
 }
 
-/// The lattice cache stores the lattice value for each location at the end of the given block.
-/// This can also include a temporary "undef" assumption to break loops.
-type LatticeCache = HashMap<(Block, Location), Lattice>;
-
-fn find_value_for_location_at_instr(
-    prog: &mut Program,
-    use_info: &UseInfo,
-    func: Function,
-    loc: Location,
-    block: Block,
-    index: Option<usize>,
-    cache: &mut LatticeCache,
-) -> Lattice {
-    if index.is_none() {
-        match cache.entry((block, loc)) {
-            Entry::Occupied(entry) => return *entry.get(),
-            Entry::Vacant(entry) => entry.insert(Lattice::Undef),
-        };
-    }
-
-    let lattice = find_value_for_location_at_instr_inner(prog, use_info, func, loc, block, index, cache);
-
-    if index.is_none() {
-        let prev = cache.insert((block, loc), lattice);
-        assert_eq!(prev, Some(Lattice::Undef));
-    }
-
-    lattice
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+enum Side {
+    Start,
+    End,
 }
 
-/// The same as [find_value_for_location_at_instr] except we don't manage the cache here.
-fn find_value_for_location_at_instr_inner(
-    prog: &mut Program,
-    use_info: &UseInfo,
+impl Side {
+    fn from_index(index: Option<usize>) -> Option<Side> {
+        match index {
+            None => Some(Side::End),
+            Some(0) => Some(Side::Start),
+            _ => None,
+        }
+    }
+}
+
+type Key = (Location, Block, Side);
+
+struct State<'p, 'u> {
+    cache: HashMap<Key, Lattice>,
+    undo: Vec<Undo>,
+
+    // util to avoid passing a bunch of params repeatedly
+    prog: &'p mut Program,
+    use_info: &'u UseInfo,
     func: Function,
-    loc: Location,
-    block: Block,
-    index: Option<usize>,
-    cache: &mut LatticeCache,
-) -> Lattice {
-    let block_info = prog.get_block(block);
-    let index = index.unwrap_or(block_info.instructions.len());
+}
 
-    // find the earliest load that aliases
-    // we pick the earliest one so all later loads immediately converge to the same one
-    let mut first_matching_load = None;
-    let mut memory_clobbered = false;
+// TODO general undo infrastructure? can we wrap the entire program in it or is that too slow/tricky?
+#[derive(Debug)]
+enum Undo {
+    CacheInsert(Key),
+    DefineParam(Parameter),
+}
 
-    // first see if any instruction before the load aliases
-    for &instr in block_info.instructions[0..index].iter().rev() {
-        match *prog.get_instr(instr) {
-            InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
-                let store_loc = Location { ptr: store_ptr, ty: store_ty };
-                match locations_alias(prog, func, loc, store_loc) {
-                    // propagate undef
-                    LocAlias::Undef => return Lattice::Undef,
-                    // we know the exact value last stored to the pointer!
-                    LocAlias::Exactly => return Lattice::Known(value),
-                    // we have to give up
-                    LocAlias::UnknownOrPartial => {
-                        memory_clobbered = true;
-                        break;
-                    }
-                    // continue walking backwards
-                    LocAlias::No => {}
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct Marker(usize);
+
+enum WalkResult {
+    Lattice(Lattice),
+    ReachedStart {
+        matching_load: Option<Instruction>,
+    }
+}
+
+impl<'p, 'u> State<'p, 'u> {
+    fn mark(&self) -> Marker {
+        Marker(self.undo.len())
+    }
+
+    fn rollback(&mut self, marker: Marker) {
+        let marker = marker.0;
+        for undo in self.undo.drain(marker..).rev() {
+            match undo {
+                Undo::CacheInsert(key) => {
+                    let prev = self.cache.remove(&key);
+                    assert!(prev.is_some());
+                }
+                Undo::DefineParam(param) => {
+                    self.prog.nodes.params.pop(param);
                 }
             }
+        }
+        assert_eq!(self.undo.len(), marker);
+    }
 
-            // see if we can reuse an earlier load
-            InstructionInfo::Load { addr: load_addr, ty: load_ty } => {
-                let load_loc = Location { ptr: load_addr, ty: load_ty };
-                match locations_alias(prog, func, loc, load_loc) {
-                    // unclear, we could reuse if the type matches but is that useful?
-                    LocAlias::Undef => {}
-                    // we can't reuse the load
-                    LocAlias::UnknownOrPartial | LocAlias::No => {}
-                    // we can reuse it
-                    LocAlias::Exactly => {
-                        first_matching_load = Some(instr);
-                    }
-                }
-            }
+    fn cache_get(&self, key: Key) -> Option<Lattice> {
+        self.cache.get(&key).copied()
+    }
 
-            // could have side effects, we have to give up
-            // TODO we can do better for calls:
-            //   * side effect free functions
-            //   * if we don't leak a slot to external or to this call the function can't store to it
-            InstructionInfo::Call { .. } | InstructionInfo::BlackBox { .. } => {
-                memory_clobbered = true;
-                break;
+    fn cache_insert(&mut self, key: Key, value: Lattice) {
+        let prev = self.cache.insert(key, value);
+
+        match prev {
+            None => self.undo.push(Undo::CacheInsert(key)),
+            Some(prev) => {
+                assert!(prev == value, "prev should be None or Some({:?}), got {:?}", value, prev);
+                // no need to undo, this insertion didn't change anything
             }
         }
     }
 
-    // we can't walk backwards any more, something clobbered memory
-    if memory_clobbered {
-        return match first_matching_load {
-            // we did find a matching load we can reuse!
-            Some(load) => Lattice::Known(load.into()),
-            None => Lattice::Overdef,
+    fn define_param(&mut self, info : ParameterInfo) -> Parameter {
+        let param = self.prog.define_param(info);
+        self.undo.push(Undo::DefineParam(param));
+        param
+    }
+
+    fn find_value_for_loc_at(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
+        // check cache
+        if let Some(side) = Side::from_index(index) {
+            if let Some(result) = self.cache_get((loc, block, side)) {
+                return result;
+            }
+        }
+
+        // evaluate the value
+        let result = self.find_value_for_loc_at_inner(loc, block, index);
+
+        // put into cache
+        if let Some(side) = Side::from_index(index) {
+            self.cache_insert((loc, block, side), result);
+        }
+
+        result
+    }
+
+    fn find_value_for_loc_at_inner(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
+        // look at the preceding instructions in this block
+        let walk = self.walk_block_from(loc, block, index);
+        let matching_load = match walk {
+            WalkResult::Lattice(value) => return value,
+            WalkResult::ReachedStart { matching_load } => matching_load,
         };
-    }
 
-    // otherwise the value is the merge of the value at the end of each predecessor
-    let predecessors = &use_info[block];
-
-    let mut pred_func_entry = false;
-    let pred_values = predecessors.iter().map(|usage| {
-        match usage {
-            // we've reached the start of the function, depending on the origin the value is undef or overdef
-            BlockUsage::FuncEntry(_) => {
-                pred_func_entry |= true;
-                match pointer_origin(prog, func, loc.ptr) {
-                    Origin::Undef => Lattice::Undef,
-                    Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
-                    Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
-                }
-            }
-            // continue searching along the preceding block
-            BlockUsage::Target { pos, kind: _ } => {
-                find_value_for_location_at_instr(prog, use_info, func, loc, pos.block, None, cache)
-            }
+        // we've reached the start of the block, check the cache for it
+        if let Some(value) = self.cache_get((loc, block, Side::Start)) {
+            return value;
         }
-    }).collect_vec();
 
-    let merged = Lattice::fold(pred_values.iter().copied());
-    let merged_overdef = matches!(merged, Lattice::Overdef);
+        // if we've reached the func entry the value depends on the origin
+        if self.use_info.block_only_used_as_func_entry(block) {
+            return match pointer_origin(self.prog, self.func, loc.ptr) {
+                Origin::Undef => Lattice::Undef,
+                Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
+                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
+            };
+        }
 
-    // if merging failed, try merging at runtime instead
-    // TODO instead of disallowing function entry usage, add a dummy block if necessary
-    let pred_all_known = || pred_values.iter().all(|v| matches!(v, Lattice::Known(_) | Lattice::Undef));
-    if merged_overdef && !pred_func_entry && pred_all_known() {
-        // define new block param
-        let param = prog.define_param(ParameterInfo { ty: loc.ty });
-        prog.get_block_mut(block).params.push(param);
-
-        // add corresponding block args
-        for (pred, value) in zip_eq(predecessors, pred_values) {
-            let value = value.as_value_of_type(prog, loc.ty);
-
-            match pred {
-                BlockUsage::FuncEntry(_) => unreachable!(),
-                BlockUsage::Target { pos, kind } => {
-                    let target = kind.get_target_mut(&mut prog.get_block_mut(pos.block).terminator);
-                    target.args.push(value.unwrap());
-                }
+        // if there are pred blocks, try inserting a block param
+        if self.use_info.block_only_used_in_targets(block) {
+            if let Some(value) = self.try_build_block_param(loc, block) {
+                return value;
             }
         }
 
-        return Lattice::Known(param.into());
-    }
+        // TODO we could try merging func entry and other pred values here
+        //   alternatively just require there to be an empty entry block we can add the arg to?
 
-    // fallback to reusing a load if possible
-    if merged_overdef {
-        if let Some(load) = first_matching_load {
+        // if there was a matching load use it
+        if let Some(load) = matching_load {
             return Lattice::Known(load.into());
         }
+
+        // we don't know anything
+        Lattice::Overdef
     }
 
-    merged
+    fn walk_block_from(&mut self, loc: Location, block: Block, index: Option<usize>) -> WalkResult {
+        let block_info = self.prog.get_block(block);
+        let index = index.unwrap_or(block_info.instructions.len());
+
+        // keep track of the earliest load that aliases
+        // (earliest to ensure that repeated loads all converge to the first one)
+        let mut first_matching_load = None;
+        let mut clobbered = false;
+
+        // walk the instructions backwards
+        for &instr in block_info.instructions[0..index].iter().rev() {
+            match *self.prog.get_instr(instr) {
+                // if the store aliases, return its value
+                InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
+                    let store_loc = Location { ptr: store_ptr, ty: store_ty };
+                    match locations_alias(self.prog, self.func, loc, store_loc) {
+                        // propagate undef
+                        LocAlias::Undef => return WalkResult::Lattice(Lattice::Undef),
+                        // we know the exact value last stored to loc!
+                        LocAlias::Exactly => return WalkResult::Lattice(Lattice::Known(value)),
+                        // we have to give up
+                        LocAlias::UnknownOrPartial => {
+                            clobbered = true;
+                            break;
+                        }
+                        // continue walking backwards
+                        LocAlias::No => {}
+                    }
+                }
+
+                // if the load aliases, keep it around for potential reuse
+                InstructionInfo::Load { addr: load_addr, ty: load_ty } => {
+                    let load_loc = Location { ptr: load_addr, ty: load_ty };
+                    match locations_alias(self.prog, self.func, loc, load_loc) {
+                        // unclear, we could reuse if the type matches but is that useful?
+                        LocAlias::Undef => {}
+                        // we can't reuse the load
+                        LocAlias::UnknownOrPartial | LocAlias::No => {}
+                        // we can reuse it
+                        LocAlias::Exactly => {
+                            first_matching_load = Some(instr);
+                        }
+                    }
+                }
+
+                // could have side effects, we have to give up
+                // TODO we can do better for calls:
+                //   * side effect free functions
+                //   * if we don't leak a slot to external or to this call the function can't store to it
+                InstructionInfo::Call { .. } | InstructionInfo::BlackBox { .. } => {
+                    clobbered = true;
+                    break;
+                }
+            }
+        }
+
+        if clobbered {
+            match first_matching_load {
+                None => WalkResult::Lattice(Lattice::Overdef),
+                Some(load) => WalkResult::Lattice(Lattice::Known(load.into())),
+            }
+        } else {
+            WalkResult::ReachedStart { matching_load: first_matching_load }
+        }
+    }
+
+    fn try_build_block_param(&mut self, loc: Location, block: Block) -> Option<Lattice> {
+        let mark = self.mark();
+
+        // define param and immediately put it in the cache to break cycles
+        let param = self.define_param(ParameterInfo { ty: loc.ty });
+        self.cache_insert((loc, block, Side::Start), Lattice::Known(param.into()));
+
+        // map predecessors to values
+        let preds = self.use_info[block].to_vec();
+        let mut pred_args = vec![];
+
+        for &pred in &preds {
+            let pred = unwrap_match!(pred, BlockUsage::Target { pos, kind: _ } => pos.block);
+            let lattice = self.find_value_for_loc_at(loc, pred, None);
+
+            let value = match lattice.as_value_of_type(self.prog, loc.ty) {
+                Some(value) => value,
+                None => {
+                    // failed to get value for predecessor: rollback and mark this block start as doomed
+                    self.rollback(mark);
+                    self.cache_insert((loc, block, Side::Start), Lattice::Overdef);
+                    return None;
+                }
+            };
+
+            pred_args.push(value);
+        };
+
+        // success!
+        // push param and pred args
+        self.prog.get_block_mut(block).params.push(param);
+        for (pred, arg) in zip_eq(preds, pred_args) {
+            let (pos, kind) = unwrap_match!(pred, BlockUsage::Target { pos, kind } => (pos, kind));
+            let target = kind.get_target_mut(&mut self.prog.get_block_mut(pos.block).terminator);
+            target.args.push(arg);
+        }
+
+        Some(Lattice::Known(param.into()))
+    }
 }
 
 fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> LocAlias {

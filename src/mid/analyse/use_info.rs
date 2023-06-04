@@ -97,6 +97,14 @@ impl UseInfo {
             }
         })
     }
+
+    pub fn block_only_used_in_targets(&self, block: Block) -> bool {
+        self[block].iter().all(|usage| matches!(usage, BlockUsage::Target { .. }))
+    }
+
+    pub fn block_only_used_as_func_entry(&self, block: Block) -> bool {
+        self[block].iter().all(|usage| matches!(usage, BlockUsage::FuncEntry { .. }))
+    }
 }
 
 impl<T: Into<Value>> std::ops::Index<T> for UseInfo {
