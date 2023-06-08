@@ -591,7 +591,7 @@ pub enum Terminator {
     LoopForever,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Target {
     pub block: Block,
     pub args: Vec<Value>,

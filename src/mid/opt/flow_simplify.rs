@@ -95,11 +95,18 @@ fn simplify_terminator(prog: &Program, block: Block, terminator: &Terminator) ->
                             let new_false_target = skip_target_to_target(prog,  false_target);
 
                             if new_true_target.is_some() || new_false_target.is_some() {
-                                Some(Terminator::Branch {
-                                    cond,
-                                    true_target: new_true_target.unwrap_or_else(|| true_target.clone()),
-                                    false_target: new_false_target.unwrap_or_else(|| false_target.clone()),
-                                })
+                                let final_true_target = new_true_target.unwrap_or_else(|| true_target.clone());
+                                let final_false_target = new_false_target.unwrap_or_else(|| false_target.clone());
+
+                                if final_true_target == final_false_target {
+                                    Some(Terminator::Jump { target: final_true_target })
+                                } else {
+                                    Some(Terminator::Branch {
+                                        cond,
+                                        true_target: final_true_target,
+                                        false_target: final_false_target,
+                                    })
+                                }
                             } else {
                                 None
                             }
