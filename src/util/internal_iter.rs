@@ -122,6 +122,27 @@ pub trait InternalIterator: Sized {
             ControlFlow::Break(_) => None,
         }
     }
+
+    fn single_unique(self) -> Option<Self::Item> where Self::Item: PartialEq {
+        let mut first = None;
+        let _ = self.try_for_each_impl(|curr| {
+            match &first {
+                None => {
+                    first = Some(curr);
+                    ControlFlow::Continue(())
+                },
+                Some(curr_first) => {
+                    if curr_first == &curr {
+                        ControlFlow::Continue(())
+                    } else {
+                        first = None;
+                        ControlFlow::Break(())
+                    }
+                }
+            }
+        });
+        first
+    }
 }
 
 /// Types that can be used in [InternalIterator::collect] or [InternalIterator::sink].
@@ -237,6 +258,7 @@ pub struct WrapIterator<I>(I);
 pub trait IterExt: Iterator + Sized {
     fn into_internal(self) -> WrapIterator<Self>;
     fn single(self) -> Option<Self::Item>;
+    fn single_unique(self) -> Option<Self::Item> where Self::Item : PartialEq;
 }
 
 impl<I: Iterator> IterExt for I {
@@ -246,6 +268,10 @@ impl<I: Iterator> IterExt for I {
 
     fn single(self) -> Option<Self::Item> {
         self.into_internal().single()
+    }
+
+    fn single_unique(self) -> Option<Self::Item> where Self::Item: PartialEq {
+        self.into_internal().single_unique()
     }
 }
 

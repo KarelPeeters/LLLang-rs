@@ -169,6 +169,7 @@ fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after
         ("slot_to_param", mid::opt::slot_to_param::slot_to_param),
         ("inline", mid::opt::inline::inline),
         ("sccp", mid::opt::sccp::sccp),
+        ("cond_prop", mid::opt::cond_prop::cond_prop),
         ("instr_simplify", mid::opt::instr_simplify::instr_simplify),
         ("param_combine", mid::opt::param_combine::param_combine),
         ("gvn", mid::opt::gvn::gvn),

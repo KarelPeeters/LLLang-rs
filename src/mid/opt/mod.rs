@@ -10,3 +10,4 @@ pub mod mem_forwarding;
 pub mod block_threading;
 pub mod instr_simplify;
 pub mod gvn;
+pub mod cond_prop;
