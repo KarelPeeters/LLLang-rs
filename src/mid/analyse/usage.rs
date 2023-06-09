@@ -5,7 +5,7 @@ use crate::mid::analyse::dom_info::{DomPosition, InBlockPos};
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
 use crate::util::internal_iter::InternalIterator;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Usage {
     RootFunction(String),
     InstrOperand {
@@ -22,7 +22,7 @@ pub enum Usage {
     },
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum InstrOperand {
     LoadAddr,
     StoreAddr,
@@ -34,7 +34,7 @@ pub enum InstrOperand {
     BlackBoxValue,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ExprOperand {
     BinaryOperandLeft,
     BinaryOperandRight,
@@ -46,7 +46,7 @@ pub enum ExprOperand {
     CastValue,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TermOperand {
     BranchCond,
     ReturnValue,
@@ -104,7 +104,7 @@ pub struct BlockPos {
     pub block: Block,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct InstructionPos {
     pub func: Function,
     pub block: Block,

@@ -12,7 +12,7 @@ use crate::util::internal_iter::InternalIterator;
 // eg. slot_to_phi only cares about slots
 //TODO try to unify some of this code with gc
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct UseInfo {
     func_blocks: IndexMap<Function, IndexSet<Block>>,
     value_usages: IndexMap<Value, Vec<Usage>>,

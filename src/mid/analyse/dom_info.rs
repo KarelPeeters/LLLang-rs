@@ -4,7 +4,7 @@ use crate::mid::ir::{Block, Function, Program};
 use crate::util::IndexMutTwice;
 use crate::util::internal_iter::InternalIterator;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DomInfo {
     func: Function,
     blocks: Vec<Block>,

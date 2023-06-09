@@ -6,20 +6,32 @@ use indexmap::map::IndexMap;
 use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, Target, Terminator, Type, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::internal_iter::InternalIterator;
 use crate::util::zip_eq;
 
 /// Try to prove values are constant and replace them
-pub fn sccp(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+#[derive(Debug)]
+pub struct SccpPass;
 
-    let lattice = compute_lattice_map(prog, &use_info);
-    let replaced_value_count = apply_lattice_simplifications(prog, &use_info, &lattice);
+impl ProgramPass for SccpPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
 
-    println!("sccp replaced {} values", replaced_value_count);
-    replaced_value_count != 0
+        let lattice = compute_lattice_map(prog, &use_info);
+        let replaced_value_count = apply_lattice_simplifications(prog, &use_info, &lattice);
+
+        println!("sccp replaced {} values", replaced_value_count);
+        let changed = replaced_value_count != 0;
+
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
 }
 
 type LatticeMap = IndexMap<Value, Lattice>;

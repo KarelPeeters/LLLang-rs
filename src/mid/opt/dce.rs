@@ -6,9 +6,10 @@ use fixedbitset::FixedBitSet;
 use crate::mid::analyse::usage::{BlockUsage, InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::visit::{Visitor, VisitState};
-use crate::util::VecExt;
 use crate::util::internal_iter::InternalIterator;
+use crate::util::VecExt;
 
 /// Dead code elimination.
 ///
@@ -23,11 +24,24 @@ use crate::util::internal_iter::InternalIterator;
 ///
 /// For functions used as non-call targets we have to keep the params,
 /// but in  calls to functions with dead params we still replace the corresponding args with undef.
-pub fn dce(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
-    let alive = collect_alive(prog, &use_info);
+#[derive(Debug)]
+pub struct DcePass;
 
-    let removed = remove_dead_values(prog, &use_info, &alive);
+impl ProgramPass for DcePass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = dce(prog, &use_info);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
+pub fn dce(prog: &mut Program, use_info: &UseInfo) -> bool {
+    let alive = collect_alive(prog, use_info);
+    let removed = remove_dead_values(prog, use_info, &alive);
 
     println!("dce removed {:?}", removed);
     removed.total() > 0

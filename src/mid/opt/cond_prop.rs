@@ -7,18 +7,36 @@ use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::{TargetKind, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, ComparisonOp, ExpressionInfo, Function, Global, Immediate, Program, Scoped, Terminator, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::util::internal_iter::InternalIterator;
 
-pub fn cond_prop(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
-    let mut replaced = 0;
+#[derive(Debug)]
+pub struct CondPropPass;
 
-    for func in prog.nodes.funcs.keys().collect_vec() {
-        replaced += cond_prop_func(prog, func, &use_info);
+impl ProgramPass for CondPropPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let mut replaced = 0;
+
+        for func in prog.nodes.funcs.keys().collect_vec() {
+            let dom_info = ctx.dom_info(prog, func);
+            replaced += cond_prop_func(prog, func, &use_info, &dom_info);
+        }
+
+        println!("conv_prop replaced {} values", replaced);
+
+        let changed = replaced != 0;
+        PassResult {
+            changed,
+            preserved_dom_info: true,
+            preserved_use_info: !changed,
+        }
     }
 
-    println!("conv_prop replaced {} values", replaced);
-    replaced != 0
+    fn is_idempotent(&self) -> bool {
+        // TODO is it? can we easily make it?
+        false
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -51,9 +69,7 @@ impl ReplacementCondition {
 }
 
 // TODO expand to more conditional cases, eg if we know `a == b` then we also know `a > b`.
-fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo) -> usize {
-    let dom_info = DomInfo::new(prog, func);
-
+fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo, dom_info: &DomInfo) -> usize {
     // collect replacement values
     let mut replacements = vec![];
 

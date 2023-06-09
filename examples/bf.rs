@@ -5,9 +5,10 @@ use std::process::Command;
 use clap::Clap;
 use itertools::Itertools;
 
-use lllang::{back, mid};
+use lllang::back;
 use lllang::mid::ir::{ArithmeticOp, Block, BlockInfo, CallingConvention, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Extern, ExternInfo, FunctionInfo, FunctionType, InstructionInfo, ParameterInfo, Program, Signed, StackSlot, StackSlotInfo, Target, Terminator, Type, Value};
 use lllang::mid::ir::Signed::Unsigned;
+use lllang::mid::opt::runner::{PassRunner, RunnerChecks, RunnerSettings};
 use lllang::mid::util::bit_int::{BitInt, UStorage};
 use lllang::mid::util::verify::verify;
 use lllang::tools::{render_ir_as_svg, run_link, run_nasm};
@@ -417,39 +418,15 @@ fn data_ptr(prog: &mut Program, block: Block, base: Value, index: StackSlot) -> 
     offset
 }
 
-// TODO replace with a proper pass manager with configurable:
-// * set of passes, max number of repetitions, ..;
-// * analysis caching
-// * configurable debugging and output logging
 fn run_optimizations(prog: &mut Program) {
-    let passes: &[(&str, fn(&mut Program) -> bool)] = &[
-        ("slot_to_param", mid::opt::slot_to_param::slot_to_param),
-        ("inline", mid::opt::inline::inline),
-        ("sccp", mid::opt::sccp::sccp),
-        ("instr_simplify", mid::opt::instr_simplify::instr_simplify),
-        ("param_combine", mid::opt::param_combine::param_combine),
-        ("gvn", mid::opt::gvn::gvn),
-        ("dce", mid::opt::dce::dce),
-        ("flow_simplify", mid::opt::flow_simplify::flow_simplify),
-        ("block_threading", mid::opt::block_threading::block_threading),
-        // ("phi_pushing", mid::opt::phi_pushing::phi_pushing),
-        ("mem_forwarding", mid::opt::mem_forwarding::mem_forwarding),
-    ];
+    let settings = RunnerSettings {
+        max_loops: None,
+        checks: RunnerChecks::all(),
+        // TODO configurable logging
+        log_path_ir: None,
+        log_path_svg: None,
+    };
 
-    mid::opt::gc::gc(prog);
-
-    loop {
-        let mut changed = false;
-        for (name, pass) in passes {
-            println!("Running {name}");
-            let pass_changed = pass(prog);
-
-            if pass_changed {
-                mid::opt::gc::gc(prog);
-                changed |= true;
-            }
-        }
-
-        if !changed { break; }
-    }
+    let runner = PassRunner::with_default_passes(settings);
+    runner.run(prog).unwrap();
 }

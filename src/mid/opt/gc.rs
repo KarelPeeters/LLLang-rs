@@ -1,7 +1,26 @@
 use crate::mid::analyse::usage::TermUsage;
 use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Global, Program, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::visit::{VisitedResult, Visitor, VisitState};
 use crate::util::internal_iter::InternalIterator;
+
+#[derive(Debug)]
+pub struct GcPass;
+
+impl ProgramPass for GcPass {
+    fn run(&self, prog: &mut Program, _: &mut PassContext) -> PassResult {
+        PassResult {
+            changed: gc(prog),
+            // gc always preserves there, they only care about reachable items
+            preserved_dom_info: true,
+            preserved_use_info: true,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
 
 struct GcVisitor;
 

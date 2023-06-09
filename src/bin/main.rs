@@ -17,6 +17,9 @@ use lllang::{back, front, mid};
 use lllang::front::ast;
 use lllang::front::parser::ParseError;
 use lllang::front::pos::FileId;
+use lllang::mid::opt::DEFAULT_PASSES;
+use lllang::mid::opt::gc::gc;
+use lllang::mid::opt::runner::{PassRunner, RunnerChecks, RunnerSettings};
 use lllang::mid::util::verify::{verify, VerifyError};
 use lllang::tools::{render_ir_as_svg, run_link, run_nasm};
 
@@ -128,77 +131,17 @@ fn parse_all(ll_path: &Path, include_std: bool) -> CompileResult<front::Program<
     Ok(prog)
 }
 
-fn run_single_pass(prog: &mut mid::ir::Program, name: &str, pass: impl FnOnce(&mut mid::ir::Program) -> bool) -> Result<bool, VerifyError> {
-    let nodes_before = prog.nodes.total_node_count();
-    let str_before = prog.to_string();
-    println!("Running {:?}", name);
-    let mut changed = pass(prog);
-    println!("Verifying after {:?}", name);
-    verify(prog)?;
-    let nodes_after = prog.nodes.total_node_count();
-    let str_after = prog.to_string();
-    if nodes_before != nodes_after {
-        if !changed {
-            eprintln!(
-                "WARNING: The number of nodes changed from {} to {}, but the pass reported no change",
-                nodes_before, nodes_after
-            );
-        }
-        changed = true;
-    }
-    let str_changed = str_before != str_after;
-    if changed != str_changed {
-        eprintln!(
-            "WARNING: The pass reported changed={} but the strings show changed={}",
-            changed, str_changed,
-        );
-        changed = str_changed;
-    }
-    Ok(changed)
-}
+fn run_optimizations(prog: &mut mid::ir::Program, passes_folder: &Path) -> CompileResult<()> {
+    let settings = RunnerSettings {
+        max_loops: None,
+        checks: RunnerChecks::all(),
+        log_path_ir: Some(passes_folder.join("ir")),
+        log_path_svg: Some(passes_folder.join("svg")),
+    };
 
-fn run_gc(prog: &mut mid::ir::Program) -> Result<bool, VerifyError> {
-    let changed = run_single_pass(prog, "gc", mid::opt::gc::gc)?;
-    // TODO maybe only do this in debug mode
-    assert!(!run_single_pass(prog, "gc", mid::opt::gc::gc)?, "GC has to be idempotent");
-    Ok(changed)
-}
+    let runner = PassRunner::new(settings, DEFAULT_PASSES.iter().copied());
+    runner.run(prog).with_context(|| "Logging during optimization")?;
 
-fn run_optimizations(prog: &mut mid::ir::Program, path_before: &Path, path_after: &Path) -> CompileResult<()> {
-    let passes: &[(&str, fn(&mut mid::ir::Program) -> bool)] = &[
-        ("slot_to_param", mid::opt::slot_to_param::slot_to_param),
-        ("inline", mid::opt::inline::inline),
-        ("sccp", mid::opt::sccp::sccp),
-        ("cond_prop", mid::opt::cond_prop::cond_prop),
-        ("instr_simplify", mid::opt::instr_simplify::instr_simplify),
-        ("param_combine", mid::opt::param_combine::param_combine),
-        ("gvn", mid::opt::gvn::gvn),
-        ("dce", mid::opt::dce::dce),
-        ("flow_simplify", mid::opt::flow_simplify::flow_simplify),
-        ("block_threading", mid::opt::block_threading::block_threading),
-        // ("phi_pushing", mid::opt::phi_pushing::phi_pushing),
-        ("mem_forwarding", mid::opt::mem_forwarding::mem_forwarding),
-    ];
-    run_gc(prog)?;
-    let mut prog_before = prog.clone();
-    loop {
-        let mut changed = false;
-        for (name, pass) in passes {
-            let result = run_single_pass(prog, name, pass);
-            if result.is_err() {
-                File::create(path_before).with_context(|| "creating before file")?
-                    .write_fmt(format_args!("{}", prog_before)).with_context(|| "writing before file")?;
-                File::create(path_after).with_context(|| "creating after file")?
-                    .write_fmt(format_args!("{}", prog)).with_context(|| "writing after file")?;
-            }
-            if result? {
-                run_gc(prog)?;
-                changed |= true;
-                prog_before = prog.clone();
-            }
-        }
-        if !changed { break; }
-    }
     Ok(())
 }
 
@@ -232,7 +175,7 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
 
     write_ir(&ir_program)?;
     verify(&ir_program)?;
-    run_gc(&mut ir_program)?;
+    gc(&mut ir_program);
     write_ir(&ir_program)?;
     verify(&ir_program)?;
 
@@ -240,12 +183,11 @@ fn compile_ll_to_asm(ll_path: &Path, include_std: bool, optimize: bool) -> Compi
         .with_context(|| "Rendering")?;
 
     println!("----Optimize---");
-    let ir_opt_file = ll_path.with_file_name(format!("{name}_opt.ir"));
-    let ir_opt_before_file = ll_path.with_extension(format!("{name}_opt_before.ir"));
-    let ir_opt_after_file = ll_path.with_extension(format!("{name}_opt_after.ir"));
+    let passes_folder = ll_path.with_file_name("passes");
     if optimize {
-        run_optimizations(&mut ir_program, &ir_opt_before_file, &ir_opt_after_file)?;
+        run_optimizations(&mut ir_program, &passes_folder)?;
     }
+    let ir_opt_file = ll_path.with_file_name(format!("{name}_opt.ir"));
     File::create(&ir_opt_file).with_context(|| format!("Creating IR opt file {:?}", ir_opt_file))?
         .write_fmt(format_args!("{}", ir_program)).with_context(|| "Writing to IR opt file")?;
     render_ir_as_svg(&ir_program, &ir_opt_file)

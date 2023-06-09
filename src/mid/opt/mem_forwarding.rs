@@ -4,15 +4,35 @@ use std::collections::HashMap;
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
 /// Optimize load/store instructions:
 /// * replace loads with previously stored values
 /// * remove dead stores
+#[derive(Debug)]
+pub struct MemForwardingPass;
+
+impl ProgramPass for MemForwardingPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = mem_forwarding(prog, &use_info);
+
+        PassResult {
+            changed,
+            preserved_dom_info: true,
+            preserved_use_info: !changed,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
 // TODO consider loads and stores with void type as dead?
-pub fn mem_forwarding(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+fn mem_forwarding(prog: &mut Program, use_info: &UseInfo) -> bool {
     let mut loads_replaced = 0;
     let mut stores_removed = 0;
 
@@ -305,7 +325,7 @@ enum WalkResult {
     Lattice(Lattice),
     ReachedStart {
         matching_load: Option<Instruction>,
-    }
+    },
 }
 
 impl<'p, 'u> State<'p, 'u> {
@@ -345,7 +365,7 @@ impl<'p, 'u> State<'p, 'u> {
         }
     }
 
-    fn define_param(&mut self, info : ParameterInfo) -> Parameter {
+    fn define_param(&mut self, info: ParameterInfo) -> Parameter {
         let param = self.prog.define_param(info);
         self.undo.push(Undo::DefineParam(param));
         param

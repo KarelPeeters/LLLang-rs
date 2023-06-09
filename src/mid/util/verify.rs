@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
 use derive_more::From;
@@ -241,7 +241,7 @@ impl<'a> Context<'a> {
 
         self.expr_loop_path.push(expr);
 
-        self.prog.get_expr(expr).operands().filter_map(|(value, op)| value.as_expr()).try_for_each(|operand| {
+        self.prog.get_expr(expr).operands().filter_map(|(value, _)| value.as_expr()).try_for_each(|operand| {
             self.find_expr_cycle(operand)
         })?;
 

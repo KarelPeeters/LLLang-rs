@@ -1,7 +1,22 @@
 use itertools::Itertools;
 
 use crate::mid::ir::{Block, BlockInfo, Function, Immediate, Program, Target, Terminator, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::util::internal_iter::InternalIterator;
+
+#[derive(Debug)]
+pub struct FlowSimplifyPass;
+
+impl ProgramPass for FlowSimplifyPass {
+    fn run(&self, prog: &mut Program, _: &mut PassContext) -> PassResult {
+        let changed = flow_simplify(prog);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
 
 #[derive(Default, Debug, Copy, Clone)]
 struct Counts {
@@ -11,7 +26,7 @@ struct Counts {
 
 //TODO combine this with block_threading in a single pass?
 // TODO replace the current "repeat until fixpoint" with a proper graph solver algorithm
-pub fn flow_simplify(prog: &mut Program) -> bool {
+fn flow_simplify(prog: &mut Program) -> bool {
     let mut counts = Counts::default();
 
     for func in prog.nodes.funcs.keys().collect_vec() {
@@ -91,8 +106,8 @@ fn simplify_terminator(prog: &Program, block: Block, terminator: &Terminator) ->
                         (true, false) => Some(Terminator::Jump { target: true_target.clone() }),
                         // otherwise it really is a branch
                         (true, true) => {
-                            let new_true_target = skip_target_to_target(prog,  true_target);
-                            let new_false_target = skip_target_to_target(prog,  false_target);
+                            let new_true_target = skip_target_to_target(prog, true_target);
+                            let new_false_target = skip_target_to_target(prog, false_target);
 
                             if new_true_target.is_some() || new_false_target.is_some() {
                                 let final_true_target = new_true_target.unwrap_or_else(|| true_target.clone());
@@ -110,7 +125,7 @@ fn simplify_terminator(prog: &Program, block: Block, terminator: &Terminator) ->
                             } else {
                                 None
                             }
-                        },
+                        }
                     }
                 }
             }

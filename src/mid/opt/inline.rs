@@ -4,18 +4,34 @@ use crate::mid::analyse::usage::{InstrOperand, InstructionPos, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{BlockInfo, Function, FunctionInfo, ParameterInfo, Program, Target, Terminator};
 use crate::mid::ir::InstructionInfo;
-use crate::util::VecExt;
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::util::internal_iter::InternalIterator;
+use crate::util::VecExt;
 
 const TINY_FUNCTION_INSTRUCTION_LIMIT: usize = 16;
 
 /// Inline functions that are short or only used rarely.
-pub fn inline(prog: &mut Program) -> bool {
+#[derive(Debug)]
+pub struct InlinePass;
+
+impl ProgramPass for InlinePass {
+    fn run(&self, prog: &mut Program, _: &mut PassContext) -> PassResult {
+        let changed = inline(prog);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
+fn inline(prog: &mut Program) -> bool {
     let mut changes = 0;
 
     // TODO find a more efficient way to do this, find all inlinable calls and then process all of them at once
     loop {
         let use_info = UseInfo::new(prog);
+
         let inlined_calls = find_inlined_calls(prog, &use_info);
         for &inlined_call in inlined_calls.iter().take(1) {
             run_inline_call(prog, &use_info, inlined_call);

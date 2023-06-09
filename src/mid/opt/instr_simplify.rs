@@ -1,15 +1,31 @@
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
 /// Simplify local (mostly single instruction or single expression) patterns.
 /// This also replaced unreachable instructions with a terminator, and removed all following instructions.
+#[derive(Debug)]
+pub struct InstrSimplifyPass;
+
+impl ProgramPass for InstrSimplifyPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = instr_simplify(prog, &use_info);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
 // TODO make all of this part of the future uber-SCCP pass
-pub fn instr_simplify(prog: &mut Program) -> bool {
+//   or even better, immediately do these simplifications while adding instructions/expressions
+fn instr_simplify(prog: &mut Program, use_info: &UseInfo) -> bool {
     let mut count_replaced = 0;
 
-    let use_info = UseInfo::new(prog);
     let ty_void = prog.ty_void();
 
     let mut block_unreachable_at: Vec<(Block, usize)> = vec![];
