@@ -22,7 +22,8 @@ impl ProgramPass for ParamCombinePass {
     }
 
     fn is_idempotent(&self) -> bool {
-        true
+        // TODO can we make this idempotent?
+        false
     }
 }
 

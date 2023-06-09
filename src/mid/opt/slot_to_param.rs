@@ -23,7 +23,7 @@ impl ProgramPass for SlotToParamPass {
     }
 
     fn is_idempotent(&self) -> bool {
-        todo!()
+        true
     }
 }
 

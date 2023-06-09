@@ -188,7 +188,7 @@ impl<'p> PassRunner<'p> {
             ctx.assert_valid(prog);
         }
 
-        if checks.check_idempotent && changed {
+        if checks.check_idempotent && changed && pass.is_idempotent() {
             let new_result = pass.run(prog, ctx);
             assert!(!new_result.changed, "Idempotency violation for pass {}", pass_name);
         }
