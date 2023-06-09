@@ -11,6 +11,7 @@ pub struct DomInfo {
     successors: Vec<FixedBitSet>,
     dominates: Vec<FixedBitSet>,
     frontier: Vec<FixedBitSet>,
+    reachable: Vec<FixedBitSet>,
     parent: Vec<Option<usize>>,
 }
 
@@ -107,12 +108,36 @@ impl DomInfo {
             })
             .collect();
 
+        // calculate reachable blocks
+        let mut reachable = successors.clone();
+        loop {
+            let mut changed = false;
+
+            for bi in 0..blocks.len() {
+                for si in successors[bi].ones() {
+                    let (block_reach, succ_reach) = match reachable.index_mut_twice(bi, si) {
+                        Some(pair) => pair,
+                        None => continue,
+                    };
+
+                    let count_before = block_reach.count_ones(..);
+                    block_reach.union_with(succ_reach);
+                    let count_after = block_reach.count_ones(..);
+
+                    changed |= count_before != count_after;
+                }
+            }
+
+            if !changed { break; }
+        }
+
         DomInfo {
             func,
             blocks,
             successors,
             dominates,
             frontier,
+            reachable,
             parent,
         }
     }
@@ -186,6 +211,13 @@ impl DomInfo {
                 (d_block == u_block && d_index < u_index) || self.is_strict_dominator(d_block, u_block)
             }
         }
+    }
+
+    /// If `from` and `to` are the same block, this implies that there is a loop containing the block.
+    pub fn is_reachable(&self, from: Block, to: Block) -> bool {
+        let from_i = self.block_index(from);
+        let to_i = self.block_index(to);
+        self.reachable[from_i].contains(to_i)
     }
 
     pub fn func(&self) -> Function {

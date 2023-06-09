@@ -143,6 +143,16 @@ pub trait InternalIterator: Sized {
         });
         first
     }
+
+    fn max(self) -> Option<Self::Item> where Self::Item: Ord {
+        let mut max = None;
+        self.for_each(|curr| {
+            if max.as_ref().map_or(true, |max| &curr >= max) {
+                max = Some(curr);
+            }
+        });
+        max
+    }
 }
 
 /// Types that can be used in [InternalIterator::collect] or [InternalIterator::sink].

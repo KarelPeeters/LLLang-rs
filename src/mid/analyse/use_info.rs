@@ -136,6 +136,7 @@ struct State<'a> {
 fn build_use_info(prog: &Program) -> UseInfo {
     let mut state = State::new(prog);
 
+    // TODO also mark functions with external names as used
     for (name, &func) in &prog.root_functions {
         state.add_usage(func.into(), Usage::RootFunction(name.to_owned()));
         state.todo_funcs.push_back(func);

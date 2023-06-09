@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use crate::mid::analyse::dom_info::DomInfo;
+use crate::mid::analyse::usage::{TargetKind, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, ComparisonOp, ExpressionInfo, Function, Global, Immediate, Program, Scoped, Terminator, Value};
-use crate::util::internal_iter::{InternalIterator, IterExt};
+use crate::util::internal_iter::InternalIterator;
 
 pub fn cond_prop(prog: &mut Program) -> bool {
     let use_info = UseInfo::new(prog);
@@ -20,44 +21,114 @@ pub fn cond_prop(prog: &mut Program) -> bool {
     replaced != 0
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Replacement {
+    complex: Value,
+    simple: Value,
+
+    cond: ReplacementCondition,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct ReplacementCondition {
+    block: Block,
+    true_block: Block,
+    false_block: Block,
+    branch: bool,
+}
+
+impl ReplacementCondition {
+    fn applies_to_instr_in(&self, dom_info: &DomInfo, block: Block) -> bool {
+        match self.branch {
+            true => dom_info.is_dominator(self.true_block, block) && !dom_info.is_reachable(self.false_block, block),
+            false => dom_info.is_dominator(self.false_block, block) && !dom_info.is_reachable(self.true_block, block),
+        }
+    }
+
+    fn applies_to_branch_in(&self, block: Block, branch: bool) -> bool {
+        block == self.block && branch == self.branch
+    }
+}
+
 // TODO expand to more conditional cases, eg if we know `a == b` then we also know `a > b`.
 fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo) -> usize {
-    let mut replaced = 0;
-
     let dom_info = DomInfo::new(prog, func);
+
+    // collect replacement values
+    let mut replacements = vec![];
+
     for &block in dom_info.blocks() {
-        let mut simplify = HashMap::new();
+        if let &Terminator::Branch { cond, ref true_target, ref false_target } = &prog.get_block(block).terminator {
+            if let Some(cond) = cond.as_expr() {
+                if let &ExpressionInfo::Comparison { kind, left, right } = prog.get_expr(cond) {
+                    let eq_for_target = match kind {
+                        ComparisonOp::Eq => Some(true),
+                        ComparisonOp::Neq => Some(false),
+                        _ => None,
+                    };
 
-        // TODO this is weird, we should really do this as a tree structure instead of repeatedly visiting the same
-        //   parent blocks over and over
-        let dom_tree = dom_info.iter_domtree(block).collect_vec();
+                    // TODO already simplify cond, left and right
 
-        // iterate top-down so we can immediately use the parent known values
-        for &dominator in dom_tree.iter().rev() {
-            // if all predecessors agree
-            // TODO this flatten stuff is a bit weird
-            let pair = dom_info.iter_predecessors(dominator).map(|pred| {
-                sorted_pair_for_block_edge(prog, &simplify, pred, dominator)
-            }).single_unique().flatten();
-
-            if let Some(SimplifyPair { complex, simple }) = pair {
-                simplify.insert(complex, simple);
+                    if let Some(eq_for_target) = eq_for_target {
+                        if let Some(pair) = sort_pair(prog, left, right) {
+                            replacements.push(Replacement {
+                                complex: pair.complex,
+                                simple: pair.simple,
+                                cond: ReplacementCondition {
+                                    block,
+                                    true_block: true_target.block,
+                                    false_block: false_target.block,
+                                    branch: eq_for_target,
+                                },
+                            })
+                        }
+                    }
+                }
             }
         }
+    }
 
-        println!("Known values for block {:?}: {:?}", block, simplify);
-
-        // replace values used in the current block
-        // TODO replace expression operands (clone if necessary, and write util for this in use_info)
-        for (&complex, &simple) in &simplify {
-            // replacement dominance should be fine,
-            //   since the new value comes from a parent block that by definition dominates this block
-            replaced += use_info.replace_value_usages_if(prog, complex, simple, |prog, usage| {
-                usage.as_dom_pos().map_or(false, |pos| pos.block() == Some(block))
-            });
+    // todo for a certain block, find the set of simplest replacements that apply
+    if !replacements.is_empty() {
+        println!("Replacements:");
+        for r in &replacements {
+            println!("  {:?}", r);
         }
+    }
 
-        // TODO replace target values within branch that has eq thing, maybe just as a separate step?
+    // apply replacements
+    let mut replaced = 0;
+
+    for replacement in replacements {
+        // TODO only apply replacement if it's the simplest one that applies
+
+        replaced += use_info.replace_value_usages_if(prog, replacement.complex, replacement.simple, |prog, usage| {
+            match usage {
+                Usage::RootFunction(_) => false,
+                // TODO support replacing  expression operands
+                Usage::ExprOperand { .. } => false,
+
+                Usage::InstrOperand { pos, usage } =>
+                    replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+
+                Usage::TermOperand { pos, usage } => {
+                    match usage {
+                        TermOperand::BranchCond | TermOperand::ReturnValue =>
+                            replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+                        TermOperand::TargetArg { kind, index: _ } => {
+                            match kind {
+                                TargetKind::Jump =>
+                                    replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+                                TargetKind::BranchTrue =>
+                                    replacement.cond.applies_to_branch_in(pos.block, true),
+                                TargetKind::BranchFalse =>
+                                    replacement.cond.applies_to_branch_in(pos.block, false),
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 
     replaced
@@ -72,7 +143,7 @@ struct SimplifyPair {
 fn sorted_pair_for_block_edge(prog: &Program, simplify: &HashMap<Value, Value>, parent: Block, child: Block) -> Option<SimplifyPair> {
     if let Terminator::Branch { cond, ref true_target, ref false_target } = prog.get_block(parent).terminator {
         if let Some(cond) = cond.as_expr() {
-            if let &ExpressionInfo::Comparison { kind, left, right} = prog.get_expr(cond) {
+            if let &ExpressionInfo::Comparison { kind, left, right } = prog.get_expr(cond) {
                 if implies_operands_eq(kind, true_target.block, false_target.block, child) {
                     let left = *simplify.get(&left).unwrap_or(&left);
                     let right = *simplify.get(&right).unwrap_or(&right);
@@ -96,7 +167,7 @@ fn implies_operands_eq(kind: ComparisonOp, true_block: Block, false_block: Block
 
 fn sort_pair(prog: &Program, left: Value, right: Value) -> Option<SimplifyPair> {
     match value_complexity(prog, left).cmp(&value_complexity(prog, right)) {
-        Ordering::Less => Some(SimplifyPair  { complex: right, simple: left } ),
+        Ordering::Less => Some(SimplifyPair { complex: right, simple: left }),
         Ordering::Greater => Some(SimplifyPair { complex: left, simple: right }),
         Ordering::Equal => None,
     }
@@ -110,22 +181,23 @@ fn value_complexity(prog: &Program, value: Value) -> u32 {
 
         Value::Immediate(Immediate::Const(_)) => 1,
 
-        // order doesn't matter here, they shouldn't really be considered together anyway
-        Value::Global(Global::Func(_)) => 2,
-        Value::Global(Global::Extern(_)) => 2,
+        // ordered by how easy it is for analysis to reason about
+        // the exact order is probably not that important, these should rarely be compared
         Value::Global(Global::Data(_)) => 2,
-
-        // prefer slot so local analysis can see more
-        Value::Scoped(Scoped::Slot(_)) => 2,
-        Value::Scoped(Scoped::Param(_)) => 3,
+        Value::Global(Global::Func(_)) => 2,
+        Value::Scoped(Scoped::Slot(_)) => 3,
+        Value::Scoped(Scoped::Param(_)) => 4,
+        Value::Global(Global::Extern(_)) => 5,
 
         // sort expression by tree size
         // TODO consider type of expression, eg. multiply is worse than add
         Value::Expr(expr) => {
-            10 + prog.expr_tree_iter(expr).count() as u32
+            let operand_count = prog.expr_tree_iter(expr).count() as u32;
+            let max_operand_complexity = prog.expr_tree_leaf_iter(expr).map(|(leaf, _, _)| value_complexity(prog, leaf)).max().unwrap_or(0);
+            10 + max_operand_complexity + operand_count
         }
 
         // instructions are terrible
-        Value::Scoped(Scoped::Instr(_)) => u32::MAX,
+        Value::Scoped(Scoped::Instr(_)) => u32::MAX / 2,
     }
 }
