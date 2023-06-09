@@ -165,7 +165,9 @@ impl<'p> PassRunner<'p> {
             None
         };
 
-        if changed {
+        let str_changed = checks.check_changed && (str_before.as_ref().unwrap() != str_after.as_ref().unwrap());
+
+        if changed || str_changed {
             if let Some(log_path_ir) = &settings.log_path_ir {
                 std::fs::write(log_path_ir.join(format!("{i}_{pass_name}_1_after.ir")), str_after.as_ref().unwrap())?;
             }
@@ -179,7 +181,6 @@ impl<'p> PassRunner<'p> {
         }
 
         if checks.check_changed {
-            let str_changed = str_before.as_ref().unwrap() != str_after.as_ref().unwrap();
             assert_eq!(str_changed, changed, "Changed flag mismatch for pass {}", pass_name);
         }
 

@@ -66,7 +66,7 @@ fn instr_simplify(prog: &mut Program, use_info: &UseInfo) -> bool {
     for &expr in use_info.expressions() {
         let new = simplify_expression(prog, expr);
         if new != expr.into() {
-            use_info.replace_value_usages(prog, expr.into(), new);
+            count_replaced += use_info.replace_value_usages(prog, expr.into(), new);
         }
     }
 
