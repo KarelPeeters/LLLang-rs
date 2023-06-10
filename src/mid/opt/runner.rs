@@ -137,6 +137,16 @@ impl<'p> PassRunner<'p> {
         Ok(result.changed)
     }
 
+    fn maybe_log(&self, prog: &Program, name: &str, str: &Option<String>) -> io::Result<()> {
+        if let Some(log_path_ir) = &self.settings.log_path_ir {
+            std::fs::write(log_path_ir.join(format!("{name}.ir")), str.as_ref().unwrap())?;
+        }
+        if let Some(log_path_svg) = &self.settings.log_path_svg {
+            render_ir_as_svg(prog, log_path_svg.join(format!("{name}.svg")))?;
+        }
+        Ok(())
+    }
+
     fn run_pass_checked(&self, prog: &mut Program, ctx: &mut PassContext, pass: &dyn ProgramPass, i: u64) -> io::Result<bool> {
         let pass_name = format!("{:?}", pass);
 
@@ -149,13 +159,7 @@ impl<'p> PassRunner<'p> {
         } else {
             None
         };
-
-        if let Some(log_path_ir) = &settings.log_path_ir {
-            std::fs::write(log_path_ir.join(format!("{i}_{pass_name}_0_before.ir")), str_before.as_ref().unwrap())?;
-        }
-        if let Some(log_path_svg) = &settings.log_path_svg {
-            render_ir_as_svg(prog, log_path_svg.join(format!("{i}_{pass_name}_0_before.svg")))?;
-        }
+        self.maybe_log(prog, &format!("{i}_{pass_name}_0_before"), &str_before)?;
 
         let changed = self.run_pass_unchecked(prog, ctx, pass)?;
 
@@ -168,12 +172,7 @@ impl<'p> PassRunner<'p> {
         let str_changed = checks.check_changed && (str_before.as_ref().unwrap() != str_after.as_ref().unwrap());
 
         if changed || str_changed {
-            if let Some(log_path_ir) = &settings.log_path_ir {
-                std::fs::write(log_path_ir.join(format!("{i}_{pass_name}_1_after.ir")), str_after.as_ref().unwrap())?;
-            }
-            if let Some(log_path_svg) = &settings.log_path_svg {
-                render_ir_as_svg(prog, log_path_svg.join(format!("{i}_{pass_name}_1_after.svg")))?;
-            }
+            self.maybe_log(prog, &format!("{i}_{pass_name}_1_after"), &str_after)?;
         }
 
         if checks.verify {
@@ -189,8 +188,24 @@ impl<'p> PassRunner<'p> {
         }
 
         if checks.check_idempotent && changed && pass.is_idempotent() {
+            let new_str_before = prog.to_string();
             let new_result = pass.run(prog, ctx);
-            assert!(!new_result.changed, "Idempotency violation for pass {}", pass_name);
+            let new_str_after = prog.to_string();
+
+            let new_str_changed = new_str_before != new_str_after;
+            let changed = new_result.changed || new_str_changed;
+
+            if changed {
+                self.maybe_log(prog, &format!("{i}_{pass_name}_2_after"), &Some(new_str_after))?;
+
+                if changed != new_str_changed {
+                    panic!("Idempotency violation for pass {} and change was misreported", pass_name);
+                } else {
+                    panic!("Idempotency violation for pass {}", pass_name);
+                }
+            }
+
+            verify(prog).unwrap();
         }
 
         Ok(changed)
