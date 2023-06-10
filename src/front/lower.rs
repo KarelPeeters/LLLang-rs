@@ -151,7 +151,7 @@ fn lower_const_or_static<'a>(ir_prog: &mut ir::Program, types: &mut MappingTypeS
         ConstOrStaticKind::Static => {
             let slot = GlobalSlotInfo {
                 inner_ty: ty_ir,
-                debug_name: None,
+                debug_name: Some(decl.ast.id.string.clone()),
                 initial: init.ir,
             };
             let slot = ir_prog.define_global_slot(slot);
