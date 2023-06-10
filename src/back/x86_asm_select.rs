@@ -29,7 +29,7 @@ pub fn lower_new(prog: &mut Program) -> String {
     split_critical_edges(prog);
     verify(prog).unwrap();
 
-    std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
+    // std::fs::write("pre_alloc.ir", format!("{}", prog)).unwrap();
 
     let use_info = UseInfo::new(prog);
     let mut symbols = Symbols::default();
