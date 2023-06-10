@@ -1,13 +1,25 @@
 use win32;
 
+// TODO why can't we use win32::HANDLE here?
+static HEAP: &void = null;
+static HEAP_INIT: bool = false;
+
+fn init_heap() {
+    // TODO add boolean not operator
+    if HEAP_INIT == false {
+        HEAP = win32::GetProcessHeap();
+        HEAP_INIT = true;
+    }
+}
+
 fn malloc(size: usize) -> &void {
-    let heap = win32::GetProcessHeap();
-    return win32::HeapAlloc(heap, 0, size);
+    init_heap();
+    return win32::HeapAlloc(HEAP, 0, size);
 }
 
 fn free(mem: &void) -> bool {
-    let heap = win32::GetProcessHeap();
-    return win32::HeapFree(heap, 0, mem) != 0;
+    init_heap();
+    return win32::HeapFree(HEAP, 0, mem) != 0;
 }
 
 /// overlapping memory is undefined behavior
