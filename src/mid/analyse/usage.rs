@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 use crate::mid::analyse::dom_info::{DomPosition, InBlockPos};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Value};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Type, Value};
 use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -397,6 +397,16 @@ impl Usage {
             Usage::InstrOperand { pos, usage: _ } => Ok(pos.as_dom_pos()),
             Usage::ExprOperand { expr, usage: _ } => Err(expr),
             Usage::TermOperand { pos, usage: _ } => Ok(pos.as_dom_pos(InBlockPos::Terminator)),
+        }
+    }
+
+    pub fn is_load_store_addr_get_ty(&self, prog: &Program) -> Option<Type> {
+        match self {
+            Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => {
+                let ty = unwrap_match!(prog.get_instr(pos.instr), &InstructionInfo::Load { ty, .. } | &InstructionInfo::Store { ty, .. } => ty);
+                Some(ty)
+            }
+            _ => None,
         }
     }
 }

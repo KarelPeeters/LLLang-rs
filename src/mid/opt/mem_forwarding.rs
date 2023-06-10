@@ -98,7 +98,7 @@ fn mem_forwarding(prog: &mut Program, use_info: &UseInfo) -> bool {
                 let instr = block_info.instructions[instr_index];
                 let remove = if let &InstructionInfo::Store { addr, ty, value: _ } = prog.get_instr(instr) {
                     let loc = Location { ptr: addr, ty };
-                    let liveness = compute_liveness(prog, func, block, instr_index + 1, loc, &mut liveness_cache);
+                    let liveness = compute_liveness(prog, use_info, func, block, instr_index + 1, loc, &mut liveness_cache);
                     match liveness {
                         Liveness::Dead => true,
                         Liveness::MaybeLive => false,
@@ -193,7 +193,7 @@ impl Liveness {
 /// This can also include a temporary "dead" assumption to break loops.
 type LivenessCache = HashMap<(Block, Location), Liveness>;
 
-fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+fn compute_liveness(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
     // the values in the cache apply to the start of the block
     if start == 0 {
         match cache.entry((block, loc)) {
@@ -205,7 +205,7 @@ fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, 
     }
 
     // check the rest of the block and its successors
-    let liveness = compute_liveness_inner(prog, func, block, start, loc, cache);
+    let liveness = compute_liveness_inner(prog, use_info, func, block, start, loc, cache);
 
     // put the true liveness into the cache
     if start == 0 {
@@ -217,21 +217,21 @@ fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, 
 }
 
 /// The same as [compute_liveness] except we don't manage the cache here.
-fn compute_liveness_inner(prog: &Program, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+fn compute_liveness_inner(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
     // check the following instructions
-    if let Some(liveness) = compute_liveness_by_instructions(prog, func, block, start, loc) {
+    if let Some(liveness) = compute_liveness_by_instructions(prog, use_info, func, block, start, loc) {
         return liveness;
     }
 
     // fallthrough to the successors
     match &prog.get_block(block).terminator {
         Terminator::Jump { target } => {
-            compute_liveness(prog, func, target.block, 0, loc, cache)
+            compute_liveness(prog, use_info, func, target.block, 0, loc, cache)
         }
         Terminator::Branch { cond: _, true_target, false_target } => {
             Liveness::merge(
-                compute_liveness(prog, func, true_target.block, 0, loc, cache),
-                compute_liveness(prog, func, false_target.block, 0, loc, cache),
+                compute_liveness(prog, use_info, func, true_target.block, 0, loc, cache),
+                compute_liveness(prog, use_info, func, false_target.block, 0, loc, cache),
             )
         }
         Terminator::Return { value: _ } => {
@@ -251,14 +251,14 @@ fn compute_liveness_inner(prog: &Program, func: Function, block: Block, start: u
 }
 
 // TODO ideally this would use some common "instruction side effect" infrastructure
-fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block, start: usize, loc: Location) -> Option<Liveness> {
+fn compute_liveness_by_instructions(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location) -> Option<Liveness> {
     let block_info = prog.get_block(block);
     for &instr in &block_info.instructions[start..] {
         match *prog.get_instr(instr) {
             // (maybe) aliasing load => alive
             InstructionInfo::Load { addr, ty } => {
                 let load_loc = Location { ptr: addr, ty };
-                match locations_alias(prog, func, loc, load_loc) {
+                match locations_alias(prog, use_info, func, loc, load_loc) {
                     // could alias, we have to assume live
                     LocAlias::Exactly | LocAlias::UnknownOrPartial => return Some(Liveness::MaybeLive),
                     // can't alias, keep going
@@ -268,7 +268,7 @@ fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block
             // (exactly) aliasing store => dead
             InstructionInfo::Store { addr, ty, value: _ } => {
                 let store_loc = Location { ptr: addr, ty };
-                match locations_alias(prog, func, loc, store_loc) {
+                match locations_alias(prog, use_info, func, loc, store_loc) {
                     // value is overwritten, we know the previous one is dead
                     // TODO a "covering" alias is enough already, it doesn't have to be exact
                     LocAlias::Exactly => return Some(Liveness::Dead),
@@ -326,6 +326,7 @@ enum Undo {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 struct Marker(usize);
 
+#[derive(Debug)]
 enum WalkResult {
     Lattice(Lattice),
     ReachedStart {
@@ -404,16 +405,25 @@ impl<'p, 'u> State<'p, 'u> {
         };
 
         // we've reached the start of the block, check the cache for it
-        if let Some(value) = self.cache_get((loc, block, Side::Start)) {
-            return value;
+        if let Some(start_value) = self.cache_get((loc, block, Side::Start)) {
+            // if we got a useless start value use the matching load instead
+            if let Lattice::Overdef = start_value {
+                if let Some(matching_load) = matching_load {
+                    return Lattice::Known(matching_load.into());
+                }
+            }
+
+            return start_value
         }
 
         // if we've reached the func entry the value depends on the origin
         if self.use_info.block_only_used_as_func_entry(block) {
-            return match pointer_origin(self.prog, self.func, loc.ptr) {
-                Origin::Undef => Lattice::Undef,
-                Origin::Unknown | Origin::GlobalSlot(_) | Origin::FuncExternal => Lattice::Overdef,
-                Origin::FuncSlot(_) => Lattice::Undef,
+            match pointer_origin(self.prog, self.func, loc.ptr) {
+                Origin::Undef => return Lattice::Undef,
+                Origin::FuncSlot(_) => return Lattice::Undef,
+                Origin::Unknown | Origin::GlobalSlot(_) | Origin::FuncExternal => {
+                    // fallthrough, we might still have a matching load
+                },
             };
         }
 
@@ -437,6 +447,7 @@ impl<'p, 'u> State<'p, 'u> {
     }
 
     fn walk_block_instructions_from(&mut self, loc: Location, block: Block, index: Option<usize>) -> WalkResult {
+        let use_info = self.use_info;
         let block_info = self.prog.get_block(block);
         let index = index.unwrap_or(block_info.instructions.len());
 
@@ -451,7 +462,7 @@ impl<'p, 'u> State<'p, 'u> {
                 // if the store aliases, return its value
                 InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
                     let store_loc = Location { ptr: store_ptr, ty: store_ty };
-                    match locations_alias(self.prog, self.func, loc, store_loc) {
+                    match locations_alias(self.prog, use_info, self.func, loc, store_loc) {
                         // propagate undef
                         LocAlias::Undef => return WalkResult::Lattice(Lattice::Undef),
                         // we know the exact value last stored to loc!
@@ -469,7 +480,7 @@ impl<'p, 'u> State<'p, 'u> {
                 // if the load aliases, keep it around for potential reuse
                 InstructionInfo::Load { addr: load_addr, ty: load_ty } => {
                     let load_loc = Location { ptr: load_addr, ty: load_ty };
-                    match locations_alias(self.prog, self.func, loc, load_loc) {
+                    match locations_alias(self.prog, use_info, self.func, loc, load_loc) {
                         // unclear, we could reuse if the type matches but is that useful?
                         LocAlias::Undef => {}
                         // we can't reuse the load
@@ -481,12 +492,28 @@ impl<'p, 'u> State<'p, 'u> {
                     }
                 }
 
-                // could have side effects, we have to give up
-                // TODO we can do better for calls:
-                //   * side effect free functions
-                //   * if we don't leak a slot, external or global slot to external code/memory/this call
-                //        we can continue
-                InstructionInfo::Call { .. } | InstructionInfo::BlackBox { .. } => {
+                // TODO have some general side-effect property checker for functions
+                InstructionInfo::Call { .. } => {
+
+                    let origin = pointer_origin(self.prog, self.func, loc.ptr);
+                    let call_could_interact = match origin {
+                        Origin::FuncSlot(Some(slot)) =>
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None),
+                        Origin::GlobalSlot(Some(slot)) =>
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None),
+
+                        Origin::Undef => false,
+                        Origin::GlobalSlot(None) | Origin::FuncSlot(None) => true,
+                        Origin::FuncExternal | Origin::Unknown => true,
+                    };
+
+                    if call_could_interact {
+                        clobbered = true;
+                        break;
+                    }
+                }
+                InstructionInfo::BlackBox { .. } => {
+                    // TODO we pretend we also write to non-leaked pointers, maybe that's too strong?
                     clobbered = true;
                     break;
                 }
@@ -544,10 +571,10 @@ impl<'p, 'u> State<'p, 'u> {
     }
 }
 
-fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> LocAlias {
+fn locations_alias(prog: &Program, use_info: &UseInfo, func: Function, left: Location, right: Location) -> LocAlias {
     let same_ty = left.ty == right.ty;
 
-    match pointers_alias(prog, func, left.ptr, right.ptr) {
+    match pointers_alias(prog, use_info, func, left.ptr, right.ptr) {
         PtrAlias::Undef => LocAlias::Undef,
         PtrAlias::Unknown => LocAlias::UnknownOrPartial,
         PtrAlias::No => LocAlias::No,
@@ -569,7 +596,7 @@ fn locations_alias(prog: &Program, func: Function, left: Location, right: Locati
     }
 }
 
-fn pointers_alias(prog: &Program, func: Function, ptr_left: Value, ptr_right: Value) -> PtrAlias {
+fn pointers_alias(prog: &Program, use_info: &UseInfo, func: Function, ptr_left: Value, ptr_right: Value) -> PtrAlias {
     let simple_left = core_ptr(prog, ptr_left);
     let simple_right = core_ptr(prog, ptr_right);
 
@@ -619,7 +646,7 @@ fn pointers_alias(prog: &Program, func: Function, ptr_left: Value, ptr_right: Va
 
     let origin_left = pointer_origin(prog, func, simple_left.base);
     let origin_right = pointer_origin(prog, func, simple_right.base);
-    if !origins_can_alias(origin_left, origin_right) {
+    if !origins_can_alias(prog, use_info, origin_left, origin_right) {
         return PtrAlias::No;
     }
 
@@ -731,13 +758,12 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
     }
 }
 
-fn origins_can_alias(left: Origin, right: Origin) -> bool {
+fn origins_can_alias(prog: &Program, use_info: &UseInfo, left: Origin, right: Origin) -> bool {
     match (left, right) {
+        // undef doesn't alias with everything
         (Origin::Undef, _) | (_, Origin::Undef) => false,
 
-        (Origin::Unknown, _) | (_, Origin::Unknown) => true,
-        (Origin::FuncExternal, Origin::FuncExternal) => true,
-
+        // two slots of the type type only alias if they're the same slot (or we don't know which slot it is)
         (Origin::FuncSlot(left), Origin::FuncSlot(right)) => match (left, right) {
             (None, _) | (_, None) => true,
             (Some(left), Some(right)) => left == right,
@@ -747,10 +773,22 @@ fn origins_can_alias(left: Origin, right: Origin) -> bool {
             (Some(left), Some(right)) => left == right,
         },
 
+        // slots that don't escape can only alias themselves, which was already covered
+        (Origin::FuncSlot(Some(slot)), _) | (_, Origin::FuncSlot(Some(slot))) => {
+            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None)
+        }
+        (Origin::GlobalSlot(Some(slot)), _) | (_, Origin::GlobalSlot(Some(slot))) => {
+            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None)
+        }
+
         (Origin::FuncExternal | Origin::GlobalSlot(_), Origin::FuncSlot(_)) => false,
         (Origin::FuncSlot(_), Origin::FuncExternal | Origin::GlobalSlot(_)) => false,
 
+        (Origin::FuncExternal, Origin::FuncExternal) => true,
         (Origin::FuncExternal, Origin::GlobalSlot(_)) => true,
         (Origin::GlobalSlot(_), Origin::FuncExternal) => true,
+
+        // don't put this first, we want other matches (notable the slots) to be checked first
+        (Origin::Unknown, _) | (_, Origin::Unknown) => true,
     }
 }

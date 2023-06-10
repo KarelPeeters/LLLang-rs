@@ -5,7 +5,7 @@ use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
 use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Value};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Type, Value};
 use crate::util::internal_iter::InternalIterator;
 
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
@@ -104,6 +104,15 @@ impl UseInfo {
 
     pub fn block_only_used_as_func_entry(&self, block: Block) -> bool {
         self[block].iter().all(|usage| matches!(usage, BlockUsage::FuncEntry { .. }))
+    }
+
+    pub fn value_only_used_as_load_store_addr(&self, prog: &Program, value: Value, expected_ty: Option<Type>) -> bool {
+        self[value].iter().all(|usage| {
+            match usage.is_load_store_addr_get_ty(prog) {
+                None => false,
+                Some(ty) => expected_ty.map_or(true, |expected_ty| ty == expected_ty),
+            }
+        })
     }
 }
 

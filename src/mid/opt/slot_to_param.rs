@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::{InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Value};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::util::internal_iter::InternalIterator;
 
@@ -55,7 +55,7 @@ fn slot_to_param_func(prog: &mut Program, func: Function, use_info: &UseInfo, do
     // figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
         let inner_ty = prog.get_slot(slot).inner_ty;
-        use_info[slot].iter().all(|usage| is_load_or_store_addr_with_type(prog, usage, inner_ty))
+        use_info.value_only_used_as_load_store_addr(prog, slot.into(), Some(inner_ty))
     }).collect();
 
     // create all block params
@@ -127,16 +127,6 @@ fn slot_to_param_func(prog: &mut Program, func: Function, use_info: &UseInfo, do
         .retain(|slot| !replaced_slots.contains(slot));
 
     replaced_slots.len()
-}
-
-fn is_load_or_store_addr_with_type(prog: &Program, usage: &Usage, expected_ty: Type) -> bool {
-    let pos = match usage {
-        Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => pos,
-        _ => return false,
-    };
-    let instr = prog.get_instr(pos.instr);
-    let ty = unwrap_match!(instr, InstructionInfo::Load { ty, .. } | InstructionInfo::Store{ ty, .. } => *ty);
-    ty == expected_ty
 }
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of
