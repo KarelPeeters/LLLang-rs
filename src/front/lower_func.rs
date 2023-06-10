@@ -10,7 +10,7 @@ use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::Signed;
+use crate::mid::ir::{Const, Signed};
 use crate::mid::util::bit_int::BitInt;
 
 /// The state necessary to lower a single function.
@@ -174,13 +174,15 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     #[must_use]
     fn append_not(&mut self, value: ir::Value) -> ir::Value {
         let ty_ir = self.prog.type_of_value(value);
-        assert_eq!(ty_ir, self.prog.ty_bool());
+
+        let bits = self.prog.get_type(ty_ir).unwrap_int().unwrap();
+        let ones = BitInt::from_signed(bits, -1).unwrap();
 
         self.prog.define_expr(ir::ExpressionInfo::Arithmetic {
             kind: ir::ArithmeticOp::Xor,
             ty: ty_ir,
             left: value,
-            right: self.prog.const_bool(true).into(),
+            right: Const::new(ty_ir, ones).into(),
         }).into()
     }
 
@@ -437,6 +439,14 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                         let ty = inner.ty;
 
                         let result = self.append_negate(inner.ir);
+                        (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
+                    }
+                    ast::UnaryOp::Not => {
+                        let (after_inner, inner) =
+                            self.append_expr_loaded(flow, scope, inner)?;
+                        let ty = inner.ty;
+
+                        let result = self.append_not(inner.ir);
                         (after_inner, LRValue::Right(TypedValue { ty, ir: result }))
                     }
                 }

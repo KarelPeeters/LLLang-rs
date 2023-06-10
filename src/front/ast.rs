@@ -302,6 +302,7 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Neg,
+    Not,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

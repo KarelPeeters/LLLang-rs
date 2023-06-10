@@ -169,6 +169,12 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                         self.problem.equal(value_ty, inner_ty);
                         value_ty
                     }
+                    ast::UnaryOp::Not => {
+                        let value_ty = self.problem.unknown_int_or_bool(expr_origin, Some(Signed::Unsigned));
+                        let inner_ty = self.visit_expr(scope, inner)?;
+                        self.problem.equal(value_ty, inner_ty);
+                        value_ty
+                    }
                 }
             }
             ast::ExpressionKind::Logical { kind, left, right } => {

@@ -6,7 +6,7 @@ static HEAP_INIT: bool = false;
 
 fn init_heap() {
     // TODO add boolean not operator
-    if HEAP_INIT == false {
+    if !HEAP_INIT {
         HEAP = win32::GetProcessHeap();
         HEAP_INIT = true;
     }

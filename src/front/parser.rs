@@ -99,7 +99,7 @@ declare_tokens![
     Arrow("->"),
     DoubleDot(".."),
 
-    NotEq("!="),
+    BangEq("!="),
     DoubleEq("=="),
     GreaterEqual(">="),
     Greater(">"),
@@ -129,6 +129,7 @@ declare_tokens![
     Ampersand("&"),
     Pipe("|"),
     Hat("^"),
+    Bang("!"),
 
     Dot("."),
     Semi(";"),
@@ -437,7 +438,7 @@ const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
     BinOpInfo { level: 2, token: TT::DoubleAmpersand, allow_chain: true, op: ParseBinaryOp::Logical(ast::LogicalOp::And) },
     // comparison
     BinOpInfo { level: 3, token: TT::DoubleEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Eq) },
-    BinOpInfo { level: 3, token: TT::NotEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Neq) },
+    BinOpInfo { level: 3, token: TT::BangEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Neq) },
     BinOpInfo { level: 3, token: TT::GreaterEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gte) },
     BinOpInfo { level: 3, token: TT::Greater, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gt) },
     BinOpInfo { level: 3, token: TT::LessEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Lte) },
@@ -478,6 +479,7 @@ const PREFIX_OPERATOR_INFO: &[PrefixOpInfo] = &[
     PrefixOpInfo { level: 2, token: TT::DoubleAmpersand, op: ast::UnaryOp::Ref, double: true },
     PrefixOpInfo { level: 2, token: TT::Star, op: ast::UnaryOp::Deref, double: false },
     PrefixOpInfo { level: 2, token: TT::Minus, op: ast::UnaryOp::Neg, double: false },
+    PrefixOpInfo { level: 2, token: TT::Bang, op: ast::UnaryOp::Not, double: false },
 ];
 
 const POSTFIX_DEFAULT_LEVEL: u8 = 3;
