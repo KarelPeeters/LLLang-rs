@@ -1151,8 +1151,15 @@ impl<'s> Parser<'s> {
             TT::BlackBox => {
                 self.pop()?;
                 self.expect(TT::OpenB, "blackbox start")?;
-                let value = self.expression_boxed()?;
-                self.expect(TT::CloseB, "blackbox end")?;
+
+                let value = if self.accept(TT::CloseB)?.is_some() {
+                    None
+                } else {
+                    let value = self.expression_boxed()?;
+                    self.expect(TT::CloseB, "blackbox end")?;
+                    Some(value)
+                };
+
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::BlackBox { value },

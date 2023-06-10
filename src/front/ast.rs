@@ -229,7 +229,7 @@ pub enum ExpressionKind {
     // TODO think about a general way to represent intrinsics
     // TODO replace this with a generic lib function that then calls the intrinsic
     BlackBox {
-        value: Box<Expression>,
+        value: Option<Box<Expression>>,
     },
     Unreachable,
 

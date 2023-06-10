@@ -128,10 +128,15 @@ impl Selector<'_> {
                 self.push(VInstruction::Call(result, target, args));
             }
             InstructionInfo::BlackBox { value } => {
-                let size = self.size_of_value(value);
-                let value = self.append_value_to_reg(value);
-                let result = self.vregs.map_instr(instr);
-                self.push(VInstruction::MovReg(size, result, value.into()))
+                // TODO maybe push dummy blackbox instruction that ends up as a comment in asm?
+                if self.prog.type_of_value(value) == self.prog.ty_void() {
+                    // don't do anything
+                } else {
+                    let size = self.size_of_value(value);
+                    let value = self.append_value_to_reg(value);
+                    let result = self.vregs.map_instr(instr);
+                    self.push(VInstruction::MovReg(size, result, value.into()))
+                }
             }
         }
     }

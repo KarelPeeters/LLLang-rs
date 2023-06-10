@@ -279,10 +279,13 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 self.problem.fully_known(self.types, struct_ty)
             }
             ast::ExpressionKind::BlackBox { value } => {
-                self.visit_expr(scope, value)?
+                match value {
+                    Some(value) =>self.visit_expr(scope, value)?,
+                    None => self.problem.ty_void(),
+                }
             }
             ast::ExpressionKind::Unreachable => {
-                // TODO use never type once that existrs
+                // TODO use never type once that exists
                 self.problem.unknown_default_void(expr_origin)
             }
         };

@@ -222,6 +222,11 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         LRValue::Left(TypedValue { ty: ty_ptr, ir: ir::Value::undef(ty_ptr_ir) })
     }
 
+    fn void_value(&mut self) -> TypedValue {
+        let ty_void = self.types.type_void();
+        TypedValue { ty: ty_void, ir: ir::Value::void() }
+    }
+
     fn append_int_cast(&mut self, info_before: IntTypeInfo, info_after: IntTypeInfo, value_before: ir::Value) -> ir::Value {
         // Conceptually all int casting follows the following steps:
         // * Infinitely extend the value from its original size and signedness.
@@ -558,9 +563,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let (after_value, value) = if let Some(value) = value {
                     self.append_expr_loaded(flow, scope, value)?
                 } else {
-                    //check that function return type is indeed void
-                    let ty_void = self.types.type_void();
-                    (flow, TypedValue { ty: ty_void, ir: ir::Value::void() })
+                    (flow, self.void_value())
                 };
 
                 let ret = ir::Terminator::Return { value: value.ir };
@@ -601,7 +604,15 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: result_value }))
             }
             ast::ExpressionKind::BlackBox { value } => {
-                let (flow_after, value) = self.append_expr_loaded(flow, scope, value)?;
+                let (flow_after, value) = match value {
+                    Some(value) => {
+                        self.append_expr_loaded(flow, scope, value)?
+                    }
+                    None => {
+                        (flow, self.void_value())
+                    }
+                };
+
                 let black_box = self.append_instr(flow_after.block, ir::InstructionInfo::BlackBox { value: value.ir });
                 (flow_after, LRValue::Right(TypedValue { ty: value.ty, ir: black_box.into() }))
             }
@@ -652,7 +663,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             unreachable!();
         }
 
-        result.map(|value| LRValue::Right(value))
+        result.map(LRValue::Right)
     }
 
     fn append_break_or_continue(
