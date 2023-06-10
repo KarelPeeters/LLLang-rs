@@ -44,7 +44,7 @@ fn mem_forwarding(prog: &mut Program, use_info: &UseInfo) -> bool {
             cache: Default::default(),
             undo: vec![],
             prog,
-            use_info: &use_info,
+            use_info,
             func,
         };
 
@@ -52,6 +52,11 @@ fn mem_forwarding(prog: &mut Program, use_info: &UseInfo) -> bool {
             let instrs = state.prog.get_block(block).instructions.clone();
 
             for (index, &instr) in instrs.iter().enumerate() {
+                // no point trying to replace unused loads
+                if use_info[instr].is_empty() {
+                    continue;
+                }
+
                 let instr_info = state.prog.get_instr(instr);
                 if let &InstructionInfo::Load { addr, ty: load_ty } = instr_info {
                     let loc = Location { ptr: addr, ty: load_ty };
