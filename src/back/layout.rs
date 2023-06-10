@@ -13,7 +13,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(size_bytes: u32, align_bytes: u32) -> Self {
-        assert!(size_bytes >= 0, "size must be >= 0, got {}", size_bytes);
+        // assert!(size_bytes >= 0, "size must be >= 0, got {}", size_bytes);
         assert!(align_bytes >= 1, "alignment must be >= 1, got {}", align_bytes);
         assert!(align_bytes.count_ones() == 1, "alignment must be a power of two, got {}", align_bytes);
         assert!(size_bytes % align_bytes == 0, "size must be a multiple of alignment, got {} and {}", size_bytes, align_bytes);

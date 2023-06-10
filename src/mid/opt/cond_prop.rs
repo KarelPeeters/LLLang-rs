@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use itertools::Itertools;
 
@@ -69,7 +68,7 @@ impl ReplacementCondition {
 }
 
 // TODO expand to more conditional cases, eg if we know `a == b` then we also know `a > b`.
-fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo, dom_info: &DomInfo) -> usize {
+fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info: &DomInfo) -> usize {
     // collect replacement values
     let mut replacements = vec![];
 
@@ -118,23 +117,23 @@ fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo, dom_in
     for replacement in replacements {
         // TODO only apply replacement if it's the simplest one that applies
 
-        replaced += use_info.replace_value_usages_if(prog, replacement.complex, replacement.simple, |prog, usage| {
+        replaced += use_info.replace_value_usages_if(prog, replacement.complex, replacement.simple, |_, usage| {
             match usage {
                 Usage::RootFunction(_) => false,
                 // TODO support replacing  expression operands
                 Usage::ExprOperand { .. } => false,
 
-                Usage::InstrOperand { pos, usage } =>
-                    replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+                Usage::InstrOperand { pos, usage: _ } =>
+                    replacement.cond.applies_to_instr_in(dom_info, pos.block),
 
                 Usage::TermOperand { pos, usage } => {
                     match usage {
                         TermOperand::BranchCond | TermOperand::ReturnValue =>
-                            replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+                            replacement.cond.applies_to_instr_in(dom_info, pos.block),
                         TermOperand::TargetArg { kind, index: _ } => {
                             match kind {
                                 TargetKind::Jump =>
-                                    replacement.cond.applies_to_instr_in(&dom_info, pos.block),
+                                    replacement.cond.applies_to_instr_in(dom_info, pos.block),
                                 TargetKind::BranchTrue =>
                                     replacement.cond.applies_to_branch_in(pos.block, true),
                                 TargetKind::BranchFalse =>
@@ -154,31 +153,6 @@ fn cond_prop_func(prog: &mut Program, func: Function, use_info: &UseInfo, dom_in
 struct SimplifyPair {
     complex: Value,
     simple: Value,
-}
-
-fn sorted_pair_for_block_edge(prog: &Program, simplify: &HashMap<Value, Value>, parent: Block, child: Block) -> Option<SimplifyPair> {
-    if let Terminator::Branch { cond, ref true_target, ref false_target } = prog.get_block(parent).terminator {
-        if let Some(cond) = cond.as_expr() {
-            if let &ExpressionInfo::Comparison { kind, left, right } = prog.get_expr(cond) {
-                if implies_operands_eq(kind, true_target.block, false_target.block, child) {
-                    let left = *simplify.get(&left).unwrap_or(&left);
-                    let right = *simplify.get(&right).unwrap_or(&right);
-                    return sort_pair(prog, left, right);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn implies_operands_eq(kind: ComparisonOp, true_block: Block, false_block: Block, child: Block) -> bool {
-    match (child == true_block, child == false_block) {
-        (false, false) => unreachable!("child block is neither true nor false, which means it's not a descendant!"),
-        (true, false) => kind == ComparisonOp::Eq,
-        (false, true) => kind == ComparisonOp::Neq,
-        (true, true) => false,
-    }
 }
 
 fn sort_pair(prog: &Program, left: Value, right: Value) -> Option<SimplifyPair> {

@@ -2,9 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Write};
 use std::iter::zip;
 
-use env_logger::Builder;
 use itertools::Itertools;
-use log::LevelFilter;
 use regalloc2::{Edit, Inst, InstOrEdit, InstRange, MachineEnv, Operand, PReg, PRegSet, RegallocOptions, RegClass};
 use regalloc2 as r2;
 use regalloc2::VReg;
