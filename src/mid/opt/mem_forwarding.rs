@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
+use crate::mid::ir::{Block, ExpressionInfo, Function, Global, GlobalSlot, Immediate, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
@@ -150,19 +150,18 @@ enum LocAlias {
     No,
 }
 
+// TODO allow for multiple slots to be tracked?
 #[derive(Debug)]
 enum Origin {
     /// The pointer is undefined.
     Undef,
 
-    /// The given slot, from the current function.
-    FuncStackSlot(StackSlot),
-    /// Any slot from the current function.
-    // TODO consider tracking which specific func slots it can be
-    FuncAnyStackSlot,
+    // A stack slot from the current function.
+    FuncSlot(Option<StackSlot>),
+    // A global slot.
+    GlobalSlot(Option<GlobalSlot>),
 
-    /// Some other value external to this function.
-    // TODO split this up into global slots, data, ...
+    // Some location external to the current function frame.
     FuncExternal,
 
     /// We don't have enough information.
@@ -234,10 +233,10 @@ fn compute_liveness_inner(prog: &Program, func: Function, block: Block, start: u
             let origin = pointer_origin(prog, func, loc.ptr);
             match origin {
                 // function-internal, so cannot be observed after return
-                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Liveness::Dead,
+                Origin::FuncSlot(_) => Liveness::Dead,
                 // maybe external, so can potentially be observed
                 // TODO maybe we can do something better with undef here?
-                Origin::Undef | Origin::Unknown | Origin::FuncExternal => Liveness::MaybeLive,
+                Origin::Undef | Origin::GlobalSlot(_) | Origin::FuncExternal | Origin::Unknown => Liveness::MaybeLive,
             }
         }
         // no successor, so dead
@@ -393,7 +392,7 @@ impl<'p, 'u> State<'p, 'u> {
 
     fn find_value_for_loc_at_inner(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
         // look at the preceding instructions in this block
-        let walk = self.walk_block_from(loc, block, index);
+        let walk = self.walk_block_instructions_from(loc, block, index);
         let matching_load = match walk {
             WalkResult::Lattice(value) => return value,
             WalkResult::ReachedStart { matching_load } => matching_load,
@@ -408,8 +407,8 @@ impl<'p, 'u> State<'p, 'u> {
         if self.use_info.block_only_used_as_func_entry(block) {
             return match pointer_origin(self.prog, self.func, loc.ptr) {
                 Origin::Undef => Lattice::Undef,
-                Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
-                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
+                Origin::Unknown | Origin::GlobalSlot(_) | Origin::FuncExternal => Lattice::Overdef,
+                Origin::FuncSlot(_) => Lattice::Undef,
             };
         }
 
@@ -432,7 +431,7 @@ impl<'p, 'u> State<'p, 'u> {
         Lattice::Overdef
     }
 
-    fn walk_block_from(&mut self, loc: Location, block: Block, index: Option<usize>) -> WalkResult {
+    fn walk_block_instructions_from(&mut self, loc: Location, block: Block, index: Option<usize>) -> WalkResult {
         let block_info = self.prog.get_block(block);
         let index = index.unwrap_or(block_info.instructions.len());
 
@@ -480,7 +479,8 @@ impl<'p, 'u> State<'p, 'u> {
                 // could have side effects, we have to give up
                 // TODO we can do better for calls:
                 //   * side effect free functions
-                //   * if we don't leak a slot to external or to this call the function can't store to it
+                //   * if we don't leak a slot, external or global slot to external code/memory/this call
+                //        we can continue
                 InstructionInfo::Call { .. } | InstructionInfo::BlackBox { .. } => {
                     clobbered = true;
                     break;
@@ -695,7 +695,7 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
             Global::Func(_) => unreachable!("Function cannot have pointer type: {:?}", ptr),
             Global::Extern(_) => Origin::FuncExternal,
             Global::Data(_) => Origin::FuncExternal,
-            Global::GlobalSlot(_) => Origin::FuncExternal,
+            Global::GlobalSlot(slot) => Origin::GlobalSlot(Some(slot)),
         },
         Value::Scoped(value) => match value {
             Scoped::Param(param) => {
@@ -706,7 +706,7 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
                     Origin::Unknown
                 }
             }
-            Scoped::Slot(slot) => Origin::FuncStackSlot(slot),
+            Scoped::Slot(slot) => Origin::FuncSlot(Some(slot)),
             Scoped::Instr(instr) => match prog.get_instr(instr) {
                 InstructionInfo::Load { .. } => Origin::Unknown,
                 InstructionInfo::Store { .. } =>
@@ -733,36 +733,19 @@ fn origins_can_alias(left: Origin, right: Origin) -> bool {
         (Origin::Unknown, _) | (_, Origin::Unknown) => true,
         (Origin::FuncExternal, Origin::FuncExternal) => true,
 
-        (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => left == right,
-        (Origin::FuncAnyStackSlot, Origin::FuncAnyStackSlot) => true,
-        (Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot) | (Origin::FuncAnyStackSlot, Origin::FuncStackSlot(_)) => true,
+        (Origin::FuncSlot(left), Origin::FuncSlot(right)) => match (left, right) {
+            (None, _) | (_, None) => true,
+            (Some(left), Some(right)) => left == right,
+        },
+        (Origin::GlobalSlot(left), Origin::GlobalSlot(right)) => match (left, right) {
+            (None, _) | (_, None) => true,
+            (Some(left), Some(right)) => left == right,
+        },
 
-        (Origin::FuncExternal, Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot) => false,
-        (Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot, Origin::FuncExternal) => false,
-    }
-}
+        (Origin::FuncExternal | Origin::GlobalSlot(_), Origin::FuncSlot(_)) => false,
+        (Origin::FuncSlot(_), Origin::FuncExternal | Origin::GlobalSlot(_)) => false,
 
-impl Origin {
-    // TODO start using this when we switch to something more dataflow-like
-    #[allow(dead_code)]
-    fn merge(left: Origin, right: Origin) -> Origin {
-        match (left, right) {
-            (Origin::Unknown, _) | (_, Origin::Unknown) => Origin::Unknown,
-            (Origin::Undef, other) | (other, Origin::Undef) => other,
-
-            (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
-                if left == right {
-                    Origin::FuncStackSlot(left)
-                } else {
-                    Origin::FuncAnyStackSlot
-                }
-            }
-            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::FuncAnyStackSlot,
-
-            (Origin::FuncExternal, Origin::FuncExternal) => Origin::FuncExternal,
-
-            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncExternal) => Origin::Unknown,
-            (Origin::FuncExternal, Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::Unknown,
-        }
+        (Origin::FuncExternal, Origin::GlobalSlot(_)) => true,
+        (Origin::GlobalSlot(_), Origin::FuncExternal) => true,
     }
 }
