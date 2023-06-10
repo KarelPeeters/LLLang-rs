@@ -652,7 +652,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             unreachable!();
         }
 
-        result
+        result.map(|value| LRValue::Right(value))
     }
 
     fn append_break_or_continue(

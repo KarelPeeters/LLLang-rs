@@ -16,7 +16,7 @@ use crate::util::arena::{Arena, ArenaSet};
 new_index_type!(pub Module);
 new_index_type!(pub Type);
 new_index_type!(pub Function);
-new_index_type!(pub Const);
+new_index_type!(pub ConstOrStatic);
 
 #[derive(Debug)]
 pub struct ResolvedProgram<'a> {
@@ -154,7 +154,7 @@ pub struct ItemStore<'a> {
 
     pub modules: Arena<Module, CollectedModule>,
     pub funcs: Arena<Function, FunctionDecl<'a>>,
-    pub consts: Arena<Const, ConstDecl<'a>>,
+    pub consts: Arena<ConstOrStatic, ConstOrStaticDecl<'a>>,
 }
 
 #[derive(Debug, Default)]
@@ -269,7 +269,7 @@ pub enum ScopedItem {
 #[derive(Debug, Copy, Clone)]
 pub enum ScopedValue {
     Function(Function),
-    Const(Const),
+    ConstOrStatic(ConstOrStatic),
     Immediate(LRValue),
     TypeVar(TypeVar),
 }
@@ -453,7 +453,7 @@ pub struct FunctionDecl<'ast> {
 }
 
 #[derive(Debug)]
-pub struct ConstDecl<'ast> {
+pub struct ConstOrStaticDecl<'ast> {
     pub ty: Type,
-    pub ast: &'ast ast::Const,
+    pub ast: &'ast ast::ConstOrStatic,
 }

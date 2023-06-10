@@ -122,7 +122,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 if let ScopedItem::Value(value) = item {
                     match value {
                         ScopedValue::TypeVar(var) => var,
-                        ScopedValue::Function(_) | ScopedValue::Const(_) | ScopedValue::Immediate(_) => {
+                        ScopedValue::Function(_) | ScopedValue::ConstOrStatic(_) | ScopedValue::Immediate(_) => {
                             let ty = (self.map_value)(value).ty(self.types);
                             self.problem.fully_known(self.types, ty)
                         }

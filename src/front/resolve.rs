@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::front;
 use crate::front::{ast, cst};
 use crate::front::ast::{Item, ModuleContent};
-use crate::front::cst::{CollectedModule, ConstDecl, FunctionDecl, FunctionTypeInfo, IntTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
+use crate::front::cst::{CollectedModule, ConstOrStaticDecl, FunctionDecl, FunctionTypeInfo, IntTypeInfo, ItemStore, ResolvedProgram, ScopedItem, ScopedValue, ScopeKind, StructFieldInfo, StructTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, Result};
 use crate::front::scope::Scope;
 
@@ -34,7 +34,7 @@ struct ResolveState<'a> {
 
     alias_map: HashMap<*const ast::TypeAlias, cst::Type>,
     func_map: HashMap<*const ast::Function, cst::Function>,
-    const_map: HashMap<*const ast::Const, cst::Const>,
+    const_or_static_map: HashMap<*const ast::ConstOrStatic, cst::ConstOrStatic>,
     struct_map: HashMap<*const ast::Struct, cst::Type>,
 }
 
@@ -47,7 +47,7 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
 
     let mut alias_map: HashMap<*const ast::TypeAlias, cst::Type> = Default::default();
     let mut func_map: HashMap<*const ast::Function, cst::Function> = Default::default();
-    let mut cst_map: HashMap<*const ast::Const, cst::Const> = Default::default();
+    let mut const_or_static_map: HashMap<*const ast::ConstOrStatic, cst::ConstOrStatic> = Default::default();
     let mut struct_map: HashMap<*const ast::Struct, cst::Type> = Default::default();
 
     let mapped = ast.try_map(&mut |module| {
@@ -83,15 +83,15 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
                         collected_module.local_scope.declare(&func_ast.id, ScopedItem::Value(ScopedValue::Function(func)))?;
                         func_map.insert(func_ast, func);
                     }
-                    Item::Const(cst_ast) => {
-                        let decl = ConstDecl {
+                    Item::ConstOrStatic(cst_ast) => {
+                        let decl = ConstOrStaticDecl {
                             ty: common_ph_type,
                             ast: cst_ast,
                         };
 
                         let cst = cst.consts.push(decl);
-                        collected_module.local_scope.declare(&cst_ast.id, ScopedItem::Value(ScopedValue::Const(cst)))?;
-                        cst_map.insert(cst_ast, cst);
+                        collected_module.local_scope.declare(&cst_ast.id, ScopedItem::Value(ScopedValue::ConstOrStatic(cst)))?;
+                        const_or_static_map.insert(cst_ast, cst);
                     }
                     //handled in a later pass
                     Item::UseDecl(_) => {}
@@ -108,7 +108,7 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
         items: cst,
         alias_map,
         func_map,
-        const_map: cst_map,
+        const_or_static_map,
         struct_map,
     };
     Ok((state, mapped))
@@ -170,9 +170,9 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
                         let item = ScopedItem::Value(ScopedValue::Function(func));
                         (&func_ast.id, item)
                     }
-                    Item::Const(cst_ast) => {
-                        let cst = *state.const_map.get(&(cst_ast as *const _)).unwrap();
-                        let item = ScopedItem::Value(ScopedValue::Const(cst));
+                    Item::ConstOrStatic(cst_ast) => {
+                        let cst = *state.const_or_static_map.get(&(cst_ast as *const _)).unwrap();
+                        let item = ScopedItem::Value(ScopedValue::ConstOrStatic(cst));
                         (&cst_ast.id, item)
                     }
                 };
@@ -222,10 +222,9 @@ fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Resu
                         func.func_ty = info.clone();
                         func.ty = types.define_type(TypeInfo::Function(info));
                     }
-                    Item::Const(cst_ast) => {
+                    Item::ConstOrStatic(cst_ast) => {
                         let ty = items.resolve_type(ScopeKind::Real, module_scope, types, &cst_ast.ty)?;
-
-                        let cst = *state.const_map.get(&(cst_ast as *const _)).unwrap();
+                        let cst = *state.const_or_static_map.get(&(cst_ast as *const _)).unwrap();
                         items.consts[cst].ty = ty;
                     }
                 };

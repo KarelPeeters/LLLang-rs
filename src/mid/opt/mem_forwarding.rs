@@ -162,6 +162,7 @@ enum Origin {
     FuncAnyStackSlot,
 
     /// Some other value external to this function.
+    // TODO split this up into global slots, data, ...
     FuncExternal,
 
     /// We don't have enough information.
@@ -694,6 +695,7 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
             Global::Func(_) => unreachable!("Function cannot have pointer type: {:?}", ptr),
             Global::Extern(_) => Origin::FuncExternal,
             Global::Data(_) => Origin::FuncExternal,
+            Global::GlobalSlot(_) => Origin::FuncExternal,
         },
         Value::Scoped(value) => match value {
             Scoped::Param(param) => {

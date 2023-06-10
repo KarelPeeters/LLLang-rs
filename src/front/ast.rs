@@ -63,15 +63,22 @@ pub enum Item {
     TypeAlias(TypeAlias),
     Struct(Struct),
     Function(Function),
-    Const(Const),
+    ConstOrStatic(ConstOrStatic),
 }
 
 #[derive(Debug)]
-pub struct Const {
+pub struct ConstOrStatic {
     pub span: Span,
+    pub kind: ConstOrStaticKind,
     pub id: Identifier,
     pub ty: Type,
     pub init: Expression,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ConstOrStaticKind {
+    Const,
+    Static,
 }
 
 #[derive(Debug)]

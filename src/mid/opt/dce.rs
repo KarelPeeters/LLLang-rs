@@ -117,7 +117,7 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         match value {
-            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) | Value::Scoped(Scoped::Slot(_)) => {
+            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_) | Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_)) => {
                 // no additional handling (beyond marking them as used, which already happens in add_value)
             }
             Value::Global(Global::Func(func)) => {

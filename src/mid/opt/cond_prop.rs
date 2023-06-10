@@ -175,6 +175,8 @@ fn value_complexity(prog: &Program, value: Value) -> u32 {
         // the exact order is probably not that important, these should rarely be compared
         Value::Global(Global::Data(_)) => 2,
         Value::Global(Global::Func(_)) => 2,
+        Value::Global(Global::GlobalSlot(_)) => 2,
+        // TODO mark func params as more expensive than block params?
         Value::Scoped(Scoped::Slot(_)) => 3,
         Value::Scoped(Scoped::Param(_)) => 4,
         Value::Global(Global::Extern(_)) => 5,

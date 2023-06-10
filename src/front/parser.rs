@@ -4,6 +4,7 @@ use std::num::ParseIntError;
 use TokenType as TT;
 
 use crate::front::ast;
+use crate::front::ast::ConstOrStaticKind;
 use crate::front::cst::IntTypeInfo;
 use crate::front::pos::{FileId, Pos, Span};
 use crate::mid::ir::Signed;
@@ -80,6 +81,7 @@ declare_tokens![
     Return("return"),
     Let("let"),
     Const("const"),
+    Static("static"),
     Mut("mut"),
     If("if"),
     Else("else"),
@@ -657,24 +659,30 @@ impl<'s> Parser<'s> {
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
             TT::Fn | TT::Extern => self.function().map(ast::Item::Function),
-            TT::Const => self.const_().map(ast::Item::Const),
+            TT::Const | TT::Static => self.const_or_static().map(ast::Item::ConstOrStatic),
             TT::Use => self.use_decl().map(ast::Item::UseDecl),
             TT::Type => self.type_alias().map(ast::Item::TypeAlias),
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
     }
 
-    fn const_(&mut self) -> Result<ast::Const> {
-        let start_pos = self.expect(TT::Const, "start of const item")?.span.start;
+    fn const_or_static(&mut self) -> Result<ast::ConstOrStatic> {
+        let start = self.pop()?;
+        let kind = match start.ty {
+            TT::Const => ConstOrStaticKind::Const,
+            TT::Static => ConstOrStaticKind::Static,
+            _ => unreachable!(),
+        };
+
         let id = self.identifier("const name")?;
         self.expect(TT::Colon, "const type")?;
         let ty = self.type_decl()?;
-        self.expect(TT::Eq, "initializer")?;
+        self.expect(TT::Eq, "const initializer")?;
         let init = self.expression()?;
-        self.expect(TT::Semi, "end of item")?;
+        self.expect(TT::Semi, "const end")?;
 
-        let span = Span::new(start_pos, self.last_popped_end);
-        Ok(ast::Const { span, id, ty, init })
+        let span = Span::new(start.span.start, self.last_popped_end);
+        Ok(ast::ConstOrStatic { span, kind, id, ty, init })
     }
 
     fn use_decl(&mut self) -> Result<ast::UseDecl> {

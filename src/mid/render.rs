@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use crate::mid::analyse::usage::TargetKind;
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, CastKind, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
+use crate::mid::ir::{Block, CastKind, Data, Expression, ExpressionInfo, Extern, ExternInfo, Function, Global, GlobalSlot, GlobalSlotInfo, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, StackSlot, Target, Terminator, Value};
 use crate::util::arena::IndexType;
 use crate::util::internal_iter::InternalIterator;
 
@@ -22,7 +22,6 @@ enum Error {
 }
 
 // TODO rename to include what format we are writing?
-// TODO render externals
 pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
     let result = Renderer::new(prog).render(&mut f);
 
@@ -35,6 +34,7 @@ pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
 
 struct Renderer<'a, W: Write> {
     prog: &'a Program,
+    use_info: UseInfo,
     marker: ExpressionMarker,
 
     // this is a hack so we don't have to repeat the W bound in every member function
@@ -90,8 +90,7 @@ impl<'a, W: Write> Renderer<'a, W> {
     pub fn new(prog: &'a Program) -> Self {
         let use_info = UseInfo::new(prog);
         let marker = ExpressionMarker::new(prog, &use_info);
-
-        Self { prog, marker, ph: PhantomData }
+        Self { prog, use_info, marker, ph: PhantomData }
     }
 
     fn render(&self, f: &mut W) -> Result {
@@ -114,7 +113,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         // render expressions that aren't used in any function
         self.render_expressions(f, "global", &self.marker.other_expressions)?;
 
-        self.render_data(f)?;
+        self.render_globals(f)?;
 
         // render root pointers
         for (i, (name, &func)) in prog.root_functions.iter().enumerate() {
@@ -127,18 +126,67 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
-    fn render_data(&self, f: &mut W) -> Result {
-        let prog = self.prog;
-        if prog.nodes.datas.len() == 0 {
-            return Ok(());
+    fn render_globals(&self, f: &mut W) -> Result {
+        let mut externs = vec![];
+        let mut datas = vec![];
+        let mut slots = vec![];
+
+        for value in self.use_info.values() {
+            match value {
+                Value::Immediate(_) | Value::Scoped(_) | Value::Expr(_) => {}
+                Value::Global(value) => match value {
+                    Global::Func(_) => {}
+                    Global::Extern(value) => externs.push(value),
+                    Global::Data(value) => datas.push(value),
+                    Global::GlobalSlot(value) => slots.push(value),
+                }
+            }
         }
+
+        if !externs.is_empty() {
+            self.render_externs(f, &externs)?;
+        }
+        if !datas.is_empty() {
+            self.render_data(f, &datas)?;
+        }
+        if !slots.is_empty() {
+            self.render_global_slots(f, &slots)?;
+        }
+
+        Ok(())
+    }
+
+    fn render_externs(&self, f: &mut W, externs: &[Extern]) -> Result {
+        let prog = self.prog;
+
+        let mut rows = String::new();
+        let r = &mut rows;
+
+        write!(r, r#"<tr><td colspan="3"><b>Externs</b></td></tr>"#)?;
+
+        for &ext in externs {
+            let &ExternInfo { ref name, ty } = prog.get_ext(ext);
+            write!(
+                r,
+                "<tr><td>ext_{}</td><td>{}</td><td>{}</td></tr>",
+                ext.index(), quote_html(prog.format_type(ty).to_string()), quote_html(name)
+            )?;
+        }
+
+        writeln!(f, r#"externs [label=<<table border="0">{rows}</table>>, shape="box", style="rounded"]"#)?;
+        Ok(())
+    }
+
+    fn render_data(&self, f: &mut W, datas: &[Data]) -> Result {
+        let prog = self.prog;
 
         let mut rows = String::new();
         let r = &mut rows;
 
         write!(r, r#"<tr><td colspan="3"><b>Data</b></td></tr>"#)?;
 
-        for (data, data_info) in &prog.nodes.datas {
+        for &data in datas {
+            let data_info = prog.get_data(data);
             let bytes = &data_info.bytes;
             let limit = 8;
 
@@ -155,7 +203,31 @@ impl<'a, W: Write> Renderer<'a, W> {
             )?;
         }
 
-        writeln!(f, r#"data [label=<<table border="0">{rows}</table>>, shape="box", style="rounded"]"#)?;
+        writeln!(f, r#"datas [label=<<table border="0">{rows}</table>>, shape="box", style="rounded"]"#)?;
+        Ok(())
+    }
+
+    fn render_global_slots(&self, f: &mut W, slots: &[GlobalSlot]) -> Result {
+        let prog = self.prog;
+
+        let mut rows = String::new();
+        let r = &mut rows;
+
+        write!(r, r#"<tr><td colspan="4"><b>Global slots</b></td></tr>"#)?;
+
+        for &slot in slots {
+            let &GlobalSlotInfo { inner_ty, ref debug_name, initial } = prog.get_global_slot(slot);
+            write!(
+                r,
+                "<tr><td>global_slot_{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                slot.index(),
+                quote_html(prog.format_type(inner_ty).to_string()),
+                self.value_to_str(initial),
+                debug_name.as_ref().map_or("", |s| s.as_str())
+            )?;
+        }
+
+        writeln!(f, r#"slots [label=<<table border="0">{rows}</table>>, shape="box", style="rounded"]"#)?;
         Ok(())
     }
 
@@ -375,7 +447,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         match *expr_info {
             // type already included as a separate column
-            ExpressionInfo::Arithmetic { kind, ty:_, left, right } =>
+            ExpressionInfo::Arithmetic { kind, ty: _, left, right } =>
                 vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],
             ExpressionInfo::Comparison { kind, left, right } =>
                 vec![shorten_signed(format!("{:?}", kind)), v(left), v(right)],
@@ -399,6 +471,7 @@ impl<'a, W: Write> Renderer<'a, W> {
                 Global::Func(func) => format!("func_{}", func.index()),
                 Global::Extern(ext) => format!("ext_{}", ext.index()),
                 Global::Data(data) => format!("data_{}", data.index()),
+                Global::GlobalSlot(slot) => format!("global_slot_{}", slot.index()),
             }
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => format!("slot_{}", slot.index()),

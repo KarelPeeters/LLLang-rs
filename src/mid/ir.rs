@@ -59,6 +59,7 @@ gen_node_and_program_accessors![
     [Expression, ExpressionInfo, define_expr, get_expr, get_expr_mut, expr, exprs],
     [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, ext, exts],
     [Data, DataInfo, define_data, get_data, get_data_mut, data, datas],
+    [GlobalSlot, GlobalSlotInfo, define_global_slot, get_global_slot, get_global_slot_mut, global_slot, global_slots],
 ];
 
 new_index_type!(pub Type);
@@ -174,6 +175,7 @@ impl Program {
                     Global::Func(func) => self.get_func(func).ty,
                     Global::Extern(ext) => self.get_ext(ext).ty,
                     Global::Data(data) => self.get_data(data).ty,
+                    Global::GlobalSlot(_) => self.ty_ptr,
                 }
             }
             Value::Scoped(value) => {
@@ -328,6 +330,15 @@ pub struct StackSlotInfo {
     pub inner_ty: Type,
     pub debug_name: Option<String>,
 }
+
+#[derive(Debug, Clone)]
+pub struct GlobalSlotInfo {
+    pub inner_ty: Type,
+    pub debug_name: Option<String>,
+    // TODO verify that initial value dominates everything else
+    pub initial: Value,
+}
+
 
 #[derive(Debug, Clone)]
 pub struct BlockInfo {
@@ -642,6 +653,7 @@ pub enum Global {
     Func(Function),
     Extern(Extern),
     Data(Data),
+    GlobalSlot(GlobalSlot),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
@@ -655,6 +667,7 @@ impl_nested_from!(Value::Immediate(Const));
 impl_nested_from!(Value::Global(Function));
 impl_nested_from!(Value::Global(Extern));
 impl_nested_from!(Value::Global(Data));
+impl_nested_from!(Value::Global(GlobalSlot));
 impl_nested_from!(Value::Scoped(Parameter));
 impl_nested_from!(Value::Scoped(StackSlot));
 impl_nested_from!(Value::Scoped(Instruction));
@@ -838,6 +851,8 @@ impl Program {
                             write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
                         Global::Data(data) =>
                             write!(f, "Data({:?}: {})", data.0, ty),
+                        Global::GlobalSlot(slot) =>
+                            write!(f, "GlobalSlot({:?}: {})", slot.0, ty),
                     }
                     Value::Scoped(value) => match value {
                         Scoped::Param(param) =>

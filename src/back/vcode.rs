@@ -1,5 +1,5 @@
 use std::cmp::min_by_key;
-use std::fmt::Write;
+use std::fmt::{Write};
 
 use derive_more::From;
 use indexmap::IndexMap;
@@ -8,7 +8,7 @@ use crate::back::abi::{ABI_PARAM_REGS, ABI_RETURN_REG, ABI_VOLATILE_REGS};
 use crate::back::layout::next_multiple;
 
 use crate::back::register::{Register, RSize};
-use crate::mid::ir::{Block, Global, Program, Signed};
+use crate::mid::ir::{Block, Data, Extern, Function, GlobalSlot, Program, Signed};
 use crate::mid::util::bit_int::BitInt;
 use crate::util::arena::IndexType;
 
@@ -64,6 +64,7 @@ pub enum VInstruction {
     StackAlloc,
 
     SlotPtr(VReg, usize),
+    GlobalSlotPtr(VReg, GlobalSlot),
 }
 
 pub enum RegOperand {
@@ -78,6 +79,7 @@ pub enum VopRCM {
     Reg(VReg),
     Const(VConst),
     Mem(VMem),
+    GlobalSlot(GlobalSlot),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -92,6 +94,7 @@ pub enum VopRM {
     Undef,
     Reg(VReg),
     Mem(VMem),
+    GlobalSlot(GlobalSlot),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -160,7 +163,9 @@ impl AllocPos {
 
 #[derive(Debug, Copy, Clone)]
 pub enum VSymbol {
-    Global(Global),
+    Func(Function),
+    Extern(Extern),
+    Data(Data),
     Block(Block),
     Label(usize),
 }
@@ -210,6 +215,7 @@ impl From<VopRM> for VopRCM {
             VopRM::Undef => VopRCM::Undef,
             VopRM::Reg(reg) => VopRCM::Reg(reg),
             VopRM::Mem(mem) => VopRCM::Mem(mem),
+            VopRM::GlobalSlot(slot) => VopRCM::GlobalSlot(slot),
         }
     }
 }
@@ -262,7 +268,8 @@ impl VOperand for VopRCM {
             VopRCM::Slot(_) => {}
             VopRCM::Reg(reg) => f(RegOperand::Adaptive(reg)),
             VopRCM::Const(_) => {}
-            VopRCM::Mem(mem) => mem.for_each_reg(f)
+            VopRCM::Mem(mem) => mem.for_each_reg(f),
+            VopRCM::GlobalSlot(_) => {}
         }
     }
 
@@ -277,17 +284,16 @@ impl VOperand for VopRCM {
             VopRCM::Reg(reg) => ctx.map_reg(reg).to_asm(size),
             VopRCM::Const(cst) => cst.to_asm(ctx, size),
             VopRCM::Mem(mem) => mem.to_asm(ctx, size),
+            VopRCM::GlobalSlot(slot) => {
+                format!("[global_slot_{}]", slot.index())
+            }
         }
     }
 
     fn is_const_zero(&self) -> bool {
         match self {
-            VopRCM::Undef => false,
-            VopRCM::Reg(_) => false,
-            VopRCM::Slot(_) => false,
             VopRCM::Const(VConst::Const(cst)) => cst.is_zero(),
-            VopRCM::Const(VConst::Symbol(_)) => false,
-            VopRCM::Mem(_) => false,
+            _ => false,
         }
     }
 }
@@ -461,6 +467,9 @@ impl VInstruction {
             VInstruction::SlotPtr(dest, _index) => {
                 operands.push_def(dest);
             }
+            VInstruction::GlobalSlotPtr(dest, _slot) => {
+                operands.push_def(dest);
+            }
         }
 
         InstInfo::simple(operands)
@@ -612,6 +621,10 @@ impl VInstruction {
                     format!("lea {}, [rsp+{}]", dest, offset)
                 }
             }
+            VInstruction::GlobalSlotPtr(dest, slot) => {
+                let dest = ctx.map_reg(dest).to_asm(RSize::FULL);
+                format!("mov {}, global_slot_{}", dest, slot.index())
+            }
         }
     }
 }
@@ -727,11 +740,9 @@ impl InstInfo {
 impl VSymbol {
     pub fn to_asm(&self, ctx: &AsmContext) -> String {
         match *self {
-            VSymbol::Global(global) => match global {
-                Global::Func(func) => format!("func_{}", func.index()),
-                Global::Extern(ext) => ctx.prog.get_ext(ext).name.clone(),
-                Global::Data(data) => format!("data_{}", data.index()),
-            }
+            VSymbol::Func(func) => format!("func_{}", func.index()),
+            VSymbol::Extern(ext) => ctx.prog.get_ext(ext).name.clone(),
+            VSymbol::Data(data) => format!("data_{}", data.index()),
             VSymbol::Block(block) => format!("block_{}", block.index()),
             VSymbol::Label(index) => format!("label_{}", index),
         }

@@ -7,7 +7,7 @@ use regalloc2 as r2;
 use crate::back::layout::TupleLayout;
 use crate::back::register::RSize;
 use crate::back::vcode::{VConst, VInstruction, VMem, VopRC, VopRCM, VopRM, VSymbol, VTarget};
-use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Expression, ExpressionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Signed, StackSlot, Target, Terminator, Type, TypeInfo, Value};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 
 #[derive(Default)]
@@ -327,8 +327,11 @@ impl Selector<'_> {
                 Immediate::Undef(_) => VopRCM::Undef,
                 Immediate::Const(cst) => VConst::Const(cst.value).into(),
             },
-            Value::Global(value) => {
-                VConst::Symbol(VSymbol::Global(value)).into()
+            Value::Global(value) => match value {
+                Global::Func(func) => VConst::Symbol(VSymbol::Func(func)).into(),
+                Global::Extern(ext) => VConst::Symbol(VSymbol::Extern(ext)).into(),
+                Global::Data(data) => VConst::Symbol(VSymbol::Data(data)).into(),
+                Global::GlobalSlot(slot) => VopRCM::GlobalSlot(slot),
             }
             Value::Scoped(value) => match value {
                 Scoped::Slot(slot) => {
@@ -369,7 +372,7 @@ impl Selector<'_> {
             VopRCM::Undef => VopRC::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Const(cst) => cst.into(),
-            VopRCM::Slot(_) | VopRCM::Mem(_) => self.force_reg(value, size).into(),
+            VopRCM::Slot(_) | VopRCM::Mem(_) | VopRCM::GlobalSlot(_) => self.force_reg(value, size).into(),
         }
     }
 
@@ -379,6 +382,7 @@ impl Selector<'_> {
             VopRCM::Undef => VopRM::Undef,
             VopRCM::Reg(reg) => reg.into(),
             VopRCM::Mem(mem) => mem.into(),
+            VopRCM::GlobalSlot(slot) => VopRM::GlobalSlot(slot),
             VopRCM::Slot(_) | VopRCM::Const(_) => self.force_reg(value, size).into(),
         }
     }
@@ -392,6 +396,12 @@ impl Selector<'_> {
                 assert!(size == RSize::FULL);
                 let reg = self.vregs.new_vreg();
                 self.push(VInstruction::SlotPtr(reg, index));
+                reg
+            }
+            VopRCM::GlobalSlot(slot) => {
+                assert!(size == RSize::FULL);
+                let reg = self.vregs.new_vreg();
+                self.push(VInstruction::GlobalSlotPtr(reg, slot));
                 reg
             }
             VopRCM::Mem(_) | VopRCM::Const(_) => {

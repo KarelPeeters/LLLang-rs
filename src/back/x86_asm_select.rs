@@ -155,7 +155,7 @@ pub fn lower_new(prog: &mut Program) -> String {
         };
 
         // actually generate code
-        output.appendln(format_args!("{}:", VSymbol::Global(func.into()).to_asm(&ctx)));
+        output.appendln(format_args!("{}:", VSymbol::Func(func).to_asm(&ctx)));
 
         for &block in &blocks_ordered {
             let block_r2 = symbols.map_block(block);
@@ -265,6 +265,23 @@ impl Output {
         writeln!(f, "{}", self.text)?;
 
         writeln!(f, "section .data")?;
+        for (slot, slot_info) in &prog.nodes.global_slots {
+            let init = slot_info.initial.as_const().unwrap();
+
+            // TODO use proper endianness
+            let num_bytes = (init.value.bits() + 7) / 8;
+            let bytes = &init.value.unsigned().to_le_bytes()[..num_bytes as usize];
+
+            write!(f, "global_slot_{}:\n  db ", slot.index())?;
+            for (i, b) in bytes.iter().enumerate() {
+                if i != 0 { write!(f, ", ")? }
+                write!(f, "{}", b)?;
+            }
+            writeln!(f)?;
+        }
+        writeln!(f)?;
+
+        writeln!(f, "section .rodata")?;
         for (data, data_info) in &prog.nodes.datas {
             write!(f, "data_{}:\n  db ", data.index())?;
             for (i, b) in data_info.bytes.iter().enumerate() {
@@ -273,6 +290,8 @@ impl Output {
             }
             writeln!(f)?;
         }
+        writeln!(f)?;
+
 
         Ok(result)
     }

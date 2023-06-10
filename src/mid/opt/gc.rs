@@ -87,6 +87,7 @@ pub fn gc(prog: &mut Program) -> bool {
     prog.nodes.exprs.retain(|n, _| visited.visited_values.contains(&n.into()));
     prog.nodes.exts.retain(|n, _| visited.visited_values.contains(&n.into()));
     prog.nodes.datas.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.global_slots.retain(|n, _| visited.visited_values.contains(&n.into()));
 
     let after_count = prog.nodes.total_node_count();
 
