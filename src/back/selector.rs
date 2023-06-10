@@ -415,8 +415,7 @@ impl Selector<'_> {
             TypeInfo::Void => panic!("void type not supported"),
             TypeInfo::Integer { bits } => {
                 match bits {
-                    // TODO bool size? when stored 8bits, but when doing other stuff FULL?
-                    1 => RSize::FULL,
+                    1 => RSize::S8,
                     8 => RSize::S8,
                     16 => RSize::S16,
                     32 => RSize::S32,
