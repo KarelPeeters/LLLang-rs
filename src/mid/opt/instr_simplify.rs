@@ -1,5 +1,5 @@
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{ArithmeticOp, Block, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
+use crate::mid::ir::{ArithmeticOp, Block, ComparisonOp, Const, Expression, ExpressionInfo, InstructionInfo, Program, Terminator, Value};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
@@ -118,6 +118,7 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
                 }
             }
 
+            // TODO do this temporarily, check other simplifications, and only then actually add this to the program
             // move constants to the right
             if let Some(commuted) = properties.commuted {
                 if left.is_const() && !right.is_const() {
@@ -131,6 +132,12 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
                 let right = right.as_const().unwrap();
                 let right_neg = Const::new(right.ty, right.value.negate());
                 let new_expr = ExpressionInfo::Arithmetic { kind: ArithmeticOp::Add, ty, left, right: right_neg.into() };
+                return prog.define_expr(new_expr).into();
+            }
+
+            // replace x^true with x==false
+            if kind == ArithmeticOp::Xor && ty == prog.ty_bool() && right.is_const() && !right.is_const_zero() {
+                let new_expr = ExpressionInfo::Comparison { kind: ComparisonOp::Eq, left, right: prog.const_bool(false).into() };
                 return prog.define_expr(new_expr).into();
             }
         }
