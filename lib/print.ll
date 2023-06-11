@@ -4,18 +4,25 @@ const CHAR_NEWLINE: u8 = 10;
 const CHAR_ZERO: u8 = 48;
 const CHAR_MINUS: u8 = 45;
 
-fn println() {
-    print_char(CHAR_NEWLINE);
-}
+static STDOUT: &void = null;
+static STDOUT_INIT: bool = false;
 
 fn print_str(str: &u8, len: u32) -> bool {
-    let stdout = win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
+    if !STDOUT_INIT {
+        STDOUT = win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
+        STDOUT_INIT = true;
+    }
+
     let written;
-    return win32::WriteFile(stdout, str as &void, len, &written, null) != 0;
+    return win32::WriteFile(STDOUT, str as &void, len, &written, null) != 0;
 }
 
 fn print_char(char: u8) {
     print_str(&char, 1);
+}
+
+fn println() {
+    print_char(CHAR_NEWLINE);
 }
 
 fn print_int(x: i64) {
