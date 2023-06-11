@@ -34,7 +34,6 @@ pub fn render(prog: &Program, mut f: impl Write) -> std::io::Result<()> {
 
 struct Renderer<'a, W: Write> {
     prog: &'a Program,
-    use_info: UseInfo,
     marker: ExpressionMarker,
 
     // this is a hack so we don't have to repeat the W bound in every member function
@@ -90,7 +89,7 @@ impl<'a, W: Write> Renderer<'a, W> {
     pub fn new(prog: &'a Program) -> Self {
         let use_info = UseInfo::new(prog);
         let marker = ExpressionMarker::new(prog, &use_info);
-        Self { prog, use_info, marker, ph: PhantomData }
+        Self { prog, marker, ph: PhantomData }
     }
 
     fn render(&self, f: &mut W) -> Result {
@@ -127,36 +126,20 @@ impl<'a, W: Write> Renderer<'a, W> {
     }
 
     fn render_globals(&self, f: &mut W) -> Result {
-        let mut externs = vec![];
-        let mut datas = vec![];
-        let mut slots = vec![];
-
-        for value in self.use_info.values() {
-            match value {
-                Value::Immediate(_) | Value::Scoped(_) | Value::Expr(_) => {}
-                Value::Global(value) => match value {
-                    Global::Func(_) => {}
-                    Global::Extern(value) => externs.push(value),
-                    Global::Data(value) => datas.push(value),
-                    Global::GlobalSlot(value) => slots.push(value),
-                }
-            }
+        if self.prog.nodes.exts.len() != 0 {
+            self.render_externs(f, self.prog.nodes.exts.keys())?;
         }
-
-        if !externs.is_empty() {
-            self.render_externs(f, &externs)?;
+        if self.prog.nodes.datas.len() != 0 {
+            self.render_datas(f, self.prog.nodes.datas.keys())?;
         }
-        if !datas.is_empty() {
-            self.render_data(f, &datas)?;
-        }
-        if !slots.is_empty() {
-            self.render_global_slots(f, &slots)?;
+        if self.prog.nodes.global_slots.len() != 0 {
+            self.render_global_slots(f, self.prog.nodes.global_slots.keys())?;
         }
 
         Ok(())
     }
 
-    fn render_externs(&self, f: &mut W, externs: &[Extern]) -> Result {
+    fn render_externs(&self, f: &mut W, externs: impl Iterator<Item=Extern>) -> Result {
         let prog = self.prog;
 
         let mut rows = String::new();
@@ -164,7 +147,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         write!(r, r#"<tr><td colspan="3"><b>Externs</b></td></tr>"#)?;
 
-        for &ext in externs {
+        for ext in externs {
             let &ExternInfo { ref name, ty } = prog.get_ext(ext);
             write!(
                 r,
@@ -177,7 +160,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
-    fn render_data(&self, f: &mut W, datas: &[Data]) -> Result {
+    fn render_datas(&self, f: &mut W, datas: impl Iterator<Item=Data>) -> Result {
         let prog = self.prog;
 
         let mut rows = String::new();
@@ -185,7 +168,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         write!(r, r#"<tr><td colspan="3"><b>Data</b></td></tr>"#)?;
 
-        for &data in datas {
+        for data in datas {
             let data_info = prog.get_data(data);
             let bytes = &data_info.bytes;
             let limit = 8;
@@ -207,7 +190,7 @@ impl<'a, W: Write> Renderer<'a, W> {
         Ok(())
     }
 
-    fn render_global_slots(&self, f: &mut W, slots: &[GlobalSlot]) -> Result {
+    fn render_global_slots(&self, f: &mut W, slots: impl Iterator<Item=GlobalSlot>) -> Result {
         let prog = self.prog;
 
         let mut rows = String::new();
@@ -215,7 +198,7 @@ impl<'a, W: Write> Renderer<'a, W> {
 
         write!(r, r#"<tr><td colspan="4"><b>Global slots</b></td></tr>"#)?;
 
-        for &slot in slots {
+        for slot in slots {
             let &GlobalSlotInfo { inner_ty, ref debug_name, initial } = prog.get_global_slot(slot);
             write!(
                 r,
