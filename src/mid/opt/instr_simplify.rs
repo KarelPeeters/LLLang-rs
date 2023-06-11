@@ -5,7 +5,7 @@ use crate::mid::util::bit_int::BitInt;
 use crate::mid::util::cast_chain::extract_minimal_cast_chain;
 
 /// Simplify local (mostly single instruction or single expression) patterns.
-/// This also replaced unreachable instructions with a terminator, and removed all following instructions.
+/// This also replaces unreachable instructions with a terminator, and removes all following instructions.
 #[derive(Debug)]
 pub struct InstrSimplifyPass;
 
@@ -81,11 +81,28 @@ fn instr_simplify(prog: &mut Program, use_info: &UseInfo) -> bool {
         block_info.terminator = Terminator::Unreachable;
     }
 
+    let mut term_simplified = 0;
+
+    // simplify terminators
+    for block in use_info.blocks() {
+        // simplify terminator
+        if let &Terminator::Branch { cond, ref true_target, ref false_target } = &prog.get_block(block).terminator {
+            // convert `branch(!c, a, b) => branch(c, b, a)`
+            if let Some(&ExpressionInfo::Comparison { kind, left, right }) = cond.as_expr().map(|expr| prog.get_expr(expr)) {
+                if kind == ComparisonOp::Eq && prog.type_of_value(left) == prog.ty_bool() && right.is_const_zero() {
+                    let new_terminator = Terminator::Branch { cond: left, true_target: false_target.clone(), false_target: true_target.clone() };
+                    prog.get_block_mut(block).terminator = new_terminator;
+                    term_simplified += 1;
+                }
+            }
+        }
+    }
+
     println!(
-        "instr_simplify replaced {} values and deleted {} instructions in {} blocks",
-        count_replaced, instr_deleted, block_unreachable_at.len()
+        "instr_simplify replaced {} values, deleted {} instructions in {} blocks and simplified {} terminators",
+        count_replaced, instr_deleted, block_unreachable_at.len(), term_simplified,
     );
-    count_replaced != 0
+    count_replaced != 0 || instr_deleted != 0 || !block_unreachable_at.is_empty() || term_simplified != 0
 }
 
 fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {

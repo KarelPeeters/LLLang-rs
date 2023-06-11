@@ -92,27 +92,6 @@ impl Replacements {
     }
 
     fn maybe_push_comparison(&mut self, prog: &Program, branch: Branch, kind: ComparisonOp, left: Value, right: Value) {
-        // TODO is all this extra complexity not unnecessary once we have bool expression simplification?
-        if prog.type_of_value(left) == prog.ty_bool() {
-            if let Some(right) = right.as_const().map(|c| c.as_bool().unwrap()) {
-                // comparison to boolean constant, we can add a lot of info from this
-                match kind {
-                    ComparisonOp::Eq => {
-                        self.maybe_push_eq(prog, branch, true, left, prog.const_bool(right).into());
-                        self.maybe_push_eq(prog, branch, false, left, prog.const_bool(!right).into());
-                    }
-                    ComparisonOp::Neq => {
-                        self.maybe_push_eq(prog, branch, true, left, prog.const_bool(!right).into());
-                        self.maybe_push_eq(prog, branch, false, left, prog.const_bool(right).into());
-                    }
-                    _ => {}
-                }
-
-                // we don't need to add the less complete replacements later
-                return;
-            }
-        }
-
         // push replacement resulting from equality comparison
         match kind {
             ComparisonOp::Eq => self.maybe_push_eq(prog, branch, true, left, right),
@@ -125,7 +104,8 @@ impl Replacements {
 // TODO simplify cond, left and right following other replacements?
 //    we can't just do that here, we need to visit blocks in dom order for that
 // TODO think about other expressions
-//    * eq. `a && b => a, b`
+//    * eq. `a && b => a->true && b->true
+//    * eq. `!a => a->false
 // TODO and a more general "knowledge" system (ideally integrated into SCCP)
 //    * make more complicated evals, eg. `a > b => a >= b`
 fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info: &DomInfo) -> usize {
@@ -135,6 +115,8 @@ fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info:
     for &block in dom_info.blocks() {
         if let &Terminator::Branch { cond, ref true_target, ref false_target } = &prog.get_block(block).terminator {
             let branch = Branch { block, true_block: true_target.block, false_block: false_target.block };
+
+            // TODO redesign such that all knowledge coming from "cond == T/F" are expanded within maybe_push_eq
 
             // push immediate condition knowledge
             replacements.maybe_push_eq(prog, branch, true, cond, prog.const_bool(true).into());
