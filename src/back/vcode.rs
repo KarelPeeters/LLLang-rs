@@ -575,7 +575,7 @@ impl VInstruction {
             VInstruction::Jump(ref target) =>
                 format!("jmp {}", VSymbol::Block(target.block).to_asm(ctx)),
             VInstruction::Branch(cond, ref true_target, ref false_target) => {
-                let cond = cond.to_asm(ctx, RSize::FULL);
+                let cond = cond.to_asm(ctx, RSize::S8);
 
                 let mut s = String::new();
                 let f = &mut s;
