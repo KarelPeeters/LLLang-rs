@@ -1116,11 +1116,20 @@ impl<'s> Parser<'s> {
             }
             TT::OpenB => {
                 self.pop()?;
+                // TODO shouldn't many more things call unrestrict?
                 let inner = self.unrestrict(|s| s.expression_boxed())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::Wrapped { inner },
+                })
+            }
+            TT::OpenS => {
+                self.pop()?;
+                let (_, values) = self.list(TT::CloseS, Some(TT::Comma), |s| s.expression())?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::ArrayLiteral { values },
                 })
             }
             TT::Return => {

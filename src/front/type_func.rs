@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 
 use itertools::Itertools;
 
 use crate::front::{ast, cst, error};
 use crate::front::ast::{BinaryOp, DotIndexIndex, LogicalOp};
-use crate::front::cst::{FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
+use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
@@ -283,6 +284,21 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 }
 
                 self.problem.fully_known(self.types, struct_ty)
+            }
+            ast::ExpressionKind::ArrayLiteral { values } => {
+                let inner = self.problem.unknown(expr_origin);
+                let array = self.problem.known(expr_origin, TypeInfo::Array(ArrayTypeInfo {
+                    inner,
+                    length: values.len().try_into().unwrap(),
+                }));
+
+                // ensure inner types match
+                for value in values {
+                    let actual_inner = self.visit_expr(scope, value)?;
+                    self.problem.equal(inner, actual_inner);
+                }
+
+                array
             }
             ast::ExpressionKind::BlackBox { value } => {
                 match value {

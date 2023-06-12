@@ -10,8 +10,8 @@ use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::{Const, Signed};
-use crate::mid::util::bit_int::BitInt;
+use crate::mid::ir::{Signed};
+use crate::mid::util::bit_int::{BitInt, UStorage};
 
 /// The state necessary to lower a single function.
 pub struct LowerFuncState<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> {
@@ -121,6 +121,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     }
 
     fn fixed_debug_name(&self, name: &str) -> String {
+        // TODO add index to deduplicate debug names
         format!("{}.[{}]", self.func_debug_name, name)
     }
 
@@ -182,7 +183,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
             kind: ir::ArithmeticOp::Xor,
             ty: ty_ir,
             left: value,
-            right: Const::new(ty_ir, ones).into(),
+            right: ir::Const::new(ty_ir, ones).into(),
         }).into()
     }
 
@@ -612,6 +613,34 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
 
                 let result_value = self.append_load(after_stores.block, slot.into(), struct_ty_ir);
                 (after_stores, LRValue::Right(TypedValue { ty: struct_ty, ir: result_value }))
+            }
+            ast::ExpressionKind::ArrayLiteral { values } => {
+                let array_ty = self.expr_type(expr);
+                let array_ty_ir = self.types.map_type(self.prog, array_ty);
+
+                let slot = self.define_slot(array_ty_ir, self.fixed_debug_name("array_lit"));
+
+                let after_stores = values.iter().enumerate().try_fold(flow, |flow, (i, value)| {
+                    let (after_value, value) = self.append_expr_loaded(flow, scope, value)?;
+
+                    let i_ustorage: UStorage = i.try_into().unwrap();
+                    let i_bit_int = BitInt::from_unsigned(self.prog.ptr_size_bits(), i_ustorage).unwrap();
+                    let i_const = ir::Const::new(self.prog.ty_isize(), i_bit_int);
+
+                    let value_ptr = self.prog.define_expr(ir::ExpressionInfo::PointerOffSet {
+                        ty: array_ty_ir,
+                        base: slot.into(),
+                        index: i_const.into(),
+                    }).into();
+
+                    self.append_store(after_value.block, value_ptr, value.ir);
+
+                    Ok(after_value)
+                })?;
+
+                // we could return an lvalue here, but that doesn't make sense from the language POV
+                let load = self.append_load(after_stores.block, slot.into(), array_ty_ir);
+                (after_stores, LRValue::Right(TypedValue { ty: array_ty, ir: load.into() }))
             }
             ast::ExpressionKind::BlackBox { value } => {
                 let (flow_after, value) = match value {

@@ -275,6 +275,9 @@ pub enum ExpressionKind {
         struct_path: Path,
         fields: Vec<(Identifier, Expression)>,
     },
+    ArrayLiteral {
+        values: Vec<Expression>,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
