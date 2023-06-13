@@ -1,20 +1,14 @@
 use win32;
+use io::get_stdout;
 
 const CHAR_NEWLINE: u8 = 10;
 const CHAR_ZERO: u8 = 48;
 const CHAR_MINUS: u8 = 45;
 
-static STDOUT: &void = null;
-static STDOUT_INIT: bool = false;
-
 fn print_str(str: &u8, len: u32) -> bool {
-    if !STDOUT_INIT {
-        STDOUT = win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
-        STDOUT_INIT = true;
-    }
-
+    let stdout = get_stdout();
     let written;
-    return win32::WriteFile(STDOUT, str as &void, len, &written, null) != 0;
+    return win32::WriteFile(stdout, str as &void, len, &written, null) != 0;
 }
 
 fn print_char(char: u8) {

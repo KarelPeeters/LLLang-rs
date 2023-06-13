@@ -78,6 +78,14 @@ extern fn WriteFile(
     lpOverlapped: &void, // TODO define the proper struct for this
 ) -> BOOL;
 
+extern fn ReadFile(
+    hFile: HANDLE,
+    lpBuffer: LPVOID,
+    nNumberOfBytesToRead: DWORD,
+    lpNumberOfBytesRead: LPDWORD,
+    lpOverlapped: &void, // TODO define the proper struct for this
+) -> BOOL;
+
 // processthreadsapi.h
 const CREATE_SUSPENDED: DWORD = 0x00000004;
 
