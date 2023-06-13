@@ -106,11 +106,36 @@ impl UseInfo {
         self[block].iter().all(|usage| matches!(usage, BlockUsage::FuncEntry { .. }))
     }
 
-    pub fn value_only_used_as_load_store_addr(&self, prog: &Program, value: Value, expected_ty: Option<Type>) -> bool {
+    pub fn value_only_used_as_load_store_addr(&self, prog: &Program, value: Value, expected_ty: Option<Type>, filter: impl Fn(InstructionPos) -> bool) -> bool {
         self[value].iter().all(|usage| {
-            match usage.is_load_store_addr_get_ty(prog) {
-                None => false,
-                Some(ty) => expected_ty.map_or(true, |expected_ty| ty == expected_ty),
+            match usage {
+                &Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => {
+                    let ty = unwrap_match!(prog.get_instr(pos.instr), &InstructionInfo::Load { ty, .. } | &InstructionInfo::Store { ty, .. } => ty);
+
+                    if filter(pos) {
+                        // if expected_ty is None, we don't care about the type
+                        expected_ty.map_or(true, |expected_ty| ty == expected_ty)
+                    } else {
+                        // instructions that have been filtered away are always acceptable
+                        true
+                    }
+                }
+                _ => false,
+            }
+        })
+    }
+
+    pub fn value_only_used_as_store_addr(&self, value: Value, filter: impl Fn(InstructionPos) -> bool) -> bool {
+        self[value].iter().all(|usage| {
+            match usage {
+                &Usage::InstrOperand { pos, usage } => {
+                    if filter(pos) {
+                        matches!(usage, InstrOperand::StoreAddr)
+                    } else {
+                        true
+                    }
+                }
+                _ => false,
             }
         })
     }

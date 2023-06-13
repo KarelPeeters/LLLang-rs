@@ -413,7 +413,7 @@ impl<'p, 'u> State<'p, 'u> {
                 }
             }
 
-            return start_value
+            return start_value;
         }
 
         // if we've reached the func entry the value depends on the origin
@@ -423,7 +423,7 @@ impl<'p, 'u> State<'p, 'u> {
                 Origin::FuncSlot(_) => return Lattice::Undef,
                 Origin::Unknown | Origin::GlobalSlot(_) | Origin::FuncExternal => {
                     // fallthrough, we might still have a matching load
-                },
+                }
             };
         }
 
@@ -494,13 +494,12 @@ impl<'p, 'u> State<'p, 'u> {
 
                 // TODO have some general side-effect property checker for functions
                 InstructionInfo::Call { .. } => {
-
                     let origin = pointer_origin(self.prog, self.func, loc.ptr);
                     let call_could_interact = match origin {
                         Origin::FuncSlot(Some(slot)) =>
-                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None),
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None, |_| true),
                         Origin::GlobalSlot(Some(slot)) =>
-                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None),
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None, |_| true),
 
                         Origin::Undef => false,
                         Origin::GlobalSlot(None) | Origin::FuncSlot(None) => true,
@@ -775,10 +774,10 @@ fn origins_can_alias(prog: &Program, use_info: &UseInfo, left: Origin, right: Or
 
         // slots that don't escape can only alias themselves, which was already covered
         (Origin::FuncSlot(Some(slot)), _) | (_, Origin::FuncSlot(Some(slot))) => {
-            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None)
+            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None, |_| true)
         }
         (Origin::GlobalSlot(Some(slot)), _) | (_, Origin::GlobalSlot(Some(slot))) => {
-            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None)
+            use_info.value_only_used_as_load_store_addr(prog, slot.into(), None, |_| true)
         }
 
         (Origin::FuncExternal | Origin::GlobalSlot(_), Origin::FuncSlot(_)) => false,

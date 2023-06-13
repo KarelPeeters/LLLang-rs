@@ -55,7 +55,7 @@ fn slot_to_param_func(prog: &mut Program, func: Function, use_info: &UseInfo, do
     // figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
         let inner_ty = prog.get_slot(slot).inner_ty;
-        use_info.value_only_used_as_load_store_addr(prog, slot.into(), Some(inner_ty))
+        use_info.value_only_used_as_load_store_addr(prog, slot.into(), Some(inner_ty), |_| true)
     }).collect();
 
     // create all block params

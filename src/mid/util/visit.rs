@@ -8,8 +8,8 @@ pub trait Visitor {
     fn visit_block(&mut self, state: &mut VisitState, block: Block);
 }
 
-pub struct VisitState<'a> {
-    pub prog: &'a Program,
+pub struct VisitState<'p> {
+    pub prog: &'p Program,
 
     visited_blocks: HashSet<Block>,
     visited_values: HashSet<Value>,
@@ -23,8 +23,8 @@ pub struct VisitedResult {
     pub visited_values: HashSet<Value>,
 }
 
-impl<'a> VisitState<'a> {
-    pub fn new(prog: &'a Program) -> Self {
+impl<'p> VisitState<'p> {
+    pub fn new(prog: &'p Program) -> Self {
         Self {
             prog,
             visited_blocks: Default::default(),
@@ -85,8 +85,8 @@ impl<'a> VisitState<'a> {
         }
     }
 
-    pub fn has_visited_value(&self, value: impl Into<Value>) -> bool {
-        self.visited_values.contains(&value.into())
+    pub fn has_visited_value(&self, value: Value) -> bool {
+        self.visited_values.contains(&value)
     }
 
     pub fn has_visited_block(&self, block: Block) -> bool {

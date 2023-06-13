@@ -35,6 +35,7 @@ impl ProgramPass for DcePass {
     }
 
     fn is_idempotent(&self) -> bool {
+        // TODO following GC should not do anything, can we mark that and skip it?
         true
     }
 }
@@ -117,15 +118,22 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         match value {
-            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_) | Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_)) => {
-                // no additional handling (beyond marking them as used, which already happens in add_value)
+            Value::Global(Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_)) => {
+                // mark stores to slot in alive blocks as used
+                for usage in &self.use_info[value] {
+                    if let &Usage::InstrOperand { pos, usage: InstrOperand::StoreAddr } = usage {
+                        if state.has_visited_block(pos.block) {
+                            self.add_value(state, pos.instr);
+                        }
+                    }
+                }
             }
             Value::Global(Global::Func(func)) => {
                 // slots and func params (really block params) are tracked separately
                 let &FunctionInfo {
                     entry, slots: _,
                     ty: _, func_ty: _, debug_name: _
-                } = state.prog.get_func(func);
+                } = prog.get_func(func);
 
                 state.add_block(entry);
             }
@@ -156,17 +164,23 @@ impl Visitor for DceVisitor<'_> {
             Value::Scoped(Scoped::Instr(instr)) => {
                 let instr_info = prog.get_instr(instr);
 
-                match instr_info {
-                    &InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args, conv: _ } => {
+                match *instr_info {
+                    InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args, conv: _ } => {
                         // value used as call target, so we don't need to mark all of the args as used
                         self.add_value_target(state, func);
 
                         // mark args that correspond to used params as used
                         for (i, &arg) in args.iter().enumerate() {
                             let param = prog.get_block(prog.get_func(func).entry).params[i];
-                            if state.has_visited_value(param) {
+                            if state.has_visited_value(param.into()) {
                                 self.add_value(state, arg);
                             }
+                        }
+                    }
+                    InstructionInfo::Load { addr, ty: _ } => {
+                        // mark the slot stored to as used
+                        if matches!(addr, Value::Global(Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_))) {
+                            self.add_value(state, addr);
                         }
                     }
                     _ => {
@@ -187,18 +201,19 @@ impl Visitor for DceVisitor<'_> {
                     self.add_value(state, operand);
                 });
             }
+            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) => {
+                // no additional handling (beyond marking them as used, which already happens in add_value)
+            }
         }
     }
 
     fn visit_block(&mut self, state: &mut VisitState, block: Block) {
-        let prog = state.prog;
-
         // block params are tracked separately
         let BlockInfo { params: _, instructions, terminator, debug_name: _ } = state.prog.get_block(block);
 
         // mark side effect instructions as used
         for &instr in instructions {
-            if instr_has_side_effect(prog, instr) {
+            if instr_has_side_effect(self.use_info, state, instr) {
                 self.add_value(state, instr);
             }
         }
@@ -276,13 +291,38 @@ fn find_param_pos(prog: &Program, param: &Parameter) -> (Function, Block, usize)
     }).unwrap()
 }
 
-fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
-    match prog.get_instr(instr) {
+fn instr_has_side_effect(use_info: &UseInfo, state: &VisitState, instr: Instruction) -> bool {
+    let prog = state.prog;
+
+    match *prog.get_instr(instr) {
         InstructionInfo::Load { addr: _, ty: _ } => false,
-        InstructionInfo::Store { addr: _, ty, value: _ } => *ty != prog.ty_void(),
+        InstructionInfo::Store { addr, ty, value: _ } => {
+            if ty == prog.ty_void() {
+                // void stores are always side-effect free
+                false
+            } else {
+                match addr {
+                    // stores into slots that are never read are side-effect free
+                    Value::Global(Global::GlobalSlot(slot)) =>
+                        !value_only_used_as_store_addr(use_info, state, slot.into()),
+                    Value::Scoped(Scoped::Slot(slot)) =>
+                        !value_only_used_as_store_addr(use_info, state, slot.into()),
+
+                    // in general stores have side effects
+                    _ => true,
+                }
+            }
+        }
         InstructionInfo::Call { target: _, args: _, conv: _ } => true,
         InstructionInfo::BlackBox { value: _ } => true,
     }
+}
+
+fn value_only_used_as_store_addr(use_info: &UseInfo, state: &VisitState, value: Value) -> bool {
+    use_info.value_only_used_as_store_addr(value, |pos| {
+        // only consider instructions that have been marked as having side effects
+        state.has_visited_value(pos.instr.into())
+    })
 }
 
 #[derive(Debug, Default)]
