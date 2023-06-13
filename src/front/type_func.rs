@@ -300,11 +300,15 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 array
             }
-            ast::ExpressionKind::BlackBox { value } => {
-                match value {
-                    Some(value) =>self.visit_expr(scope, value)?,
-                    None => self.problem.ty_void(),
-                }
+            ast::ExpressionKind::Obscure { value } => {
+                self.visit_expr(scope, value)?
+            }
+            ast::ExpressionKind::BlackHole { value } => {
+                let _ = self.visit_expr(scope, value)?;
+                self.problem.ty_void()
+            }
+            ast::ExpressionKind::MemBarrier => {
+                self.problem.ty_void()
             }
             ast::ExpressionKind::Unreachable => {
                 // TODO use never type once that exists

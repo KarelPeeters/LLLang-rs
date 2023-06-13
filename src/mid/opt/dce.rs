@@ -314,7 +314,8 @@ fn instr_has_side_effect(use_info: &UseInfo, state: &VisitState, instr: Instruct
             }
         }
         InstructionInfo::Call { target: _, args: _, conv: _ } => true,
-        InstructionInfo::BlackBox { value: _ } => true,
+        InstructionInfo::BlackHole { value: _ } => true,
+        InstructionInfo::MemBarrier => true,
     }
 }
 

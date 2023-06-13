@@ -31,7 +31,7 @@ pub enum InstrOperand {
     CallTarget,
     CallArgument(usize),
 
-    BlackBoxValue,
+    BlackHoleValue,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -44,6 +44,7 @@ pub enum ExprOperand {
     PointerOffSetIndex,
 
     CastValue,
+    ObscureValue,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -168,9 +169,10 @@ impl InternalIterator for OperandIterator<&InstructionInfo> {
                     f((arg, InstrOperand::CallArgument(index)))?;
                 }
             }
-            InstructionInfo::BlackBox { value } => {
-                f((value, InstrOperand::BlackBoxValue))?;
+            InstructionInfo::BlackHole { value } => {
+                f((value, InstrOperand::BlackHoleValue))?;
             }
+            InstructionInfo::MemBarrier => {},
         }
         ControlFlow::Continue(())
     }
@@ -195,6 +197,9 @@ impl InternalIterator for OperandIterator<&ExpressionInfo> {
             }
             ExpressionInfo::Cast { ty: _, kind: _, value } => {
                 f((value, ExprOperand::CastValue))?;
+            }
+            ExpressionInfo::Obscure { ty: _, value } => {
+                f((value, ExprOperand::ObscureValue))?;
             }
         }
         ControlFlow::Continue(())

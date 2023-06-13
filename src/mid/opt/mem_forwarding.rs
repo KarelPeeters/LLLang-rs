@@ -281,7 +281,8 @@ fn compute_liveness_by_instructions(prog: &Program, use_info: &UseInfo, func: Fu
             // these could have side effects, we have to assume live
             // TODO we can do better for calls
             InstructionInfo::Call { .. } => return Some(Liveness::MaybeLive),
-            InstructionInfo::BlackBox { .. } => return Some(Liveness::MaybeLive),
+            InstructionInfo::BlackHole { .. } => return Some(Liveness::MaybeLive),
+            InstructionInfo::MemBarrier { .. } => return Some(Liveness::MaybeLive),
         }
     }
 
@@ -511,7 +512,7 @@ impl<'p, 'u> State<'p, 'u> {
                         break;
                     }
                 }
-                InstructionInfo::BlackBox { .. } => {
+                InstructionInfo::MemBarrier | InstructionInfo::BlackHole { ..} => {
                     // TODO we pretend we also write to non-leaked pointers, maybe that's too strong?
                     clobbered = true;
                     break;
@@ -740,10 +741,9 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
             Scoped::Slot(slot) => Origin::FuncSlot(Some(slot)),
             Scoped::Instr(instr) => match prog.get_instr(instr) {
                 InstructionInfo::Load { .. } => Origin::Unknown,
-                InstructionInfo::Store { .. } =>
-                    unreachable!("Instruction cannot return pointer type: {:?}", instr),
                 InstructionInfo::Call { .. } => Origin::Unknown,
-                InstructionInfo::BlackBox { .. } => Origin::Unknown,
+                InstructionInfo::Store { .. } | InstructionInfo::BlackHole { .. } | InstructionInfo::MemBarrier =>
+                    unreachable!("Instruction cannot return pointer type: {:?}", instr),
             }
         },
         Value::Expr(expr) => match prog.get_expr(expr) {
@@ -753,6 +753,7 @@ fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
             &ExpressionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, func, base),
             // TODO when we add ptr/int casts maybe we can look through them?
             ExpressionInfo::Cast { .. } => Origin::Unknown,
+            ExpressionInfo::Obscure { .. } => Origin::Unknown,
         }
     }
 }

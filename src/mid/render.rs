@@ -417,8 +417,10 @@ impl<'a, W: Write> Renderer<'a, W> {
                 let args = args.iter().map(|&arg| self.value_to_str(arg)).join(", ");
                 format!("call {:?} {} ( {} )", conv, self.value_to_str(target), args)
             }
-            InstructionInfo::BlackBox { value } =>
-                format!("blackbox {}", self.value_to_str(value)),
+            InstructionInfo::BlackHole { value } =>
+                format!("blackhole {}", self.value_to_str(value)),
+            InstructionInfo::MemBarrier =>
+                format!("membarrier"),
         }
     }
 
@@ -440,6 +442,8 @@ impl<'a, W: Write> Renderer<'a, W> {
                 vec![format!("PointerOffSet"), v(base), v(index), t(ty)],
             ExpressionInfo::Cast { ty: _, kind, value } =>
                 vec![short_cast_kind(kind).to_string(), v(value)],
+            ExpressionInfo::Obscure {  ty: _, value} =>
+                vec![format!("Obscure"), v(value)],
         }
     }
 

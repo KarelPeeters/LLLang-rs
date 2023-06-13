@@ -226,11 +226,16 @@ pub enum ExpressionKind {
         target: Box<Expression>,
         args: Vec<Expression>,
     },
+
     // TODO think about a general way to represent intrinsics
     // TODO replace this with a generic lib function that then calls the intrinsic
-    BlackBox {
-        value: Option<Box<Expression>>,
+    Obscure {
+        value: Box<Expression>,
     },
+    BlackHole {
+        value: Box<Expression>,
+    },
+    MemBarrier,
     Unreachable,
 
     ArrayIndex {

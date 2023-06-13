@@ -331,8 +331,8 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(instr, InstructionInfo::Call { target, .. } => target),
                 InstrOperand::CallArgument(index) =>
                     repl_unwrap!(instr, InstructionInfo::Call { args, .. } => &mut args[index]),
-                InstrOperand::BlackBoxValue =>
-                    repl_unwrap!(instr, InstructionInfo::BlackBox { value, .. } => value),
+                InstrOperand::BlackHoleValue =>
+                    repl_unwrap!(instr, InstructionInfo::BlackHole { value, .. } => value),
             }
         }
         Usage::ExprOperand { expr, usage } => {
@@ -350,6 +350,8 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(expr, ExpressionInfo::PointerOffSet { index, .. } => index),
                 ExprOperand::CastValue =>
                     repl_unwrap!(expr, ExpressionInfo::Cast { value, .. } => value),
+                ExprOperand::ObscureValue =>
+                    repl_unwrap!(expr, ExpressionInfo::Obscure { value, .. } => value),
             }
         }
         Usage::TermOperand { pos, usage } => {

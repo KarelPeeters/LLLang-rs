@@ -92,8 +92,11 @@ declare_tokens![
     As("as"),
     Break("break"),
     Continue("continue"),
-    BlackBox("__blackbox"),
-    Unreachable("__unreachable"),
+
+    IntrinsicObscure("__obscure"),
+    IntrinsicBlackHole("__blackhole"),
+    IntrinsicMemBarrier("__membarrier"),
+    IntrinsicUnreachable("__unreachable"),
 
     Underscore("_"),
     Arrow("->"),
@@ -1159,27 +1162,41 @@ impl<'s> Parser<'s> {
                     kind: ast::ExpressionKind::Break,
                 })
             }
-            TT::BlackBox => {
+            TT::IntrinsicObscure => {
                 self.pop()?;
-                self.expect(TT::OpenB, "blackbox start")?;
-
-                let value = if self.accept(TT::CloseB)?.is_some() {
-                    None
-                } else {
-                    let value = self.expression_boxed()?;
-                    self.expect(TT::CloseB, "blackbox end")?;
-                    Some(value)
-                };
+                self.expect(TT::OpenB, "__obscure start")?;
+                let value = self.expression_boxed()?;
+                self.expect(TT::CloseB, "__obscure end")?;
 
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
-                    kind: ast::ExpressionKind::BlackBox { value },
+                    kind: ast::ExpressionKind::Obscure { value },
                 })
             }
-            TT::Unreachable => {
+            TT::IntrinsicBlackHole => {
                 self.pop()?;
-                self.expect(TT::OpenB, "unreachable start")?;
-                self.expect(TT::CloseB, "unreachable end")?;
+                self.expect(TT::OpenB, "__blackhole start")?;
+                let value = self.expression_boxed()?;
+                self.expect(TT::CloseB, "__blackhole end")?;
+
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::BlackHole { value },
+                })
+            }
+            TT::IntrinsicMemBarrier => {
+                self.pop()?;
+                self.expect(TT::OpenB, "__membarrier start")?;
+                self.expect(TT::CloseB, "__membarrier end")?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::MemBarrier,
+                })
+            }
+            TT::IntrinsicUnreachable => {
+                self.pop()?;
+                self.expect(TT::OpenB, "__unreachable start")?;
+                self.expect(TT::CloseB, "__unreachable end")?;
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::Unreachable,

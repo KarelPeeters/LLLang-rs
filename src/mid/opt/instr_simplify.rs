@@ -52,7 +52,10 @@ fn instr_simplify(prog: &mut Program, use_info: &UseInfo) -> bool {
                 InstructionInfo::Call { target, args: _, conv: _ } => {
                     unreachable = target.is_const_zero() || target.is_undef();
                 }
-                InstructionInfo::BlackBox { .. } => {}
+                // TODO remove consecutive black holes with undef/const/void param
+                // TODO remove consecutive black holes with same param and consecutive mem barriers
+                InstructionInfo::BlackHole { .. } => {}
+                InstructionInfo::MemBarrier => {}
             };
 
             if unreachable {
@@ -190,6 +193,8 @@ fn simplify_expression(prog: &mut Program, expr: Expression) -> Value {
                 return base;
             }
         }
+        // we can't do anything about this
+        ExpressionInfo::Obscure { .. } => {},
     }
 
     expr.into()

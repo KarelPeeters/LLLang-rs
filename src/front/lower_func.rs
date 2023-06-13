@@ -117,7 +117,7 @@ struct Flow {
 
 impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'ast, 'cst, 'ts, F> {
     fn expr_type(&self, expr: &ast::Expression) -> cst::Type {
-        self.type_solution[*self.expr_type_map.get(&(expr as *const _)).unwrap()]
+        self.type_solution[*self.expr_type_map.get(&(expr as *const _)).unwrap_or_else(|| panic!("Missing type for expr {:?}", expr))]
     }
 
     fn fixed_debug_name(&self, name: &str) -> String {
@@ -642,18 +642,22 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 let load = self.append_load(after_stores.block, slot.into(), array_ty_ir);
                 (after_stores, LRValue::Right(TypedValue { ty: array_ty, ir: load.into() }))
             }
-            ast::ExpressionKind::BlackBox { value } => {
-                let (flow_after, value) = match value {
-                    Some(value) => {
-                        self.append_expr_loaded(flow, scope, value)?
-                    }
-                    None => {
-                        (flow, self.void_value())
-                    }
-                };
+            ast::ExpressionKind::Obscure { value } => {
+                let (flow_after, value) = self.append_expr_loaded(flow, scope, value)?;
 
-                let black_box = self.append_instr(flow_after.block, ir::InstructionInfo::BlackBox { value: value.ir });
-                (flow_after, LRValue::Right(TypedValue { ty: value.ty, ir: black_box.into() }))
+                let ty_ir = self.types.map_type(self.prog, value.ty);
+                let obscure = self.prog.define_expr(ir::ExpressionInfo::Obscure { ty: ty_ir, value: value.ir });
+
+                (flow_after, LRValue::Right(TypedValue { ty: value.ty, ir: obscure.into() }))
+            }
+            ast::ExpressionKind::BlackHole { value } => {
+                let (flow_after, value) = self.append_expr_loaded(flow, scope, value)?;
+                self.append_instr(flow_after.block, ir::InstructionInfo::BlackHole { value: value.ir });
+                (flow_after, LRValue::Right(self.void_value()))
+            }
+            ast::ExpressionKind::MemBarrier => {
+                self.append_instr(flow.block, ir::InstructionInfo::MemBarrier);
+                (flow, LRValue::Right(self.void_value()))
             }
             ast::ExpressionKind::Unreachable => {
                 self.prog.get_block_mut(flow.block).terminator = ir::Terminator::Unreachable;

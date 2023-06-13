@@ -94,7 +94,7 @@ pub fn verify(prog: &Program) -> Result {
             return Err(VerifyError::WrongDeclParamCount(func, ts(func_info.ty), func_entry.params.len()));
         }
         for (&param_ty, &param) in zip(&func_info.func_ty.params, &func_entry.params) {
-            ensure_type_match(prog, func_pos, param_ty, prog.type_of_value(param.into()))?;
+            ensure_type_match(prog, func_pos, param_ty, Value::from(param))?;
         }
 
         for &block in dom_info.blocks() {
@@ -256,11 +256,11 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
 
     match instr_info {
         &InstructionInfo::Load { addr, ty: _ } => {
-            ensure_type_match(prog, pos, prog.type_of_value(addr), prog.ty_ptr())?;
+            ensure_type_match(prog, pos, addr, prog.ty_ptr())?;
         }
         &InstructionInfo::Store { addr, ty, value } => {
-            ensure_type_match(prog, pos, prog.type_of_value(addr), prog.ty_ptr())?;
-            ensure_type_match(prog, pos, prog.type_of_value(value), ty)?;
+            ensure_type_match(prog, pos, addr, prog.ty_ptr())?;
+            ensure_type_match(prog, pos, value, ty)?;
         }
         &InstructionInfo::Call { target, ref args, conv } => {
             let target_ty = prog.type_of_value(target);
@@ -272,14 +272,15 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
             }
 
             for (&param, &arg) in zip(&target_func_ty.params, args) {
-                ensure_type_match(prog, pos, param, prog.type_of_value(arg))?;
+                ensure_type_match(prog, pos, param, arg)?;
             }
 
             if conv != target_func_ty.conv {
                 return Err(VerifyError::WrongCallingConvention(target, target_func_ty.conv, pos, conv));
             }
         }
-        InstructionInfo::BlackBox { value: _ } => {}
+        InstructionInfo::BlackHole { value: _ } => {}
+        InstructionInfo::MemBarrier => {}
     }
 
     Ok(())
@@ -301,7 +302,7 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
             ensure_matching_int_values(prog, pos, left, right)?;
         }
         ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } => {
-            ensure_type_match(prog, pos, prog.type_of_value(base), prog.ty_ptr())?;
+            ensure_type_match(prog, pos, base, prog.ty_ptr())?;
 
             match prog.get_type(tuple_ty).unwrap_tuple() {
                 None => return Err(VerifyError::ExpectedTupleType(pos, ts(tuple_ty))),
@@ -313,12 +314,15 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
             }
         }
         ExpressionInfo::PointerOffSet { ty: _, base, index } => {
-            ensure_type_match(prog, pos, prog.type_of_value(base), prog.ty_ptr())?;
-            ensure_type_match(prog, pos, prog.type_of_value(index), prog.ty_isize())?;
+            ensure_type_match(prog, pos, base, prog.ty_ptr())?;
+            ensure_type_match(prog, pos, index, prog.ty_isize())?;
         }
         ExpressionInfo::Cast { ty, kind: _, value } => {
             ensure_int_value(prog, pos, value)?;
             ensure_int_type(prog, pos, ty, None)?;
+        }
+        ExpressionInfo::Obscure {ty, value} => {
+            ensure_type_match(prog, pos, ty, value)?;
         }
     }
 
@@ -407,7 +411,7 @@ fn ensure_type_match(prog: &Program, pos: impl Into<Position>, left: impl Into<T
 fn ensure_matching_int_values(prog: &Program, pos: impl Into<Position>, left: Value, right: Value) -> Result<u32> {
     let pos = pos.into();
     let bits = ensure_int_value(prog, pos, left)?;
-    ensure_type_match(prog, pos, prog.type_of_value(left), prog.type_of_value(right))?;
+    ensure_type_match(prog, pos, left, right)?;
     Ok(bits)
 }
 

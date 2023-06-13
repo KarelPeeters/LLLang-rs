@@ -127,7 +127,7 @@ impl Selector<'_> {
                 let result = self.vregs.map_instr(instr);
                 self.push(VInstruction::Call(result, target, args));
             }
-            InstructionInfo::BlackBox { value } => {
+            InstructionInfo::BlackHole { value } => {
                 // TODO maybe push dummy blackbox instruction that ends up as a comment in asm?
                 if self.prog.type_of_value(value) == self.prog.ty_void() {
                     // don't do anything
@@ -137,6 +137,9 @@ impl Selector<'_> {
                     let result = self.vregs.map_instr(instr);
                     self.push(VInstruction::MovReg(size, result, value.into()))
                 }
+            }
+            InstructionInfo::MemBarrier => {
+                // don't do anything
             }
         }
     }
@@ -318,6 +321,10 @@ impl Selector<'_> {
                         after
                     }
                 }
+            }
+            ExpressionInfo::Obscure { ty: _, value } => {
+                // this already goes through a vreg, no need to force it even more
+                self.append_value_to_reg(value)
             }
         };
 

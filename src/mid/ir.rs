@@ -104,7 +104,7 @@ impl Program {
             ty_ptr,
             ty_bool,
             ty_isize,
-            root_functions: Default::default()
+            root_functions: Default::default(),
         }
     }
 
@@ -339,7 +339,6 @@ pub struct GlobalSlotInfo {
     pub initial: Value,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct BlockInfo {
     pub params: Vec<Parameter>,
@@ -370,21 +369,39 @@ pub enum InstructionInfo {
 
     /// Store `value` into `addr`.
     ///
-    /// `Store { addr: &, ty=T, value: T } -> void`
+    /// signature: `Store { addr: &, ty=T, value: T } -> void`
     // TODO remove the ty field here?
     Store { addr: Value, ty: Type, value: Value },
 
     /// Call `target` with arguments `args`.
     ///
-    /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
+    /// signature: `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
     // TODO add an expression variant of call that can't have have any side effects 
     Call { target: Value, args: Vec<Value>, conv: CallingConvention },
 
-    /// Return `value` as-is.
-    /// Optimizations should assume that:
-    /// * the operand value is actually used some some side-effect purpose
-    /// * the returned value is not known at compile time.
-    BlackBox { value: Value },
+    /// A no-op instruction returning void.
+    ///
+    /// Optimizations should assume that passed value may be used in some arbitrary way, including:
+    /// * being observed
+    /// * escaping
+    /// * if it's a pointer, being read/written to/from
+    ///
+    /// This instruction does not imply writes or reads from any other memory, use [InstructionInfo::MemBarrier] for that.
+    ///
+    /// signature: `BlackHole { value: T } -> void`
+    BlackHole { value: Value },
+
+    // TODO *any* memory location or only leaked ones?
+    // TODO are blackhole(void) and membarrier not just the same thing?
+    /// A no-op instruction.
+    ///
+    /// Optimizations should assume that any arbitrary memory location could be read
+    /// or written to by this instruction.
+    ///
+    /// signature: `Barrier { } -> void`
+    MemBarrier,
+
+    // TODO add assert instruction that can provide information to the optimizer?
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -421,6 +438,14 @@ pub enum ExpressionInfo {
     ///
     /// `Cast { after_ty: B, before_value: A } -> B`
     Cast { ty: Type, kind: CastKind, value: Value },
+
+    /// Return `value` as-is.
+    ///
+    /// Optimizations should assume that the returned value is not known at compile time.
+    /// This expression does not imply that value is used in any way, see [InstructionInfo::BlackHole] for that.
+    ///
+    /// `Obscure { value: T } -> T`
+    Obscure { ty: Type, value: Value },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -530,6 +555,7 @@ impl ExpressionInfo {
             ExpressionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             ExpressionInfo::PointerOffSet { .. } => prog.ty_ptr,
             ExpressionInfo::Cast { ty, .. } => ty,
+            ExpressionInfo::Obscure { ty, .. } => ty,
         }
     }
 
@@ -553,6 +579,9 @@ impl ExpressionInfo {
             ExpressionInfo::Cast { ty: _, kind: _, value } => {
                 *value = f(*value);
             }
+            ExpressionInfo::Obscure { ty: _, value } => {
+                *value = f(*value);
+            }
         }
     }
 }
@@ -564,11 +593,13 @@ impl InstructionInfo {
             InstructionInfo::Load { ty, .. } => ty,
             InstructionInfo::Store { .. } => prog.ty_void(),
             InstructionInfo::Call { target, .. } => {
+                // TODO cache return type in call instruction?
                 prog.get_type(prog.type_of_value(target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::BlackBox { value } => prog.type_of_value(value),
+            InstructionInfo::BlackHole { .. } => prog.ty_void,
+            InstructionInfo::MemBarrier => prog.ty_void,
         }
     }
 
@@ -586,9 +617,10 @@ impl InstructionInfo {
                     *arg = f(*arg);
                 }
             }
-            InstructionInfo::BlackBox { value } => {
+            InstructionInfo::BlackHole { value } => {
                 *value = f(*value);
             }
+            InstructionInfo::MemBarrier => {}
         }
     }
 }

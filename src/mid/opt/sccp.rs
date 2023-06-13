@@ -281,8 +281,8 @@ impl<'a> State<'a> {
         let prog = self.prog;
         let instr_info = prog.get_instr(instr);
 
-        let result = match instr_info {
-            &InstructionInfo::Load { addr, ty: _ } => {
+        let result = match *instr_info {
+            InstructionInfo::Load { addr, ty: _ } => {
                 // loading from undef returns undef
                 // TODO maybe replace with unreachable instead?
                 //   => return bool "unreachable" and stop visiting instructions & terminator
@@ -295,9 +295,8 @@ impl<'a> State<'a> {
                     }
                 })
             }
-            // this instruction doesn't have a return value, so we can just use anything we want
-            InstructionInfo::Store { .. } => Lattice::Undef,
-            &InstructionInfo::Call { target, ref args, conv: _ } => {
+
+            InstructionInfo::Call { target, ref args, conv: _ } => {
                 self.eval_as_call_target(target).map_known(|target| {
                     if let Some(target) = target.as_func() {
                         // mark reachable
@@ -318,7 +317,11 @@ impl<'a> State<'a> {
                     }
                 })
             }
-            &InstructionInfo::BlackBox { .. } => Lattice::Overdef,
+
+            // void return values
+            InstructionInfo::Store { .. } => Lattice::Undef,
+            InstructionInfo::BlackHole { .. } => Lattice::Undef,
+            InstructionInfo::MemBarrier { .. } => Lattice::Undef,
         };
 
         self.merge_value(instr.into(), result);
@@ -416,6 +419,8 @@ impl<'a> State<'a> {
                     Lattice::Known(Const::new(ty, result).into())
                 })
             }
+            // we can't propagate any info
+            ExpressionInfo::Obscure { ty: _, value: _ } => Lattice::Overdef,
         }
     }
 
