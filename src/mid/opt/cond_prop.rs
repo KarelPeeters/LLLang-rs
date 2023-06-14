@@ -124,6 +124,8 @@ fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info:
 
             if let Some(cond) = cond.as_expr() {
                 if let &ExpressionInfo::Comparison { kind, left, right } = prog.get_expr(cond) {
+                    assert!(prog.get_type(prog.type_of_value(left)).is_int());
+
                     // push comparison knowledge
                     replacements.maybe_push_comparison(prog, branch, kind, left, right);
                 }

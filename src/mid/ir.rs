@@ -252,10 +252,6 @@ impl TypeInfo {
         }
     }
 
-    pub fn is_ptr(&self) -> bool {
-        matches!(self, TypeInfo::Pointer)
-    }
-
     pub fn unwrap_func(&self) -> Option<&FunctionType> {
         match self {
             TypeInfo::Func(func_ty) => Some(func_ty),
@@ -275,6 +271,14 @@ impl TypeInfo {
             TypeInfo::Array(ty) => Some(ty),
             _ => None,
         }
+    }
+
+    pub fn is_int(&self) -> bool {
+        matches!(self, TypeInfo::Integer { .. })
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, TypeInfo::Pointer)
     }
 }
 
