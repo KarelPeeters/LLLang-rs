@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 
 use crate::front::{ast, cst, DEFAULT_CALLING_CONVENTION};
-use crate::front::ast::LogicalOp;
+use crate::front::ast::{LogicalOp};
 use crate::front::cst::{IntTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{lower_literal, LRValue, MappingTypeStore, TypedValue};
 use crate::front::scope::Scope;
 use crate::front::type_solver::{TypeSolution, TypeVar};
 use crate::mid::ir;
-use crate::mid::ir::{Signed};
+use crate::mid::ir::{ExpressionInfo, Signed};
 use crate::mid::util::bit_int::{BitInt, UStorage};
 
 /// The state necessary to lower a single function.
@@ -346,6 +346,92 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
         }
     }
 
+    fn append_dot_index(&mut self, flow: Flow, scope: &Scope<ScopedItem>, target: &'ast ast::Expression, index: &'ast ast::DotIndexIndex) -> Result<'ast, (Flow, LRValue)> {
+        let (after_target, target_value) = self.append_expr(flow, scope, target)?;
+
+        let target_outer_ty = target_value.ty(&self.types);
+        let (target_inner_ty, wrapped_in_ptr) = match self.types[target_outer_ty] {
+            TypeInfo::Pointer(target_inner_ty) => (target_inner_ty, true),
+            _ => (target_outer_ty, false)
+        };
+
+        let (index, field_ty) = match (&self.types[target_inner_ty], index) {
+            (TypeInfo::Tuple(tuple_ty), &ast::DotIndexIndex::Tuple { index, .. }) => {
+                (index, tuple_ty.fields[index as usize])
+            }
+            (TypeInfo::Struct(struct_ty), ast::DotIndexIndex::Struct(id)) => {
+                struct_ty.find_field_index(&id.string)
+                    .map(|index| (index.try_into().unwrap(), struct_ty.fields[index].ty))
+                    .ok_or_else(|| Error::StructFieldNotFound {
+                        target,
+                        target_type: self.types.format_type(target_outer_ty).to_string(),
+                        index: id,
+                    })?
+            }
+            (TypeInfo::Tuple(_), _) | (TypeInfo::Struct(_), _) => return Err(Error::WrongDotIndexType {
+                target,
+                target_type: self.types.format_type(target_outer_ty).to_string(),
+                index,
+            }),
+            (_, _) => return Err(Error::ExpectStructOrTupleType {
+                expression: target,
+                actual: self.types.format_type(target_outer_ty).to_string(),
+            })
+        };
+
+        let tuple_ty_ir = self.types.map_type(self.prog, target_inner_ty);
+        let field_ty_ir = self.types.map_type(self.prog, field_ty);
+        let field_ptr_ty = self.types.define_type(TypeInfo::Pointer(field_ty));
+
+        let result = match (target_value, wrapped_in_ptr) {
+            // LValue(Struct) -> LValue(Field)
+            (LRValue::Left(target_value), false) => {
+                let field_ptr = self.prog.define_expr(ExpressionInfo::TupleFieldPtr {
+                    base: target_value.ir,
+                    index,
+                    tuple_ty: tuple_ty_ir,
+                });
+                LRValue::Left(TypedValue {
+                    ty: field_ptr_ty,
+                    ir: field_ptr.into(),
+                })
+            }
+            // RValue(Struct) -> RValue(Field)
+            (LRValue::Right(target_value), false) => {
+                // store into temp slot, offset, load
+                let slot = self.define_slot(tuple_ty_ir, self.fixed_debug_name("dot_index"));
+                self.append_store(after_target.block, slot.into(), target_value.ir);
+                let field_ptr = self.prog.define_expr(ExpressionInfo::TupleFieldPtr {
+                    base: slot.into(),
+                    index,
+                    tuple_ty: tuple_ty_ir,
+                });
+                let load = self.append_load(after_target.block, field_ptr.into(), field_ty_ir);
+                LRValue::Right(TypedValue {
+                    ty: field_ty,
+                    ir: load,
+                })
+            }
+            // LRValue(&Struct) -> RValue(&Field)
+            (target_value, true) => {
+                let target_value = self.append_load_lr(after_target.block, target_value);
+
+                let field_ptr = self.prog.define_expr(ExpressionInfo::TupleFieldPtr {
+                    base: target_value.ir,
+                    index,
+                    tuple_ty: tuple_ty_ir,
+                });
+
+                LRValue::Right(TypedValue {
+                    ty: field_ptr_ty,
+                    ir: field_ptr.into(),
+                })
+            }
+        };
+
+        Ok((after_target, result))
+    }
+
     fn append_expr(
         &mut self,
         flow: Flow,
@@ -502,49 +588,7 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
                 (after_args, LRValue::Right(TypedValue { ty: ret_ty, ir: call.into() }))
             }
             ast::ExpressionKind::DotIndex { target, index } => {
-                //TODO currently we only allow LValue(&Struct),
-                //  but we could add support for RValue(Struct) and RValue(&Struct) as well
-
-                let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
-                let target_inner_ty = *self.types[target_value.ty].unwrap_ptr().unwrap();
-
-                let index = match (&self.types[target_inner_ty], index) {
-                    (TypeInfo::Tuple(_), ast::DotIndexIndex::Tuple { index, .. }) => {
-                        *index
-                    }
-                    (TypeInfo::Struct(target_ty_info), ast::DotIndexIndex::Struct(id)) => {
-                        target_ty_info.find_field_index(&id.string)
-                            .map(|i| i.try_into().unwrap())
-                            .ok_or_else(|| Error::StructFieldNotFound {
-                                target,
-                                target_type: self.types.format_type(target_value.ty).to_string(),
-                                index: id,
-                            })?
-                    }
-                    (TypeInfo::Tuple(_), _) | (TypeInfo::Struct(_), _) => return Err(Error::WrongDotIndexType {
-                        target,
-                        target_type: self.types.format_type(target_value.ty).to_string(),
-                        index,
-                    }),
-                    (_, _) => return Err(Error::ExpectStructOrTupleType {
-                        expression: expr,
-                        actual: self.types.format_type(target_value.ty).to_string(),
-                    })
-                };
-
-                let tuple_ty = self.expr_type(target);
-                let tuple_ty_ir = self.types.map_type(self.prog, tuple_ty);
-
-                let result_ty = self.expr_type(expr);
-                let result_ty_ptr = self.types.define_type_ptr(result_ty);
-
-                let struct_sub_ptr = self.prog.define_expr(ir::ExpressionInfo::TupleFieldPtr {
-                    tuple_ty: tuple_ty_ir,
-                    base: target_value.ir,
-                    index,
-                }).into();
-
-                (after_target, LRValue::Left(TypedValue { ty: result_ty_ptr, ir: struct_sub_ptr }))
+                self.append_dot_index(flow, scope, target, index)?
             }
             ast::ExpressionKind::ArrayIndex { target, index } => {
                 let (after_target, target_value) = self.append_expr_lvalue(flow, scope, target)?;
@@ -743,7 +787,6 @@ impl<'ir, 'ast, 'cst, 'ts, F: Fn(ScopedValue) -> LRValue> LowerFuncState<'ir, 'a
     ) -> Result<'ast, (Flow, TypedValue)> {
         let (after_value, value) = self.append_expr(flow, scope, expr)?;
         let loaded_value = self.append_load_lr(after_value.block, value);
-
         Ok((after_value, loaded_value))
     }
 

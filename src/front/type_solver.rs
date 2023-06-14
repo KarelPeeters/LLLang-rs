@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 
 use crate::front::ast;
 use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
 use crate::mid::ir::Signed;
 use crate::util::{IndexMutTwice, VecExt, zip_eq};
+use crate::util::internal_iter::FromInternalIterator;
 
 type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
@@ -89,8 +90,8 @@ struct IndexConstraint<'ast> {
 
 #[derive(Debug, Copy, Clone)]
 enum IndexKind<'ast> {
-    Tuple(u32),
     Array,
+    Tuple(u32),
     Struct(&'ast str),
 }
 
@@ -289,28 +290,33 @@ impl<'ast> TypeProblem<'ast> {
                 return true;
             };
 
-            match (target, index) {
-                (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
-                    let target_result = target.fields.get(index as usize)
-                        .expect("Tuple index out of bounds");
-                    self.matches.push_back((*target_result, result))
+            // extract inner type
+            let (target_inner, wrap_ptr) = match target {
+                VarTypeInfo::Pointer(target_inner) => {
+                    if let Some(target_inner) = &self.state[target_inner.0].info {
+                        (target_inner, true)
+                    } else {
+                        //we don't know the target type yet, so we can't make progress
+                        // TODO in theory we know it's a pointer type
+                        return true;
+                    }
                 }
-                (TypeInfo::Array(target), IndexKind::Array) => {
-                    let target_result = target.inner;
-                    self.matches.push_back((target_result, result))
-                }
-                (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
-                    let field_idx = target.find_field_index(index)
-                        .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
-                    let field_ty = target.fields[field_idx].ty;
+                _ => (target, false),
+            };
 
-                    let known_ty = self.fully_known(types, field_ty);
-                    self.matches.push_back((result, known_ty));
-                }
-                (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
-            }
+            // get result type
+            let result_ty_inner = index_constraint_result_type(target_inner, index, wrap_ptr);
+            let result_ty_inner = result_ty_inner.map_right(|ty| self.fully_known(types, ty)).into_inner();
+            let result_ty = if wrap_ptr {
+                self.known(Origin::FullyKnown, TypeInfo::Pointer(result_ty_inner))
+            } else {
+                result_ty_inner
+            };
 
-            //we applied this constraint, it can now be removed
+            // define the new constraint
+            self.matches.push((result_ty, result));
+
+            // we fully applied this constraint, it can now be removed
             false
         });
 
@@ -486,6 +492,28 @@ impl<'ast> TypeProblem<'ast> {
                 )
             }
         }
+    }
+}
+
+fn index_constraint_result_type(target: &VarTypeInfo, index: IndexKind, target_wrapped_ptr: bool) -> Either<TypeVar, Type> {
+    match (target, index) {
+        // TODO decouple array from tuple/struct
+        (TypeInfo::Array(target), IndexKind::Array) => {
+            assert!(!target_wrapped_ptr, "Cannot array index on pointer {:?}", target);
+            Either::Left(target.inner)
+        }
+        (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
+            let result_ty = *target.fields.get(index as usize)
+                .expect("Tuple index out of bounds");
+            Either::Left(result_ty)
+        }
+        (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
+            let field_idx = target.find_field_index(index)
+                .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
+            let field_ty = target.fields[field_idx].ty;
+            Either::Right(field_ty)
+        }
+        (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
     }
 }
 
