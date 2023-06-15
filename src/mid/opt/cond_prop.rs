@@ -133,14 +133,7 @@ fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info:
         }
     }
 
-    // todo for a certain block, find the set of simplest replacements that apply
-    // TODO remove these prints
-    if !replacements.replacements.is_empty() {
-        println!("Replacements:");
-        for r in &replacements.replacements {
-            println!("  {:?}", r);
-        }
-    }
+    // TODO for a certain block, find the set of simplest replacements that apply
 
     // apply replacements
     let mut replaced = 0;
