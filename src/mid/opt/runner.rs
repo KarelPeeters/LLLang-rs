@@ -93,7 +93,7 @@ impl<'p> PassRunner<'p> {
         let mut loop_count = 0;
 
         // GC once at the start
-        gc(prog);
+        self.run_gc(prog);
 
         loop {
             if self.settings.max_loops.map_or(false, |max_loops| loop_count >= max_loops) {
@@ -111,7 +111,7 @@ impl<'p> PassRunner<'p> {
 
                 // GC after every pass
                 if pass_changed {
-                    gc(prog);
+                    self.run_gc(prog);
                 }
             }
 
@@ -119,6 +119,16 @@ impl<'p> PassRunner<'p> {
         }
 
         Ok(())
+    }
+
+    fn run_gc(&self, prog: &mut Program) -> bool {
+        let changed = gc(prog);
+
+        if self.settings.checks.verify {
+            verify(prog).unwrap();
+        }
+
+        changed
     }
 
     fn run_pass_unchecked(&self, prog: &mut Program, ctx: &mut PassContext, pass: &dyn ProgramPass) -> io::Result<bool> {
