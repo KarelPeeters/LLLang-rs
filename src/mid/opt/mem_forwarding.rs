@@ -1,7 +1,7 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
-use crate::mid::analyse::usage::BlockUsage;
+use crate::mid::analyse::usage::{BlockUsage, TargetKind};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, ExpressionInfo, Function, Global, GlobalSlot, Immediate, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
@@ -322,6 +322,8 @@ struct State<'p, 'u> {
 enum Undo {
     CacheInsert(Key),
     DefineParam(Parameter),
+    PushBlockParam(Block, usize, Parameter),
+    PushTargetArg(Block, TargetKind, usize, Value),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -351,6 +353,17 @@ impl<'p, 'u> State<'p, 'u> {
                 Undo::DefineParam(param) => {
                     self.prog.nodes.params.pop(param);
                 }
+                Undo::PushBlockParam(block, index, param) => {
+                    let block = self.prog.get_block_mut(block);
+                    assert_eq!(block.params.len(), index + 1);
+                    assert_eq!(block.params.pop(), Some(param));
+                }
+                Undo::PushTargetArg(block, kind, index, arg) => {
+                    let block = self.prog.get_block_mut(block);
+                    let target = kind.get_target_mut(&mut block.terminator);
+                    assert_eq!(target.args.len(), index + 1);
+                    assert_eq!(target.args.pop(), Some(arg));
+                }
             }
         }
         assert_eq!(self.undo.len(), marker);
@@ -376,6 +389,24 @@ impl<'p, 'u> State<'p, 'u> {
         let param = self.prog.define_param(info);
         self.undo.push(Undo::DefineParam(param));
         param
+    }
+
+    fn push_block_param(&mut self, block: Block, param: Parameter) {
+        let params = &mut self.prog.get_block_mut(block).params;
+
+        let index = params.len();
+        params.push(param);
+        self.undo.push(Undo::PushBlockParam(block, index, param));
+    }
+
+    fn push_target_arg(&mut self, block: Block, kind: TargetKind, arg: Value) {
+        let term = &mut self.prog.get_block_mut(block).terminator;
+        let target = kind.get_target_mut(term);
+        let args = &mut target.args;
+
+        let index = args.len();
+        args.push(arg);
+        self.undo.push(Undo::PushTargetArg(block, kind, index, arg));
     }
 
     fn find_value_for_loc_at(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
@@ -512,7 +543,7 @@ impl<'p, 'u> State<'p, 'u> {
                         break;
                     }
                 }
-                InstructionInfo::MemBarrier | InstructionInfo::BlackHole { ..} => {
+                InstructionInfo::MemBarrier | InstructionInfo::BlackHole { .. } => {
                     // TODO we pretend we also write to non-leaked pointers, maybe that's too strong?
                     clobbered = true;
                     break;
@@ -558,13 +589,12 @@ impl<'p, 'u> State<'p, 'u> {
             pred_args.push(value);
         };
 
-        // success!
+        // (tentative) success!
         // push param and pred args
-        self.prog.get_block_mut(block).params.push(param);
+        self.push_block_param(block, param);
         for (pred, arg) in zip_eq(preds, pred_args) {
             let (pos, kind) = unwrap_match!(pred, BlockUsage::Target { pos, kind } => (pos, kind));
-            let target = kind.get_target_mut(&mut self.prog.get_block_mut(pos.block).terminator);
-            target.args.push(arg);
+            self.push_target_arg(pos.block, kind, arg);
         }
 
         Some(Lattice::Known(param.into()))
