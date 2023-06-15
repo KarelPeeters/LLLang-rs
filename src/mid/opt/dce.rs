@@ -177,12 +177,6 @@ impl Visitor for DceVisitor<'_> {
                             }
                         }
                     }
-                    InstructionInfo::Load { addr, ty: _ } => {
-                        // mark the slot stored to as used
-                        if matches!(addr, Value::Global(Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_))) {
-                            self.add_value(state, addr);
-                        }
-                    }
                     _ => {
                         // fallback, mark all operands as used
                         prog.get_instr(instr).operands().for_each(|(operand, usage)| {
