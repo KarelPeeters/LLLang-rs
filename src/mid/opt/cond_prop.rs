@@ -62,8 +62,8 @@ struct Condition {
 impl Condition {
     fn applies_to_instr_in(&self, dom_info: &DomInfo, block: Block) -> bool {
         match self.cond {
-            true => dom_info.is_dominator(self.branch.true_block, block) && !dom_info.is_reachable(self.branch.false_block, block),
-            false => dom_info.is_dominator(self.branch.false_block, block) && !dom_info.is_reachable(self.branch.true_block, block),
+            true => dom_info.is_strict_dominator(self.branch.true_block, block) && !dom_info.is_reachable(self.branch.false_block, block),
+            false => dom_info.is_strict_dominator(self.branch.false_block, block) && !dom_info.is_reachable(self.branch.true_block, block),
         }
     }
 
