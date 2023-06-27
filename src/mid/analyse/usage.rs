@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 use crate::mid::analyse::dom_info::{DomPosition, InBlockPos};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Type, Value};
+use crate::mid::ir::{AffineLoopInfo, Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Type, Value, ValueRange};
 use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -51,16 +51,25 @@ pub enum ExprOperand {
 pub enum TermOperand {
     BranchCond,
     ReturnValue,
+    AffineRange(AffineRangeKind),
     TargetArg {
         kind: TargetKind,
         index: usize,
     },
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum AffineRangeKind {
+    Start,
+    End,
+    Step,
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum TermUsage<V, B> {
     Value(V, TermOperand),
-    Block(B, TargetKind),
+    BlockTarget(B, TargetKind),
+    BlockAffineBody(B),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -70,6 +79,9 @@ pub enum BlockUsage {
         pos: BlockPos,
         kind: TargetKind,
     },
+    AffineBody {
+        pos: BlockPos,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -77,6 +89,7 @@ pub enum TargetKind {
     Jump,
     BranchTrue,
     BranchFalse,
+    AffineExit,
 }
 
 impl TargetKind {
@@ -85,6 +98,7 @@ impl TargetKind {
             TargetKind::Jump => unwrap_match!(term, Terminator::Jump { target } => target),
             TargetKind::BranchTrue => unwrap_match!(term, Terminator::Branch { true_target, .. } => true_target),
             TargetKind::BranchFalse => unwrap_match!(term, Terminator::Branch { false_target, .. } => false_target),
+            TargetKind::AffineExit => unwrap_match!(term, Terminator::AffineLoop(AffineLoopInfo{ exit, .. }) => exit),
         }
     }
 
@@ -93,6 +107,7 @@ impl TargetKind {
             TargetKind::Jump => unwrap_match!(term, Terminator::Jump { target } => target),
             TargetKind::BranchTrue => unwrap_match!(term, Terminator::Branch { true_target, .. } => true_target),
             TargetKind::BranchFalse => unwrap_match!(term, Terminator::Branch { false_target, .. } => false_target),
+            TargetKind::AffineExit => unwrap_match!(term, Terminator::AffineLoop(AffineLoopInfo{ exit, .. }) => exit),
         }
     }
 }
@@ -135,17 +150,23 @@ impl Terminator {
     }
 
     pub fn successors(&self) -> impl InternalIterator<Item=Block> + '_ {
-        self.operands().filter_map(|usage| option_match!(usage, TermUsage::Block(succ, _) => succ))
+        self.operands().filter_map(|usage| match usage {
+            TermUsage::Value(_, _) => None,
+            TermUsage::BlockTarget(block, _) => Some(block),
+            TermUsage::BlockAffineBody(block) => Some(block),
+        })
     }
 
     pub fn operands_mut(&mut self) -> OperandIterator<&mut Self> {
         OperandIterator(self)
     }
 
+    #[deprecated(note="this has become sketchy in the presence of affine loops")]
     pub fn targets(&self) -> TargetsIterator<&Self> {
         TargetsIterator(self)
     }
 
+    #[deprecated(note="this has become sketchy in the presence of affine loops")]
     pub fn targets_mut(&mut self) -> TargetsIterator<&mut Self> {
         TargetsIterator(self)
     }
@@ -172,7 +193,7 @@ impl InternalIterator for OperandIterator<&InstructionInfo> {
             InstructionInfo::BlackHole { value } => {
                 f((value, InstrOperand::BlackHoleValue))?;
             }
-            InstructionInfo::MemBarrier => {},
+            InstructionInfo::MemBarrier => {}
         }
         ControlFlow::Continue(())
     }
@@ -217,7 +238,7 @@ impl InternalIterator for OperandIterator<&Terminator> {
             kind: TargetKind,
         ) -> ControlFlow<R> {
             let &Target { block, ref args } = target;
-            f(TermUsage::Block(block, kind))?;
+            f(TermUsage::BlockTarget(block, kind))?;
             for (index, &value) in args.iter().enumerate() {
                 f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
             }
@@ -232,6 +253,17 @@ impl InternalIterator for OperandIterator<&Terminator> {
                 f(TermUsage::Value(cond, TermOperand::BranchCond))?;
                 visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
                 visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
+            }
+            Terminator::AffineLoop(ref info) => {
+                let AffineLoopInfo { range, body, ref exit } = *info;
+                let ValueRange { start, end, step } = range;
+
+                f(TermUsage::Value(start, TermOperand::AffineRange(AffineRangeKind::Start)))?;
+                f(TermUsage::Value(end, TermOperand::AffineRange(AffineRangeKind::End)))?;
+                f(TermUsage::Value(step, TermOperand::AffineRange(AffineRangeKind::Step)))?;
+
+                f(TermUsage::BlockAffineBody(body))?;
+                visit_target(&mut f, exit, TargetKind::AffineExit)?;
             }
             Terminator::Return { value } => {
                 f(TermUsage::Value(value, TermOperand::ReturnValue))?;
@@ -254,7 +286,7 @@ impl<'a> InternalIterator for OperandIterator<&'a mut Terminator> {
             kind: TargetKind,
         ) -> ControlFlow<R> {
             let Target { block, args } = target;
-            f(TermUsage::Block(block, kind))?;
+            f(TermUsage::BlockTarget(block, kind))?;
             for (index, value) in args.iter_mut().enumerate() {
                 f(TermUsage::Value(value, TermOperand::TargetArg { kind, index }))?;
             }
@@ -269,6 +301,17 @@ impl<'a> InternalIterator for OperandIterator<&'a mut Terminator> {
                 f(TermUsage::Value(cond, TermOperand::BranchCond))?;
                 visit_target(&mut f, true_target, TargetKind::BranchTrue)?;
                 visit_target(&mut f, false_target, TargetKind::BranchFalse)?;
+            }
+            Terminator::AffineLoop(info) => {
+                let AffineLoopInfo { range, body, exit } = info;
+                let ValueRange { start, end, step } = range;
+
+                f(TermUsage::Value(start, TermOperand::AffineRange(AffineRangeKind::Start)))?;
+                f(TermUsage::Value(end, TermOperand::AffineRange(AffineRangeKind::End)))?;
+                f(TermUsage::Value(step, TermOperand::AffineRange(AffineRangeKind::Step)))?;
+
+                f(TermUsage::BlockAffineBody(body))?;
+                visit_target(&mut f, exit, TargetKind::AffineExit)?;
             }
             Terminator::Return { value } => {
                 f(TermUsage::Value(value, TermOperand::ReturnValue))?;
@@ -291,6 +334,12 @@ impl<'a> InternalIterator for TargetsIterator<&'a Terminator> {
                 f((true_target, TargetKind::BranchTrue))?;
                 f((false_target, TargetKind::BranchFalse))?;
             }
+            Terminator::AffineLoop(info) => {
+                let AffineLoopInfo { range: _, body, exit } = info;
+                // TODO what to do about the affine body here?
+                f((exit, TargetKind::AffineExit))?;
+                todo!("handle affine body")
+            }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}
             Terminator::LoopForever => {}
@@ -308,6 +357,12 @@ impl<'a> InternalIterator for TargetsIterator<&'a mut Terminator> {
             Terminator::Branch { cond: _, true_target, false_target } => {
                 f((true_target, TargetKind::BranchTrue))?;
                 f((false_target, TargetKind::BranchFalse))?;
+            }
+            Terminator::AffineLoop(info) => {
+                let AffineLoopInfo { range: _, body, exit } = info;
+                // TODO what to do about the affine body here?
+                f((exit, TargetKind::AffineExit))?;
+                todo!("handle affine body")
             }
             Terminator::Return { value: _ } => {}
             Terminator::Unreachable => {}

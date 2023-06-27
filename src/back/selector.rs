@@ -159,6 +159,9 @@ impl Selector<'_> {
                 let false_target = self.append_target(false_target);
                 self.push(VInstruction::Branch(cond, true_target, false_target));
             }
+            Terminator::AffineLoop(_) => {
+                todo!("destruct this into jump/branch before getting here")
+            }
             Terminator::Return { value } => {
                 let value = if prog.type_of_value(value) == prog.ty_void() {
                     None

@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
-use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Type, Value};
+use crate::mid::analyse::usage::{AffineRangeKind, BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
+use crate::mid::ir::{AffineLoopInfo, Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Type, Value};
 use crate::util::internal_iter::InternalIterator;
 
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
@@ -276,9 +276,13 @@ impl<'a> State<'a> {
                 TermUsage::Value(value, usage) => {
                     self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
                 }
-                TermUsage::Block(succ, kind) => {
+                TermUsage::BlockTarget(succ, kind) => {
                     self.todo_blocks.push_back(BlockPos { func, block: succ });
                     self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
+                }
+                TermUsage::BlockAffineBody(body) => {
+                    self.todo_blocks.push_back(BlockPos { func, block: body });
+                    self.add_block_usage(body, BlockUsage::AffineBody(block_pos));
                 }
             });
         }
@@ -363,6 +367,14 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(term, Terminator::Return { value } => value),
                 TermOperand::TargetArg { kind, index } =>
                     repl(&mut kind.get_target_mut(term).args[index], old, new),
+                TermOperand::AffineRange(kind) => {
+                    let range = unwrap_match!(term, Terminator::AffineLoop(AffineLoopInfo { range, .. }) => range);
+                    match kind {
+                        AffineRangeKind::Start => repl(&mut range.start, old, new),
+                        AffineRangeKind::End => repl(&mut range.end, old, new),
+                        AffineRangeKind::Step => repl(&mut range.step, old, new),
+                    }
+                }
             }
         }
     }

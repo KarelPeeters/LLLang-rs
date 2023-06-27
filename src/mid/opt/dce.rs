@@ -5,7 +5,7 @@ use fixedbitset::FixedBitSet;
 
 use crate::mid::analyse::usage::{BlockUsage, InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
+use crate::mid::ir::{AffineLoopInfo, Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value, ValueRange};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::visit::{Visitor, VisitState};
 use crate::util::internal_iter::InternalIterator;
@@ -222,6 +222,18 @@ impl Visitor for DceVisitor<'_> {
                 self.add_value(state, cond);
                 state.add_block(true_target.block);
                 state.add_block(false_target.block);
+            }
+            Terminator::AffineLoop(ref info) => {
+                let AffineLoopInfo { range, body, ref exit } = *info;
+                let ValueRange { start, end, step } = range;
+
+                self.add_value(state, start);
+                self.add_value(state, end);
+                self.add_value(state, step);
+
+                // TODO don't allow removing the body param somehow
+                state.add_block(body);
+                state.add_block(exit.block);
             }
             Terminator::Return { value } => {
                 self.add_value(state, value);

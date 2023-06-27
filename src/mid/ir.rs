@@ -244,6 +244,7 @@ pub struct ArrayType {
 
 // TODO return results instead of options here
 //  (and also do this for other option-returning things)
+// TODO rename these "unwrap" functions to "as"
 impl TypeInfo {
     pub fn unwrap_int(&self) -> Option<u32> {
         match self {
@@ -629,10 +630,31 @@ impl InstructionInfo {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct ValueRange {
+    pub start: Value,
+    pub end: Value,
+    pub step: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct AffineLoopInfo {
+    // TODO add multiple values?
+    // TODO allow later values to use earlier values in range?
+    pub range: ValueRange,
+    // body must take a single phi param, taking the current index value
+    pub body: Block,
+    pub exit: Target,
+}
+
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Jump { target: Target },
     Branch { cond: Value, true_target: Target, false_target: Target },
+    /// start an affine loop
+    AffineLoop(AffineLoopInfo),
+    /// return back the lowest-level affine loop
+    AffineYield,
     Return { value: Value },
     Unreachable,
     LoopForever,

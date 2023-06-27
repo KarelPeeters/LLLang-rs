@@ -88,7 +88,8 @@ impl Program {
             new_term.operands_mut().for_each(|operand| {
                 match operand {
                     TermUsage::Value(value, _) => *value = mapper.map_value(*value),
-                    TermUsage::Block(block, _) => *block = map_block(*block),
+                    TermUsage::BlockTarget(block, _) => *block = map_block(*block),
+                    TermUsage::BlockAffineBody(block) => *block = map_block(*block),
                 }
             });
         }

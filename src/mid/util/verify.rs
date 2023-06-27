@@ -4,9 +4,9 @@ use std::iter::zip;
 use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{BlockPos, InstructionPos, TargetKind, TermOperand, Usage};
-use crate::mid::ir::{Block, BlockInfo, CallingConvention, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
-use crate::util::internal_iter::InternalIterator;
+use crate::mid::analyse::usage::{AffineRangeKind, BlockPos, InstructionPos, TargetKind, TermOperand, Usage};
+use crate::mid::ir::{AffineLoopInfo, Block, BlockInfo, CallingConvention, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value, ValueRange};
+use crate::util::internal_iter::{InternalIterator, IterExt};
 
 // TODO verify that there are no expression loops
 #[derive(Debug)]
@@ -19,6 +19,7 @@ pub enum VerifyError {
 
     WrongDeclParamCount(Function, TypeString, usize),
     WrongBlockArgCount(DomPosition, Block),
+    WrongLoopBodyParamCount(DomPosition, Block, usize),
 
     TypeMismatch(Position, TypeOrValue, TypeOrValue, String, String),
     ExpectedIntegerType(Position, Option<Value>, TypeString),
@@ -129,6 +130,30 @@ pub fn verify(prog: &Program) -> Result {
                     ctx.check_target(block_pos, true_target, TargetKind::BranchTrue)?;
                     ctx.check_target(block_pos, false_target, TargetKind::BranchFalse)?;
                 }
+                Terminator::AffineLoop(ref info) => {
+                    let AffineLoopInfo { range, body, ref exit } = *info;
+                    let ValueRange { start, end, step } = range;
+
+                    ensure_matching_int_values(prog, term_pos, start, end)?;
+                    ensure_matching_int_values(prog, term_pos, start, step)?;
+                    let ty_index = prog.type_of_value(start);
+
+                    let usage = |kind| Usage::TermOperand { pos: block_pos, usage: TermOperand::AffineRange(kind) };
+                    ctx.check_value_usage(start, usage(AffineRangeKind::Start))?;
+                    ctx.check_value_usage(start, usage(AffineRangeKind::End))?;
+                    ctx.check_value_usage(start, usage(AffineRangeKind::Step))?;
+
+                    let body_params = &prog.get_block(body).params;
+                    match body_params.iter().single() {
+                        None => return Err(VerifyError::WrongLoopBodyParamCount(term_pos, body, body_params.len())),
+                        Some(&param) => {
+                            ensure_type_match(prog, term_pos, Value::from(param), ty_index)?;
+                        }
+                    }
+                    ctx.check_target_block(block_pos, body)?;
+
+                    ctx.check_target(block_pos, exit, TargetKind::AffineExit)?;
+                }
                 Terminator::Return { value } => {
                     ensure_type_match(prog, term_pos, value, func_info.func_ty.ret)?;
                     let return_usage = Usage::TermOperand { pos: block_pos, usage: TermOperand::ReturnValue };
@@ -157,12 +182,7 @@ impl<'a> Context<'a> {
         let prog = self.prog;
         let pos = block_pos.as_dom_pos(InBlockPos::Terminator);
 
-        // check target block != entry
-        // TODO do we really want that? it seems artificially limiting
-        //   but it's pretty much necessary to get phi construction to work at all
-        if target.block == self.prog.get_func(self.dom_info.func()).entry {
-            return Err(VerifyError::EntryBlockUsedAsTarget(pos, target.block));
-        }
+        self.check_target_block(block_pos, target.block)?;
 
         // check phi type match
         let target_block_info = prog.get_block(target.block);
@@ -178,6 +198,20 @@ impl<'a> Context<'a> {
             let usage = Usage::TermOperand { pos: block_pos, usage: TermOperand::TargetArg { kind, index } };
             self.check_value_usage(value, usage)?;
         }
+        Ok(())
+    }
+
+    fn check_target_block(&mut self, block_pos: BlockPos, target_block: Block) -> Result {
+        let prog = self.prog;
+        let pos = block_pos.as_dom_pos(InBlockPos::Terminator);
+
+        // check target block != entry
+        // TODO do we really want that? it seems artificially limiting
+        //   but it's pretty much necessary to get phi construction to work at all
+        if target_block == prog.get_func(self.dom_info.func()).entry {
+            return Err(VerifyError::EntryBlockUsedAsTarget(pos, target_block));
+        }
+
         Ok(())
     }
 
@@ -321,7 +355,7 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
             ensure_int_value(prog, pos, value)?;
             ensure_int_type(prog, pos, ty, None)?;
         }
-        ExpressionInfo::Obscure {ty, value} => {
+        ExpressionInfo::Obscure { ty, value } => {
             ensure_type_match(prog, pos, ty, value)?;
         }
     }

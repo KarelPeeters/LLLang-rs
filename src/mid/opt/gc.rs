@@ -62,7 +62,7 @@ impl Visitor for GcVisitor {
         terminator.operands().for_each(|usage| {
             match usage {
                 TermUsage::Value(value, _) => state.add_value(value),
-                TermUsage::Block(block, _) => state.add_block(block),
+                TermUsage::TargetBlock(block, _) => state.add_block(block),
             }
         });
     }
