@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Clap;
-use itertools::Itertools;
 
 use lllang::back;
 use lllang::mid::ir::{ArithmeticOp, Block, BlockInfo, CallingConvention, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Extern, ExternInfo, FunctionInfo, FunctionType, InstructionInfo, ParameterInfo, Program, Signed, StackSlot, StackSlotInfo, Target, Terminator, Type, Value};
@@ -262,11 +261,8 @@ fn add_external_functions(prog: &mut Program) -> ExternalFunctions {
 // TODO extract some of the program building logic into a common module, used by both LL and BF
 //   eg. load, store, while loop, push instruction to block, ...
 fn parse(prog: &mut Program, start: Block, data_base: Value, data_index: StackSlot, left: &mut Peekable<impl Iterator<Item=char>>) -> Block {
-    let ty_ptr = prog.ty_ptr();
     let ty_byte = prog.define_type_int(8);
     let ty_int = prog.define_type_int(64);
-    let cst_byte_one = Const::new(ty_int, BitInt::from_unsigned(8, 1).unwrap());
-    let cst_int_one = Const::new(ty_int, BitInt::from_unsigned(64, 1).unwrap());
 
     let mut block = start;
 

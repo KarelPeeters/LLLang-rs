@@ -15,13 +15,15 @@ fn slot_used_in_param() {
         params: vec![param],
         instructions: vec![],
         terminator: Terminator::Return { value: Value::void() },
+        debug_name: None,
     };
     let block = prog.define_block(block_info);
 
     let entry_info = BlockInfo {
         params: vec![],
         instructions: vec![],
-        terminator: Terminator::Jump { target: Target { block, args: vec![slot.into()] } }
+        terminator: Terminator::Jump { target: Target { block, args: vec![slot.into()] } },
+        debug_name: None,
     };
     let entry = prog.define_block(entry_info);
 

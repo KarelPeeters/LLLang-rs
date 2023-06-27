@@ -111,6 +111,7 @@ fn pos(line: usize) -> Pos {
 struct TestCase {
     instr: TestInstruction,
     code: String,
+    #[allow(dead_code)]
     span: Span,
 }
 
