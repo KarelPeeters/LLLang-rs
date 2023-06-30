@@ -16,3 +16,8 @@ fn lang() {
 fn seq() {
     run_cases(include_str!("seq.ll"))
 }
+
+#[test]
+fn opt() {
+    run_cases(include_str!("opt.ll"))
+}

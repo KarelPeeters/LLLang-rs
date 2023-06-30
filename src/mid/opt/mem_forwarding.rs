@@ -700,7 +700,8 @@ fn core_ptr(prog: &Program, ptr: Value) -> CorePtr {
     assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
 
     if let Some(expr) = ptr.as_expr() {
-        match *prog.get_expr(expr) {
+        let expr_info = prog.get_expr(expr);
+        match *expr_info {
             ExpressionInfo::PointerOffSet { ty, base, index } => {
                 if prog.is_zero_sized_type(ty) {
                     return core_ptr(prog, base);
@@ -729,7 +730,10 @@ fn core_ptr(prog: &Program, ptr: Value) -> CorePtr {
                     offset: Offset::TupleField(tuple_ty, index),
                 };
             }
-            _ => panic!("Unexpected pointer-yielding expression {:?}", expr),
+            ExpressionInfo::Obscure { .. } => {
+                // don't look deeper
+            }
+            _ => panic!("Unexpected pointer-yielding expression {:?} {:?}", expr, expr_info),
         }
     }
 
