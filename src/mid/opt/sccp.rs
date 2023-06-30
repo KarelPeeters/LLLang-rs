@@ -3,6 +3,7 @@ use std::num::Wrapping;
 
 use indexmap::IndexSet;
 use indexmap::map::IndexMap;
+use log::trace;
 
 use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
@@ -19,6 +20,8 @@ pub struct SccpPass;
 
 impl ProgramPass for SccpPass {
     fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        trace!("Start SCCP");
+
         let use_info = ctx.use_info(prog);
 
         let lattice = compute_lattice_map(prog, &use_info);
@@ -61,7 +64,7 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
         if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
             // TODO properly check for dominance (and everywhere else we're replacing things)
             // TODO remove this quick slot check
-            count += use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {
+            let delta = use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {
                 if let Some(slot) = lattice_value.as_slot() {
                     if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
                         // only replace if this slot belongs to this func
@@ -75,6 +78,12 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
                     true
                 }
             });
+
+            if delta > 0 {
+                trace!("replaced {}x: {:?} -> {:?}", delta, value, lattice_value);
+            }
+
+            count += delta;
         }
     }
 
@@ -133,6 +142,7 @@ impl<'a> State<'a> {
         while let Some(curr) = self.todo.pop_front() {
             match curr {
                 Todo::FuncReachable(func) => {
+                    trace!("todo: marking func reachable: {:?}", func);
                     if self.funcs_reachable.insert(func) {
                         // mark entry block reachable
                         let entry = prog.get_func(func).entry;
@@ -141,17 +151,20 @@ impl<'a> State<'a> {
                     }
                 }
                 Todo::BlockReachable(pos) => {
+                    trace!("todo: marking block reachable: {:?}", pos);
                     if self.blocks_reachable.insert(pos.block) {
                         self.visit_new_block(pos);
                     }
                 }
                 Todo::ValueChanged(value) => {
+                    trace!("todo: value changed: {:?}", value);
                     for usage in &self.use_info[value] {
                         self.update_value_usage(value, usage);
                     }
                 }
                 Todo::FuncReturnChanged(func) => {
                     let return_value = self.eval_func_return(func);
+                    trace!("todo: func return changed: {:?}, -> {:?}", func, return_value);
 
                     // update the value of call instructions with this func as the target
                     for usage in &self.use_info[func] {
@@ -228,6 +241,8 @@ impl<'a> State<'a> {
 
     /// Visit `block` for the first time.
     fn visit_new_block(&mut self, block_pos: BlockPos) {
+        trace!("visiting new block {:?}", block_pos);
+
         let prog = self.prog;
         let block_info = prog.get_block(block_pos.block);
 
@@ -263,6 +278,8 @@ impl<'a> State<'a> {
     }
 
     fn visit_branch(&mut self, block_pos: BlockPos, cond: Value, true_target: &Target, false_target: &Target) {
+        trace!("visiting branch {:?}", block_pos);
+
         let cond = self.eval(cond);
         let (visit_true, visit_false) = evaluate_branch_condition(cond);
 
@@ -275,6 +292,7 @@ impl<'a> State<'a> {
     }
 
     fn visit_target(&mut self, from: BlockPos, target: &Target) {
+        trace!("visiting target {:?} {:?}", from, target);
         let prog = self.prog;
 
         // mark block reachable
@@ -290,6 +308,8 @@ impl<'a> State<'a> {
     }
 
     fn visit_instr(&mut self, instr: Instruction) {
+        trace!("visiting instr {:?}", instr);
+
         let prog = self.prog;
         let instr_info = prog.get_instr(instr);
 
@@ -310,6 +330,7 @@ impl<'a> State<'a> {
 
             InstructionInfo::Call { target, ref args, conv: _ } => {
                 let target_lattice = self.eval_as_call_target(target);
+                trace!("call target {:?}: {:?}", target, target_lattice);
 
                 match target_lattice {
                     Lattice::Known(Value::Global(Global::Func(target))) => {
@@ -321,6 +342,7 @@ impl<'a> State<'a> {
                         let params = &prog.get_block(target_info.entry).params;
                         for (&param, &arg) in zip_eq(params, args) {
                             let arg_lattice = self.eval(arg);
+                            trace!("merging call arg into param, {:?} {:?} {:?}", param, arg, arg_lattice);
                             self.merge_value(param.into(), arg_lattice);
                         }
 
@@ -351,6 +373,8 @@ impl<'a> State<'a> {
     /// or because one of the operands has changed.
     fn visit_expr(&mut self, expr: Expression) {
         let result = self.eval_expr(expr);
+        trace!("visiting expr {:?}, eval: {:?}", expr, result);
+
         self.merge_value(expr.into(), result);
     }
 
@@ -466,6 +490,8 @@ impl<'a> State<'a> {
     }
 
     fn mark_func_used_as_non_call_target(&mut self, func: Function) {
+        trace!("marking func used as non-call target: {:?}", func);
+
         let prog = self.prog;
 
         // mark func as reachable
@@ -479,6 +505,8 @@ impl<'a> State<'a> {
     }
 
     fn mark_usage(&mut self, value: Value, usage: Usage) {
+        trace!("marking value usage: {:?} as {:?}", value, usage);
+
         if let Some(func) = value.as_func() {
             if !matches!(usage, Usage::InstrOperand { pos: _, usage: InstrOperand::CallTarget }) {
                 self.mark_func_used_as_non_call_target(func);
@@ -551,6 +579,7 @@ impl<'a> State<'a> {
         self.values.insert(value, next);
 
         if prev != next {
+            trace!("value changed: {:?}, {:?} -> {:?}", value, prev, next);
             self.todo.push_back(Todo::ValueChanged(value));
         }
     }
@@ -563,12 +592,15 @@ impl<'a> State<'a> {
         self.func_returns.insert(func, next);
 
         if prev != next {
+            trace!("func return changed: {:?}, {:?} -> {:?}", func, prev, next);
             self.todo.push_back(Todo::FuncReturnChanged(func));
         }
     }
 
     fn reachable(&self, instr: Instruction) -> bool {
-        self.values.contains_key(&Value::from(instr))
+        let reachable = self.values.contains_key(&Value::from(instr));
+        trace!("checking if instr reachable: {:?} -> {}", instr, reachable);
+        reachable
     }
 }
 

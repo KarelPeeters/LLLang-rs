@@ -11,6 +11,7 @@ use std::process::Command;
 use clap::Clap;
 use derive_more::From;
 use itertools::Itertools;
+use log::LevelFilter;
 use walkdir::{DirEntry, WalkDir};
 
 use lllang::{back, front, mid};
@@ -236,9 +237,11 @@ fn run_exe(exe_path: &Path) -> std::io::Result<()> {
 struct Opts {
     #[clap(long)]
     no_std: bool,
-
     #[clap(long)]
     no_opt: bool,
+
+    #[clap(long, default_value="off")]
+    log_level: LevelFilter,
 
     #[clap(subcommand)]
     command: SubCommand,
@@ -262,6 +265,13 @@ enum Level {
 
 fn main() -> CompileResult<()> {
     let opts: Opts = Opts::parse();
+
+    env_logger::Builder::new()
+        .filter_level(opts.log_level)
+        .filter_module("regalloc2", LevelFilter::Off)
+        .format_timestamp(None)
+        .format_module_path(false)
+        .init();
 
     let (file, do_run) = match opts.command {
         SubCommand::Run { file } => (file, true),
