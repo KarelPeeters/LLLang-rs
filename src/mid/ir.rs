@@ -86,8 +86,7 @@ pub struct Program {
 }
 
 impl Program {
-    // TODO fix this documentation
-    /// Return the program representing `fn main() -> void { unreachable(); }`
+    /// Return an empty program.
     pub fn new(ptr_size_bits: u32) -> Self {
         let mut types = ArenaSet::default();
 

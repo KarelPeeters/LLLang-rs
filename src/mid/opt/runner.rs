@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use log::info;
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::use_info::UseInfo;
@@ -159,6 +160,7 @@ impl<'p> PassRunner<'p> {
 
     fn run_pass_checked(&self, prog: &mut Program, ctx: &mut PassContext, pass: &dyn ProgramPass, i: u64) -> io::Result<bool> {
         let pass_name = format!("{:?}", pass);
+        info!("Running pass {}_{}", i, pass_name);
 
         let settings = &self.settings;
         let checks = settings.checks;
@@ -198,6 +200,8 @@ impl<'p> PassRunner<'p> {
         }
 
         if checks.check_idempotent && changed && pass.is_idempotent() {
+            info!("Running pass {}_{}_idem", i, pass_name);
+
             let new_str_before = prog.to_string();
             let new_result = pass.run(prog, ctx);
             let new_str_after = prog.to_string();

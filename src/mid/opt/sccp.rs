@@ -20,8 +20,6 @@ pub struct SccpPass;
 
 impl ProgramPass for SccpPass {
     fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
-        trace!("Start SCCP");
-
         let use_info = ctx.use_info(prog);
 
         let lattice = compute_lattice_map(prog, &use_info);
