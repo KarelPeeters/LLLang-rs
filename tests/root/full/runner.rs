@@ -125,10 +125,10 @@ fn pos(line: usize) -> Pos {
 
 #[derive(Debug, Clone)]
 struct TestCase {
-    instr: TestInstruction,
-    code: String,
     #[allow(dead_code)]
     span: Span,
+    instr: TestInstruction,
+    code: String,
 }
 
 #[derive(Debug, Copy, Clone)]
