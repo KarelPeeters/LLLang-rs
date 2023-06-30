@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use itertools::Itertools;
+use log::trace;
 
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::{TargetKind, TermOperand, Usage};
@@ -18,11 +19,12 @@ impl ProgramPass for CondPropPass {
         let mut replaced = 0;
 
         for func in prog.nodes.funcs.keys().collect_vec() {
+            trace!("CondProp for {:?}", func);
             let dom_info = ctx.dom_info(prog, func);
             replaced += cond_prop_func(prog, func, &use_info, &dom_info);
         }
 
-        println!("conv_prop replaced {} values", replaced);
+        println!("cond_prop replaced {} values", replaced);
 
         let changed = replaced != 0;
         PassResult {
@@ -61,14 +63,28 @@ struct Condition {
 
 impl Condition {
     fn applies_to_instr_in(&self, dom_info: &DomInfo, block: Block) -> bool {
-        match self.cond {
-            true => dom_info.is_strict_dominator(self.branch.true_block, block) && !dom_info.is_reachable(self.branch.false_block, block),
-            false => dom_info.is_strict_dominator(self.branch.false_block, block) && !dom_info.is_reachable(self.branch.true_block, block),
-        }
+        let (block_match, block_non_match) = match self.cond {
+            true => (self.branch.true_block, self.branch.false_block),
+            false => (self.branch.false_block, self.branch.true_block),
+        };
+
+        // TODO maybe the dom check from the matching block is redundant
+        let applies = dom_info.is_strict_dominator(self.branch.block, block)
+            && dom_info.is_strict_dominator(block_match, block)
+            && !dom_info.is_reachable(block_non_match, block);
+
+        trace!("checking if cond applies to instruction in block: {:?}, {:?} => {}", self.cond, block, applies);
+
+        applies
     }
 
     fn applies_to_target_in_branch(&self, block: Block, cond: bool) -> bool {
-        block == self.branch.block && cond == self.cond
+        // TODO also accept blocks that dominate the given block?
+        let result = block == self.branch.block && cond == self.cond;
+
+        trace!("checking if cond applies to target in branch: {:?}, {:?} => {}", self.cond, block, result);
+
+        result
     }
 }
 
@@ -80,14 +96,17 @@ struct Replacements {
 impl Replacements {
     fn maybe_push_eq(&mut self, prog: &Program, branch: Branch, cond: bool, left: Value, right: Value) {
         if let Some(pair) = sort_pair(prog, left, right) {
+            let cond = Condition {
+                branch,
+                cond,
+            };
             self.replacements.push(Replacement {
                 complex: pair.complex,
                 simple: pair.simple,
-                cond: Condition {
-                    branch,
-                    cond,
-                },
-            })
+                cond,
+            });
+
+            trace!("pushing replacement {:?}: {:?} => {:?}", cond, pair.complex, pair.simple);
         }
     }
 
@@ -142,7 +161,7 @@ fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info:
         // TODO only apply replacement if it's the simplest one that applies
 
         replaced += use_info.replace_value_usages_if(prog, replacement.complex, replacement.simple, |_, usage| {
-            match usage {
+            let replace = match usage {
                 Usage::RootFunction(_) => false,
                 // TODO support replacing  expression operands
                 Usage::ExprOperand { .. } => false,
@@ -166,7 +185,13 @@ fn cond_prop_func(prog: &mut Program, _: Function, use_info: &UseInfo, dom_info:
                         }
                     }
                 }
+            };
+
+            if replace {
+                trace!("replacing {:?} -> {:?}", replacement.complex, replacement.simple);
             }
+
+            replace
         });
     }
 
