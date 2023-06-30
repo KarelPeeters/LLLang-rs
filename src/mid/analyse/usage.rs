@@ -5,7 +5,7 @@ use crate::mid::analyse::dom_info::{DomPosition, InBlockPos};
 use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Target, Terminator, Type, Value};
 use crate::util::internal_iter::InternalIterator;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Usage {
     RootFunction(String),
     InstrOperand {
@@ -22,7 +22,7 @@ pub enum Usage {
     },
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum InstrOperand {
     LoadAddr,
     StoreAddr,
@@ -34,7 +34,7 @@ pub enum InstrOperand {
     BlackHoleValue,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ExprOperand {
     BinaryOperandLeft,
     BinaryOperandRight,
@@ -47,7 +47,7 @@ pub enum ExprOperand {
     ObscureValue,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum TermOperand {
     BranchCond,
     ReturnValue,
@@ -72,7 +72,7 @@ pub enum BlockUsage {
     },
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum TargetKind {
     Jump,
     BranchTrue,
@@ -99,13 +99,13 @@ impl TargetKind {
 
 // TODO is this only ever used for terminators? If so, rename and implement `as_dom_pos`.
 // TODO move all of these pos structs to some common module
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BlockPos {
     pub func: Function,
     pub block: Block,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct InstructionPos {
     pub func: Function,
     pub block: Block,

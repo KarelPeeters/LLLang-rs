@@ -1,6 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::num::Wrapping;
 
+use indexmap::IndexSet;
 use indexmap::map::IndexMap;
 
 use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOperand, Usage};
@@ -86,6 +87,7 @@ struct State<'a> {
 
     func_returns: IndexMap<Function, Lattice>,
     values: LatticeMap,
+    func_return_subscribers: IndexMap<Function, IndexSet<Instruction>>,
 
     todo: VecDeque<Todo>,
     funcs_reachable: HashSet<Function>,
@@ -117,6 +119,7 @@ impl<'a> State<'a> {
             use_info,
             func_returns: Default::default(),
             values: Default::default(),
+            func_return_subscribers: Default::default(),
             todo: Default::default(),
             funcs_reachable: Default::default(),
             blocks_reachable: Default::default(),
@@ -158,13 +161,22 @@ impl<'a> State<'a> {
                             }
                         }
                     }
+
+                    // update other subscribers
+                    if let Some(subs) = self.func_return_subscribers.get(&func) {
+                        // TODO this clone is a bit sad
+                        for instr in subs.clone() {
+                            assert!(self.reachable(instr));
+                            self.visit_instr(instr);
+                        }
+                    }
                 }
             }
         }
     }
 
     /// Assuming the lattice value corresponding to `value` has changed, update the given `usage`.
-    /// We need to be careful to only do this for usages that have already been marked as reachable.
+    /// We need to be careful to only actually do something for usages that are reachable.
     fn update_value_usage(&mut self, value: Value, usage: &Usage) {
         let prog = self.prog;
 
@@ -297,8 +309,10 @@ impl<'a> State<'a> {
             }
 
             InstructionInfo::Call { target, ref args, conv: _ } => {
-                self.eval_as_call_target(target).map_known(|target| {
-                    if let Some(target) = target.as_func() {
+                let target_lattice = self.eval_as_call_target(target);
+
+                match target_lattice {
+                    Lattice::Known(Value::Global(Global::Func(target))) => {
                         // mark reachable
                         self.todo.push_back(Todo::FuncReachable(target));
 
@@ -306,16 +320,22 @@ impl<'a> State<'a> {
                         let target_info = prog.get_func(target);
                         let params = &prog.get_block(target_info.entry).params;
                         for (&param, &arg) in zip_eq(params, args) {
-                            let arg = self.eval(arg);
-                            self.merge_value(param.into(), arg);
+                            let arg_lattice = self.eval(arg);
+                            self.merge_value(param.into(), arg_lattice);
                         }
+
+                        // mark that we need to know about return value changes
+                        self.func_return_subscribers.entry(target).or_default().insert(instr);
 
                         // get return
                         self.eval_func_return(target)
-                    } else {
-                        Lattice::Overdef
                     }
-                })
+                    lattice => {
+                        // TODO unsubscribe from indirect calls?
+                        //   the current impl is not wrong, just maybe slower than necessary
+                        lattice
+                    }
+                }
             }
 
             // void return values
