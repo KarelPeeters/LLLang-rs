@@ -158,6 +158,16 @@ impl<'p> PassRunner<'p> {
         Ok(())
     }
 
+    fn maybe_delete_log(&self, name: &str) -> io::Result<()> {
+        if let Some(log_path_ir) = &self.settings.log_path_ir {
+            std::fs::remove_file(log_path_ir.join(format!("{name}.ir")))?;
+        }
+        if let Some(log_path_svg) = &self.settings.log_path_svg {
+            std::fs::remove_file(log_path_svg.join(format!("{name}.svg")))?;
+        }
+        Ok(())
+    }
+
     fn run_pass_checked(&self, prog: &mut Program, ctx: &mut PassContext, pass: &dyn ProgramPass, i: u64) -> io::Result<bool> {
         let pass_name = format!("{:?}", pass);
         info!("Running pass {}_{}", i, pass_name);
@@ -171,7 +181,8 @@ impl<'p> PassRunner<'p> {
         } else {
             None
         };
-        self.maybe_log(prog, &format!("{i}_{pass_name}_0_before"), &str_before)?;
+        let before_log_name = format!("{i}_{pass_name}_0_before");
+        self.maybe_log(prog, &before_log_name, &str_before)?;
 
         let changed = self.run_pass_unchecked(prog, ctx, pass)?;
 
@@ -185,6 +196,8 @@ impl<'p> PassRunner<'p> {
 
         if changed || str_changed {
             self.maybe_log(prog, &format!("{i}_{pass_name}_1_after"), &str_after)?;
+        } else {
+            self.maybe_delete_log(&before_log_name)?;
         }
 
         if checks.verify {

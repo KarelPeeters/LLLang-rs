@@ -40,14 +40,16 @@ pub fn run_link(path_obj_in: &Path, path_exe_out: &Path) -> std::io::Result<Exit
 pub fn render_ir_as_svg(prog: &mid::ir::Program, path: impl AsRef<Path>) -> std::io::Result<()> {
     let path = path.as_ref();
 
-    let render_file = path.with_extension("gv");
-    let mut render_writer = File::create(&render_file)?;
+    let path_gv = path.with_extension("gv");
+    let mut render_writer = File::create(&path_gv)?;
     render(prog, &mut render_writer)?;
 
-    let dot_output = Command::new("dot").arg(render_file).arg("-Tsvg").output()?;
+    let dot_output = Command::new("dot").arg(&path_gv).arg("-Tsvg").output()?;
     eprintln!("{}", std::str::from_utf8(&dot_output.stderr).unwrap());
-    let render_file = path.with_extension("svg");
-    std::fs::write(render_file, dot_output.stdout)?;
+    let path_svg = path.with_extension("svg");
+    std::fs::write(path_svg, dot_output.stdout)?;
+
+    std::fs::remove_file(path_gv)?;
 
     Ok(())
 }
