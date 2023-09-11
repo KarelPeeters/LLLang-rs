@@ -8,6 +8,10 @@ use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::lattice::Lattice;
 use crate::util::zip_eq;
 
+// TODO allow pontentially aliasing store to still propagate the value if the value stores is the same as the existing one
+//  eg. https://trust-in-soft.com/blog/2020/04/06/gcc-always-assumes-aligned-pointer-accesses/
+//  but tricky, since now we also need to keep track of values, not just pointers
+
 /// Optimize load/store instructions:
 /// * replace loads with previously stored values
 /// * remove dead stores
