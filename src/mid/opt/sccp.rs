@@ -9,6 +9,7 @@ use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOpe
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, Target, Terminator, Type, Value};
 use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
+use crate::mid::util::assert::assert_type_match;
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
 use crate::util::internal_iter::InternalIterator;
@@ -60,6 +61,9 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
+            // TODO type check in replace_value_usages_if? or do we want to allow replacing differently typed values?
+            assert_type_match(prog, value, lattice_value);
+
             // TODO properly check for dominance (and everywhere else we're replacing things)
             // TODO remove this quick slot check
             let delta = use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {
@@ -350,10 +354,11 @@ impl<'a> State<'a> {
                         // get return
                         self.eval_func_return(target)
                     }
-                    lattice => {
+                    _ => {
                         // TODO unsubscribe from indirect calls?
                         //   the current impl is not wrong, just maybe slower than necessary
-                        lattice
+                        // call to anything other than a known func is overdef
+                        Lattice::Overdef
                     }
                 }
             }
@@ -565,6 +570,9 @@ impl<'a> State<'a> {
 
     fn merge_value(&mut self, value: Value, new: Lattice) {
         let prog = self.prog;
+        if let Lattice::Known(new) = new {
+            assert_type_match(prog, value, new);
+        }
 
         // don't bother with void values
         if prog.ty_void() == prog.type_of_value(value) {
@@ -582,8 +590,12 @@ impl<'a> State<'a> {
         }
     }
 
+    // TODO combine with merge_value or at least ensure they work the same
     fn merge_func_return(&mut self, func: Function, new: Lattice) {
-        // TODO combine with merge_value or at least ensure they work the same
+        let prog = self.prog;
+        if let Lattice::Known(new) = new {
+            assert_type_match(prog, prog.get_func(func).func_ty.ret, new);
+        }
 
         let prev = self.eval_func_return(func);
         let next = Lattice::merge(prev, new);

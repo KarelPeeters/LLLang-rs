@@ -376,7 +376,7 @@ pub enum TypeOrValue {
 }
 
 impl TypeString {
-    fn new(prog: &Program, ty: Type) -> Self {
+    pub fn new(prog: &Program, ty: Type) -> Self {
         TypeString {
             ty,
             str: prog.format_type(ty).to_string(),
@@ -385,7 +385,7 @@ impl TypeString {
 }
 
 impl TypeOrValue {
-    fn ty(self, prog: &Program) -> Type {
+    pub fn ty(self, prog: &Program) -> Type {
         match self {
             TypeOrValue::Type(ty) => ty,
             TypeOrValue::Value(value) => prog.type_of_value(value),

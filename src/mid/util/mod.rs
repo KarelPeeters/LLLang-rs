@@ -4,3 +4,4 @@ pub mod lattice;
 pub mod bit_int;
 pub mod cast_chain;
 pub mod verify;
+pub mod assert;
