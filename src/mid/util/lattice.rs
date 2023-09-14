@@ -1,4 +1,5 @@
 use crate::mid::ir::{Const, Immediate, Program, Type, Value};
+use crate::mid::util::assert::assert_type_match;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Lattice {
@@ -24,6 +25,11 @@ impl Lattice {
     }
 
     pub fn as_value_of_type(self, prog: &Program, ty: Type) -> Option<Value> {
+        // type check
+        if let Lattice::Known(value) = self {
+            assert_type_match(prog, ty, value);
+        }
+
         if ty == prog.ty_void() {
             return Some(Value::void());
         }

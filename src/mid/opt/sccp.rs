@@ -61,9 +61,6 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
-            // TODO type check in replace_value_usages_if? or do we want to allow replacing differently typed values?
-            assert_type_match(prog, value, lattice_value);
-
             // TODO properly check for dominance (and everywhere else we're replacing things)
             // TODO remove this quick slot check
             let delta = use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {

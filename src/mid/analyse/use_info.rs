@@ -31,6 +31,8 @@ impl UseInfo {
     }
 
     pub fn replace_value_usages_if(&self, prog: &mut Program, old: Value, new: Value, mut filter: impl FnMut(&Program, &Usage) -> bool) -> usize {
+        // TODO should we assert a type match between old and new here?
+        //   or do we want to allow differently typed replacements?
         assert_ne!(old, new);
         let mut count = 0;
         for usage in &self[old] {
