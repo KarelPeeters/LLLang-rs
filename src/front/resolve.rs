@@ -38,12 +38,14 @@ struct ResolveState<'a> {
     struct_map: HashMap<*const ast::Struct, cst::Type>,
 }
 
-/// Collect all declared items into local_scope and populate the maps.
+/// Second pass:
+/// * build item maps
+/// * define placeholder types
 fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
-    let mut store = TypeStore::new(ast.ptr_size_bits);
-    let common_ph_type = store.new_placeholder();
+    let mut types = TypeStore::new(ast.ptr_size_bits);
+    let mut items = ItemStore::default();
 
-    let mut cst = ItemStore::default();
+    let common_ph_type = types.new_placeholder();
 
     let mut alias_map: HashMap<*const ast::TypeAlias, cst::Type> = Default::default();
     let mut func_map: HashMap<*const ast::Function, cst::Function> = Default::default();
@@ -60,13 +62,15 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
                         // immediately parse type alias types so they can be used in the next pass
                         //   this means we can only parse built-in types, which we achieve by using a newly created empty scope
                         // TODO this severely limits their functionality, eg they can't point to each other or to structs
+                        //   it's not trivial to fix: cycle detection needs to happen
+                        //   and our current "placeholder" concept only works for fully new types
                         let empty_scope = Scope::default();
-                        let ty = cst.resolve_type(ScopeKind::Local, &empty_scope, &mut store, &alias_ast.ty)?;
+                        let ty = items.resolve_type(ScopeKind::Local, &empty_scope, &mut types, &alias_ast.ty)?;
                         collected_module.local_scope.declare(&alias_ast.id, ScopedItem::Type(ty))?;
                         alias_map.insert(alias_ast, ty);
                     }
                     Item::Struct(struct_ast) => {
-                        let ph = store.new_placeholder();
+                        let ph = types.new_placeholder();
                         collected_module.local_scope.declare(&struct_ast.id, ScopedItem::Type(ph))?;
                         struct_map.insert(struct_ast, ph);
                     }
@@ -78,7 +82,7 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
                             ast: func_ast,
                         };
 
-                        let func = cst.funcs.push(decl);
+                        let func = items.funcs.push(decl);
                         collected_module.codegen_funcs.push(func);
                         collected_module.local_scope.declare(&func_ast.id, ScopedItem::Value(ScopedValue::Function(func)))?;
                         func_map.insert(func_ast, func);
@@ -89,7 +93,7 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
                             ast: cst_ast,
                         };
 
-                        let cst = cst.consts.push(decl);
+                        let cst = items.consts.push(decl);
                         collected_module.local_scope.declare(&cst_ast.id, ScopedItem::Value(ScopedValue::ConstOrStatic(cst)))?;
                         const_or_static_map.insert(cst_ast, cst);
                     }
@@ -99,13 +103,13 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
             }
         }
 
-        let module_id = cst.modules.push(collected_module);
+        let module_id = items.modules.push(collected_module);
         Ok((&module.content, module_id))
     })?;
 
     let state = ResolveState {
-        types: store,
-        items: cst,
+        types,
+        items,
         alias_map,
         func_map,
         const_or_static_map,
@@ -114,7 +118,9 @@ fn first_pass(ast: &AstProgram) -> Result<(ResolveState, CstProgram)> {
     Ok((state, mapped))
 }
 
-/// Add child modules to the parent root scope and populate the root scope with the root modules.
+/// Second pass:
+/// * populate the root scope with the root modules
+/// * add child modules to the parent scope
 fn second_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, ()> {
     for (name, module) in &mapped.root.submodules {
         state.items.root_scope.declare_str(name, ScopedItem::Module(module.content.1))
@@ -133,7 +139,9 @@ fn second_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Res
     })
 }
 
-/// Replace the placeholder types for declared items with the real types.
+/// Third pass:
+/// * add items to scopes
+/// * fill in placeholder types
 fn third_pass<'a>(state: &mut ResolveState<'a>, mapped: &CstProgram<'a>) -> Result<'a, ()> {
     mapped.try_for_each(&mut |module| {
         let (content, module_id) = module.content;
