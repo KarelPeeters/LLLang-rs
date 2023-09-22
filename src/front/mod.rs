@@ -3,6 +3,8 @@ use std::fmt::Debug;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
+use crate::mid::ir::CallingConvention;
+
 pub mod pos;
 pub mod ast;
 pub mod cst;
@@ -17,9 +19,11 @@ pub mod lower;
 pub mod type_func;
 pub mod lower_func;
 
+const DEFAULT_CALLING_CONVENTION: CallingConvention = CallingConvention::Win64;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Program<C> {
+    pub ptr_size_bits: u32,
     pub root: Module<C>,
 }
 
@@ -30,18 +34,22 @@ pub struct Module<C> {
 }
 
 impl<C> Program<C> {
+    pub fn new(ptr_size_bits: u32) -> Self where C: Default {
+        Program { ptr_size_bits, root: Module::default() }
+    }
+
     pub fn find_or_create_module(&mut self, path: Vec<String>) -> &mut Module<C> where C: Default {
         path.into_iter().fold(&mut self.root, |a, elem|
             a.submodules.entry(elem).or_default(),
         )
     }
-}
 
-
-impl<C> Program<C> {
     ///Recursively map module contents to return a new, transformed program
     pub fn try_map<'s, R, E>(&'s self, f: &mut impl FnMut(&'s Module<C>) -> Result<R, E>) -> Result<Program<R>, E> {
-        Ok(Program { root: self.root.try_map(f)? })
+        Ok(Program {
+            ptr_size_bits: self.ptr_size_bits,
+            root: self.root.try_map(f)?,
+        })
     }
 
     ///Run some code for each module in this program

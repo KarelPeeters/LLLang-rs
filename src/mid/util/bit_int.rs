@@ -14,7 +14,11 @@ pub struct BitInt {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct BitOverflow;
+pub struct BitOverflow {
+    bits: u32,
+    unsigned: UStorage,
+    signed: IStorage,
+}
 
 impl BitInt {
     /// Construct from an unsigned value. All bits above `bits` must be zero.
@@ -22,7 +26,7 @@ impl BitInt {
         assert!(bits <= MAX_BITS);
 
         if value & !Self::mask(bits) != 0 {
-            Err(BitOverflow)
+            Err(BitOverflow { bits, unsigned: value, signed: value as IStorage })
         } else {
             Ok(BitInt { bits, value })
         }
@@ -44,7 +48,7 @@ impl BitInt {
         let mask_bits = Self::mask(bits);
 
         if value & !mask_bits != sign_broadcast & !mask_bits {
-            Err(BitOverflow)
+            Err(BitOverflow { bits, unsigned: value, signed: value as IStorage })
         } else {
             Ok(BitInt { bits, value: value & mask_bits })
         }
@@ -106,6 +110,10 @@ impl BitInt {
         }
     }
 
+    pub fn negate(self) -> Self {
+        Self::from_signed(self.bits, -self.signed()).unwrap()
+    }
+
     pub fn display_value(self) -> impl Display {
         struct Wrapper(BitInt);
 
@@ -132,6 +140,7 @@ impl Debug for BitInt {
 }
 
 #[cfg(test)]
+#[allow(clippy::unusual_byte_groupings)]
 mod tests {
     use std::fmt::Binary;
 
@@ -155,11 +164,11 @@ mod tests {
 
     #[test]
     fn test_overflow_unsigned() {
-        assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(0, 0b111), Err(BitOverflow { .. }));
         assert_match!(BitInt::from_unsigned(0, 0), Ok(_));
-        assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(0, 1), Err(BitOverflow { .. }));
 
-        assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow));
+        assert_match!(BitInt::from_unsigned(16, 1 << 17), Err(BitOverflow { .. }));
         assert_match!(BitInt::from_unsigned(16, 1 << 15), Ok(_));
     }
 

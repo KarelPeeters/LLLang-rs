@@ -1,8 +1,23 @@
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Program, Terminator};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 
-pub fn block_threading(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+#[derive(Debug)]
+pub struct BlockThreadingPass;
+
+impl ProgramPass for BlockThreadingPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = block_threading(prog, &use_info);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
+fn block_threading(prog: &mut Program, use_info: &UseInfo) -> bool {
     let mut count_skipped = 0;
 
     for start in use_info.blocks() {

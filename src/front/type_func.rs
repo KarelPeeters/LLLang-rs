@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 
 use itertools::Itertools;
 
 use crate::front::{ast, cst, error};
 use crate::front::ast::{BinaryOp, DotIndexIndex, LogicalOp};
-use crate::front::cst::{FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
+use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, ItemStore, ScopedItem, ScopedValue, ScopeKind, TypeInfo};
 use crate::front::error::{Error, Result};
 use crate::front::lower::{LRValue, MappingTypeStore};
 use crate::front::scope::Scope;
@@ -122,7 +123,7 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 if let ScopedItem::Value(value) = item {
                     match value {
                         ScopedValue::TypeVar(var) => var,
-                        ScopedValue::Function(_) | ScopedValue::Const(_) | ScopedValue::Immediate(_) => {
+                        ScopedValue::Function(_) | ScopedValue::ConstOrStatic(_) | ScopedValue::Immediate(_) => {
                             let ty = (self.map_value)(value).ty(self.types);
                             self.problem.fully_known(self.types, ty)
                         }
@@ -165,6 +166,12 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                     }
                     ast::UnaryOp::Neg => {
                         let value_ty = self.problem.unknown_int(expr_origin, Some(Signed::Signed));
+                        let inner_ty = self.visit_expr(scope, inner)?;
+                        self.problem.equal(value_ty, inner_ty);
+                        value_ty
+                    }
+                    ast::UnaryOp::Not => {
+                        let value_ty = self.problem.unknown_int_or_bool(expr_origin, Some(Signed::Unsigned));
                         let inner_ty = self.visit_expr(scope, inner)?;
                         self.problem.equal(value_ty, inner_ty);
                         value_ty
@@ -278,8 +285,34 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
 
                 self.problem.fully_known(self.types, struct_ty)
             }
-            ast::ExpressionKind::BlackBox { value } => {
+            ast::ExpressionKind::ArrayLiteral { values } => {
+                let inner = self.problem.unknown(expr_origin);
+                let array = self.problem.known(expr_origin, TypeInfo::Array(ArrayTypeInfo {
+                    inner,
+                    length: values.len().try_into().unwrap(),
+                }));
+
+                // ensure inner types match
+                for value in values {
+                    let actual_inner = self.visit_expr(scope, value)?;
+                    self.problem.equal(inner, actual_inner);
+                }
+
+                array
+            }
+            ast::ExpressionKind::Obscure { value } => {
                 self.visit_expr(scope, value)?
+            }
+            ast::ExpressionKind::BlackHole { value } => {
+                let _ = self.visit_expr(scope, value)?;
+                self.problem.ty_void()
+            }
+            ast::ExpressionKind::MemBarrier => {
+                self.problem.ty_void()
+            }
+            ast::ExpressionKind::Unreachable => {
+                // TODO use never type once that exists
+                self.problem.unknown_default_void(expr_origin)
             }
         };
 
@@ -316,9 +349,19 @@ impl<'ast, 'cst, F: Fn(ScopedValue) -> LRValue> TypeFuncState<'ast, 'cst, F> {
                 Ok(())
             }
             ast::StatementKind::Assignment(assign) => {
-                let addr_ty = self.visit_expr(scope, &assign.left)?;
-                let value_ty = self.visit_expr(scope, &assign.right)?;
-                self.problem.equal(addr_ty, value_ty);
+                let left_ty = self.visit_expr(scope, &assign.left)?;
+                let right_ty = self.visit_expr(scope, &assign.right)?;
+                self.problem.equal(left_ty, right_ty);
+                Ok(())
+            }
+            ast::StatementKind::BinaryAssignment(assign) => {
+                let left_ty = self.visit_expr(scope, &assign.left)?;
+                let right_ty = self.visit_expr(scope, &assign.right)?;
+
+                let origin = Origin::BinaryAssignment(assign);
+                let result_ty = self.visit_binary_op(origin, assign.op, left_ty, right_ty)?;
+
+                self.problem.equal(left_ty, result_ty);
                 Ok(())
             }
             ast::StatementKind::If(if_stmt) => {

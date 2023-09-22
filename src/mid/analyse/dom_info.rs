@@ -1,15 +1,17 @@
 use fixedbitset::FixedBitSet;
 
 use crate::mid::ir::{Block, Function, Program};
-use crate::util::{IndexMutTwice, Never, NeverExt};
+use crate::util::IndexMutTwice;
+use crate::util::internal_iter::InternalIterator;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DomInfo {
     func: Function,
     blocks: Vec<Block>,
     successors: Vec<FixedBitSet>,
     dominates: Vec<FixedBitSet>,
     frontier: Vec<FixedBitSet>,
+    reachable: Vec<FixedBitSet>,
     parent: Vec<Option<usize>>,
 }
 
@@ -20,15 +22,11 @@ impl DomInfo {
         let func_info = prog.get_func(func);
         let entry_block = func_info.entry;
 
-        let mut blocks = Vec::new();
-        prog.try_visit_blocks(entry_block, |block| {
-            blocks.push(block);
-            Never::UNIT
-        }).no_err();
+        let blocks = prog.reachable_blocks(entry_block).collect_vec();
 
         let successors: Vec<FixedBitSet> = blocks.iter().map(|&block| {
             let mut successors = FixedBitSet::with_capacity(blocks.len());
-            prog.get_block(block).terminator.for_each_successor(|succ| {
+            prog.get_block(block).terminator.successors().for_each(|succ| {
                 let si = blocks.iter()
                     .position(|&b| b == succ)
                     .expect("Successor not in blocks");
@@ -110,12 +108,36 @@ impl DomInfo {
             })
             .collect();
 
+        // calculate reachable blocks
+        let mut reachable = successors.clone();
+        loop {
+            let mut changed = false;
+
+            for bi in 0..blocks.len() {
+                for si in successors[bi].ones() {
+                    let (block_reach, succ_reach) = match reachable.index_mut_twice(bi, si) {
+                        Some(pair) => pair,
+                        None => continue,
+                    };
+
+                    let count_before = block_reach.count_ones(..);
+                    block_reach.union_with(succ_reach);
+                    let count_after = block_reach.count_ones(..);
+
+                    changed |= count_before != count_after;
+                }
+            }
+
+            if !changed { break; }
+        }
+
         DomInfo {
             func,
             blocks,
             successors,
             dominates,
             frontier,
+            reachable,
             parent,
         }
     }
@@ -191,6 +213,13 @@ impl DomInfo {
         }
     }
 
+    /// If `from` and `to` are the same block, this implies that there is a loop containing the block.
+    pub fn is_reachable(&self, from: Block, to: Block) -> bool {
+        let from_i = self.block_index(from);
+        let to_i = self.block_index(to);
+        self.reachable[from_i].contains(to_i)
+    }
+
     pub fn func(&self) -> Function {
         self.func
     }
@@ -213,6 +242,14 @@ impl DomPosition {
             DomPosition::Global => None,
             DomPosition::FuncEntry(func) => Some(func),
             DomPosition::InBlock(func, _, _) => Some(func),
+        }
+    }
+
+    pub fn block(self) -> Option<Block> {
+        match self {
+            DomPosition::Global => None,
+            DomPosition::FuncEntry(_) => None,
+            DomPosition::InBlock(_, block, _) => Some(block),
         }
     }
 }

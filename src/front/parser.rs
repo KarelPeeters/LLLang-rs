@@ -4,8 +4,10 @@ use std::num::ParseIntError;
 use TokenType as TT;
 
 use crate::front::ast;
+use crate::front::ast::ConstOrStaticKind;
 use crate::front::cst::IntTypeInfo;
 use crate::front::pos::{FileId, Pos, Span};
+use crate::mid::ir::Signed;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -59,9 +61,13 @@ declare_tokens![
     U8("u8"),
     U16("u16"),
     U32("u32"),
+    U64("u64"),
+    USize("usize"),
     I8("i8"),
     I16("i16"),
     I32("i32"),
+    I64("i64"),
+    ISize("isize"),
 
     True("true"),
     False("false"),
@@ -75,6 +81,7 @@ declare_tokens![
     Return("return"),
     Let("let"),
     Const("const"),
+    Static("static"),
     Mut("mut"),
     If("if"),
     Else("else"),
@@ -85,40 +92,54 @@ declare_tokens![
     As("as"),
     Break("break"),
     Continue("continue"),
-    BlackBox("__blackbox"),
+
+    IntrinsicObscure("__obscure"),
+    IntrinsicBlackHole("__blackhole"),
+    IntrinsicMemBarrier("__membarrier"),
+    IntrinsicUnreachable("__unreachable"),
 
     Underscore("_"),
     Arrow("->"),
     DoubleDot(".."),
 
-    NotEq("!="),
+    BangEq("!="),
     DoubleEq("=="),
     GreaterEqual(">="),
     Greater(">"),
     LessEqual("<="),
     Less("<"),
 
-    Plus("+"),
-    Minus("-"),
-    Slash("/"),
-    Percent("%"),
-
     // TODO find a better and more general solution to token overlaps
     //   (probably by rewriting the tokenizer to split tokens on-demand)
     DoubleAmpersand("&&"),
     DoublePipe("||"),
+    DoubleColon("::"),
+
+    PlusEq("+="),
+    MinusEq("-="),
+    StarEq("*="),
+    SlashEq("/="),
+    PercentEq("%="),
+    AmpersandEq("&="),
+    PipeEq("|="),
+    HatEq("^="),
+
+    Plus("+"),
+    Minus("-"),
+    Star("*"),
+    Slash("/"),
+    Percent("%"),
+    Ampersand("&"),
+    Pipe("|"),
+    Hat("^"),
+    Bang("!"),
 
     Dot("."),
-    DoubleColon("::"),
     Semi(";"),
     Colon(":"),
     QuestionMark("?"),
     Comma(","),
     Eq("="),
-    Ampersand("&"),
-    Star("*"),
-    Pipe("|"),
-    Hat("^"),
 
     OpenB("("),
     CloseB(")"),
@@ -386,9 +407,13 @@ const TYPE_START_TOKENS: &[TT] = &[
     TT::U8,
     TT::U16,
     TT::U32,
+    TT::U64,
+    TT::USize,
     TT::I8,
     TT::I16,
     TT::I32,
+    TT::I64,
+    TT::ISize,
     TT::Ampersand,
     TT::DoubleAmpersand,
     TT::Id,
@@ -416,7 +441,7 @@ const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
     BinOpInfo { level: 2, token: TT::DoubleAmpersand, allow_chain: true, op: ParseBinaryOp::Logical(ast::LogicalOp::And) },
     // comparison
     BinOpInfo { level: 3, token: TT::DoubleEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Eq) },
-    BinOpInfo { level: 3, token: TT::NotEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Neq) },
+    BinOpInfo { level: 3, token: TT::BangEq, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Neq) },
     BinOpInfo { level: 3, token: TT::GreaterEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gte) },
     BinOpInfo { level: 3, token: TT::Greater, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Gt) },
     BinOpInfo { level: 3, token: TT::LessEqual, allow_chain: false, op: ParseBinaryOp::Binary(ast::BinaryOp::Lte) },
@@ -434,6 +459,17 @@ const BINARY_OPERATOR_INFO: &[BinOpInfo] = &[
     BinOpInfo { level: 8, token: TT::Percent, allow_chain: true, op: ParseBinaryOp::Binary(ast::BinaryOp::Mod) },
 ];
 
+const BINARY_ASSIGNMENT_OPERATORS: &[(TT, ast::BinaryOp)] = &[
+    (TT::PipeEq, ast::BinaryOp::Or),
+    (TT::HatEq, ast::BinaryOp::Xor),
+    (TT::AmpersandEq, ast::BinaryOp::And),
+    (TT::PlusEq, ast::BinaryOp::Add),
+    (TT::MinusEq, ast::BinaryOp::Sub),
+    (TT::StarEq, ast::BinaryOp::Mul),
+    (TT::SlashEq, ast::BinaryOp::Div),
+    (TT::PercentEq, ast::BinaryOp::Mod),
+];
+
 struct PrefixOpInfo {
     level: u8,
     token: TT,
@@ -446,6 +482,7 @@ const PREFIX_OPERATOR_INFO: &[PrefixOpInfo] = &[
     PrefixOpInfo { level: 2, token: TT::DoubleAmpersand, op: ast::UnaryOp::Ref, double: true },
     PrefixOpInfo { level: 2, token: TT::Star, op: ast::UnaryOp::Deref, double: false },
     PrefixOpInfo { level: 2, token: TT::Minus, op: ast::UnaryOp::Neg, double: false },
+    PrefixOpInfo { level: 2, token: TT::Bang, op: ast::UnaryOp::Not, double: false },
 ];
 
 const POSTFIX_DEFAULT_LEVEL: u8 = 3;
@@ -627,24 +664,30 @@ impl<'s> Parser<'s> {
         match token.ty {
             TT::Struct => self.struct_().map(ast::Item::Struct),
             TT::Fn | TT::Extern => self.function().map(ast::Item::Function),
-            TT::Const => self.const_().map(ast::Item::Const),
+            TT::Const | TT::Static => self.const_or_static().map(ast::Item::ConstOrStatic),
             TT::Use => self.use_decl().map(ast::Item::UseDecl),
             TT::Type => self.type_alias().map(ast::Item::TypeAlias),
             _ => Err(Self::unexpected_token(token, &[TT::Struct, TT::Fn, TT::Extern, TT::Const, TT::Use], "start of item"))
         }
     }
 
-    fn const_(&mut self) -> Result<ast::Const> {
-        let start_pos = self.expect(TT::Const, "start of const item")?.span.start;
+    fn const_or_static(&mut self) -> Result<ast::ConstOrStatic> {
+        let start = self.pop()?;
+        let kind = match start.ty {
+            TT::Const => ConstOrStaticKind::Const,
+            TT::Static => ConstOrStaticKind::Static,
+            _ => unreachable!(),
+        };
+
         let id = self.identifier("const name")?;
         self.expect(TT::Colon, "const type")?;
         let ty = self.type_decl()?;
-        self.expect(TT::Eq, "initializer")?;
+        self.expect(TT::Eq, "const initializer")?;
         let init = self.expression()?;
-        self.expect(TT::Semi, "end of item")?;
+        self.expect(TT::Semi, "const end")?;
 
-        let span = Span::new(start_pos, self.last_popped_end);
-        Ok(ast::Const { span, id, ty, init })
+        let span = Span::new(start.span.start, self.last_popped_end);
+        Ok(ast::ConstOrStatic { span, kind, id, ty, init })
     }
 
     fn use_decl(&mut self) -> Result<ast::UseDecl> {
@@ -804,6 +847,16 @@ impl<'s> Parser<'s> {
                     let right = self.expression_boxed()?;
                     ast::StatementKind::Assignment(ast::Assignment {
                         span: Span::new(left.span.start, right.span.end),
+                        left,
+                        right,
+                    })
+                } else if let Some(&(_, op)) = BINARY_ASSIGNMENT_OPERATORS.iter().find(|&&(ty, _)| self.at(ty)) {
+                    // binary assignment
+                    self.pop()?;
+                    let right = self.expression_boxed()?;
+                    ast::StatementKind::BinaryAssignment(ast::BinaryAssignment {
+                        span: Span::new(left.span.start, right.span.end),
+                        op,
                         left,
                         right,
                     })
@@ -1066,11 +1119,20 @@ impl<'s> Parser<'s> {
             }
             TT::OpenB => {
                 self.pop()?;
+                // TODO shouldn't many more things call unrestrict?
                 let inner = self.unrestrict(|s| s.expression_boxed())?;
                 self.expect(TT::CloseB, "closing parenthesis")?;
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
                     kind: ast::ExpressionKind::Wrapped { inner },
+                })
+            }
+            TT::OpenS => {
+                self.pop()?;
+                let (_, values) = self.list(TT::CloseS, Some(TT::Comma), |s| s.expression())?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::ArrayLiteral { values },
                 })
             }
             TT::Return => {
@@ -1100,14 +1162,44 @@ impl<'s> Parser<'s> {
                     kind: ast::ExpressionKind::Break,
                 })
             }
-            TT::BlackBox => {
+            TT::IntrinsicObscure => {
                 self.pop()?;
-                self.expect(TT::OpenB, "blackbox start")?;
+                self.expect(TT::OpenB, "__obscure start")?;
                 let value = self.expression_boxed()?;
-                self.expect(TT::CloseB, "blackbox end")?;
+                self.expect(TT::CloseB, "__obscure end")?;
+
                 Ok(ast::Expression {
                     span: Span::new(start_pos, self.last_popped_end),
-                    kind: ast::ExpressionKind::BlackBox { value },
+                    kind: ast::ExpressionKind::Obscure { value },
+                })
+            }
+            TT::IntrinsicBlackHole => {
+                self.pop()?;
+                self.expect(TT::OpenB, "__blackhole start")?;
+                let value = self.expression_boxed()?;
+                self.expect(TT::CloseB, "__blackhole end")?;
+
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::BlackHole { value },
+                })
+            }
+            TT::IntrinsicMemBarrier => {
+                self.pop()?;
+                self.expect(TT::OpenB, "__membarrier start")?;
+                self.expect(TT::CloseB, "__membarrier end")?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::MemBarrier,
+                })
+            }
+            TT::IntrinsicUnreachable => {
+                self.pop()?;
+                self.expect(TT::OpenB, "__unreachable start")?;
+                self.expect(TT::CloseB, "__unreachable end")?;
+                Ok(ast::Expression {
+                    span: Span::new(start_pos, self.last_popped_end),
+                    kind: ast::ExpressionKind::Unreachable,
                 })
             }
 
@@ -1174,9 +1266,13 @@ impl<'s> Parser<'s> {
             TT::I8 => Some(IntTypeInfo::I8),
             TT::I16 => Some(IntTypeInfo::I16),
             TT::I32 => Some(IntTypeInfo::I32),
+            TT::I64 => Some(IntTypeInfo::I64),
+            TT::ISize => return Ok(Some(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::IntSize(Signed::Signed) })),
             TT::U8 => Some(IntTypeInfo::U8),
             TT::U16 => Some(IntTypeInfo::U16),
             TT::U32 => Some(IntTypeInfo::U32),
+            TT::U64 => Some(IntTypeInfo::U64),
+            TT::USize => return Ok(Some(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::IntSize(Signed::Unsigned) })),
             _ => None,
         };
 
@@ -1193,13 +1289,15 @@ impl<'s> Parser<'s> {
     fn type_decl(&mut self) -> Result<ast::Type> {
         let start_pos = self.peek().span.start;
 
+        if let Some(ty) = self.maybe_int_ty()? {
+            return Ok(ty);
+        }
+
         match self.peek().ty {
             TT::Underscore => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Wildcard }),
 
             TT::Void => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Void }),
             TT::Bool => Ok(ast::Type { span: self.pop()?.span, kind: ast::TypeKind::Bool }),
-
-            TT::I8 | TT::I16 | TT::I32 | TT::U8 | TT::U16 | TT::U32 => Ok(self.maybe_int_ty()?.unwrap()),
 
             TT::Ampersand => {
                 self.pop()?;

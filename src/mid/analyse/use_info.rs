@@ -4,14 +4,15 @@ use std::fmt::Debug;
 use indexmap::IndexSet;
 use indexmap::map::{Entry, IndexMap};
 
-use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, for_each_usage_in_expr, for_each_usage_in_instr, for_each_usage_in_term, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
-use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Value};
+use crate::mid::analyse::usage::{BlockPos, BlockUsage, ExprOperand, InstrOperand, InstructionPos, TermOperand, TermUsage, Usage};
+use crate::mid::ir::{Block, Expression, ExpressionInfo, Function, Global, Instruction, InstructionInfo, Program, Scoped, Terminator, Type, Value};
+use crate::util::internal_iter::InternalIterator;
 
 //TODO maybe write a specialized version that only cares about specific usages for certain passes?
 // eg. slot_to_phi only cares about slots
 //TODO try to unify some of this code with gc
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct UseInfo {
     func_blocks: IndexMap<Function, IndexSet<Block>>,
     value_usages: IndexMap<Value, Vec<Usage>>,
@@ -30,6 +31,8 @@ impl UseInfo {
     }
 
     pub fn replace_value_usages_if(&self, prog: &mut Program, old: Value, new: Value, mut filter: impl FnMut(&Program, &Usage) -> bool) -> usize {
+        // TODO should we assert a type match between old and new here?
+        //   or do we want to allow differently typed replacements?
         assert_ne!(old, new);
         let mut count = 0;
         for usage in &self[old] {
@@ -85,7 +88,7 @@ impl UseInfo {
     pub fn expressions(&self) -> &IndexSet<Expression> {
         &self.expressions
     }
-    
+
     /// Whether `value` is used anywhere in `func`, including through expressions.
     /// Can be used to check whether a function can directly call itself.
     pub fn value_used_in_func(&self, prog: &Program, value: Value, func: Function) -> bool {
@@ -93,6 +96,48 @@ impl UseInfo {
             match usage.as_dom_pos() {
                 Ok(pos) => pos.function() == Some(func),
                 Err(expr) => self.value_used_in_func(prog, expr.into(), func),
+            }
+        })
+    }
+
+    pub fn block_only_used_in_targets(&self, block: Block) -> bool {
+        self[block].iter().all(|usage| matches!(usage, BlockUsage::Target { .. }))
+    }
+
+    pub fn block_only_used_as_func_entry(&self, block: Block) -> bool {
+        self[block].iter().all(|usage| matches!(usage, BlockUsage::FuncEntry { .. }))
+    }
+
+    pub fn value_only_used_as_load_store_addr(&self, prog: &Program, value: Value, expected_ty: Option<Type>, filter: impl Fn(InstructionPos) -> bool) -> bool {
+        self[value].iter().all(|usage| {
+            match usage {
+                &Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => {
+                    let ty = unwrap_match!(prog.get_instr(pos.instr), &InstructionInfo::Load { ty, .. } | &InstructionInfo::Store { ty, .. } => ty);
+
+                    if filter(pos) {
+                        // if expected_ty is None, we don't care about the type
+                        expected_ty.map_or(true, |expected_ty| ty == expected_ty)
+                    } else {
+                        // instructions that have been filtered away are always acceptable
+                        true
+                    }
+                }
+                _ => false,
+            }
+        })
+    }
+
+    pub fn value_only_used_as_store_addr(&self, value: Value, filter: impl Fn(InstructionPos) -> bool) -> bool {
+        self[value].iter().all(|usage| {
+            match usage {
+                &Usage::InstrOperand { pos, usage } => {
+                    if filter(pos) {
+                        matches!(usage, InstrOperand::StoreAddr)
+                    } else {
+                        true
+                    }
+                }
+                _ => false,
             }
         })
     }
@@ -127,6 +172,7 @@ struct State<'a> {
 fn build_use_info(prog: &Program) -> UseInfo {
     let mut state = State::new(prog);
 
+    // TODO also mark functions with external names as used
     for (name, &func) in &prog.root_functions {
         state.add_usage(func.into(), Usage::RootFunction(name.to_owned()));
         state.todo_funcs.push_back(func);
@@ -222,24 +268,21 @@ impl<'a> State<'a> {
                 let instr_info = prog.get_instr(instr);
                 let instr_pos = InstructionPos { func, block, instr, instr_index };
 
-                for_each_usage_in_instr(instr_info, |value, usage| {
+                instr_info.operands().for_each(|(value, usage)| {
                     self.add_usage(value, Usage::InstrOperand { pos: instr_pos, usage });
                 });
             }
 
             //terminator
-            for_each_usage_in_term(
-                &block_info.terminator,
-                |usage| match usage {
-                    TermUsage::Value(value, usage) => {
-                        self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
-                    }
-                    TermUsage::Block(succ, kind) => {
-                        self.todo_blocks.push_back(BlockPos { func, block: succ });
-                        self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
-                    }
-                },
-            );
+            block_info.terminator.operands().for_each(|usage| match usage {
+                TermUsage::Value(value, usage) => {
+                    self.add_usage(value, Usage::TermOperand { pos: block_pos, usage });
+                }
+                TermUsage::Block(succ, kind) => {
+                    self.todo_blocks.push_back(BlockPos { func, block: succ });
+                    self.add_block_usage(succ, BlockUsage::Target { pos: block_pos, kind });
+                }
+            });
         }
     }
 
@@ -252,7 +295,7 @@ impl<'a> State<'a> {
         let prog = self.prog;
         let expr_info = prog.get_expr(expr);
 
-        for_each_usage_in_expr(expr_info, |value, usage| {
+        expr_info.operands().for_each(|(value, usage)| {
             self.add_usage(value, Usage::ExprOperand { expr, usage });
         });
     }
@@ -290,8 +333,8 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(instr, InstructionInfo::Call { target, .. } => target),
                 InstrOperand::CallArgument(index) =>
                     repl_unwrap!(instr, InstructionInfo::Call { args, .. } => &mut args[index]),
-                InstrOperand::BlackBoxValue =>
-                    repl_unwrap!(instr, InstructionInfo::BlackBox { value, .. } => value),
+                InstrOperand::BlackHoleValue =>
+                    repl_unwrap!(instr, InstructionInfo::BlackHole { value, .. } => value),
             }
         }
         Usage::ExprOperand { expr, usage } => {
@@ -309,6 +352,8 @@ fn repl_usage(prog: &mut Program, usage: &Usage, old: Value, new: Value) {
                     repl_unwrap!(expr, ExpressionInfo::PointerOffSet { index, .. } => index),
                 ExprOperand::CastValue =>
                     repl_unwrap!(expr, ExpressionInfo::Cast { value, .. } => value),
+                ExprOperand::ObscureValue =>
+                    repl_unwrap!(expr, ExpressionInfo::Obscure { value, .. } => value),
             }
         }
         Usage::TermOperand { pos, usage } => {

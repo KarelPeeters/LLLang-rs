@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 
 use crate::front::ast;
 use crate::front::cst::{IntTypeInfo, Type, TypeInfo, TypeStore};
 use crate::mid::ir::Signed;
-use crate::util::{IndexMutTwice, zip_eq};
+use crate::util::{IndexMutTwice, VecExt, zip_eq};
+use crate::util::internal_iter::FromInternalIterator;
 
 type VarTypeInfo<'ast> = TypeInfo<'ast, TypeVar>;
 
@@ -34,6 +35,7 @@ enum PostCheck {
 #[derive(Copy, Clone)]
 pub enum Origin<'ast> {
     FullyKnown,
+    BinaryAssignment(&'ast ast::BinaryAssignment),
     Expression(&'ast ast::Expression),
     Declaration(&'ast ast::Declaration),
     ForIndex(&'ast ast::ForStatement),
@@ -43,6 +45,7 @@ impl std::fmt::Debug for Origin<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Origin::FullyKnown => write!(f, "Origin::FullyKnown"),
+            Origin::BinaryAssignment(a) => write!(f, "Origin::BinaryAssignment({:?})", a.span),
             Origin::Expression(a) => write!(f, "Origin::Expression({:?})", a.span),
             Origin::Declaration(a) => write!(f, "Origin::Declaration({:?})", a.span),
             Origin::ForIndex(a) => write!(f, "Origin::ForIndex({:?})", a.span),
@@ -87,8 +90,8 @@ struct IndexConstraint<'ast> {
 
 #[derive(Debug, Copy, Clone)]
 enum IndexKind<'ast> {
-    Tuple(u32),
     Array,
+    Tuple(u32),
     Struct(&'ast str),
 }
 
@@ -102,8 +105,8 @@ impl IndexKind<'_> {
     }
 }
 
-impl<'ast> Default for TypeProblem<'ast> {
-    fn default() -> Self {
+impl<'ast> TypeProblem<'ast> {
+    pub fn new() -> Self {
         let mut problem = TypeProblem {
             state: vec![],
             matches: Default::default(),
@@ -121,14 +124,13 @@ impl<'ast> Default for TypeProblem<'ast> {
         problem.ty_bool = problem.known(Origin::FullyKnown, TypeInfo::Bool);
 
         problem.ty_u8 = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::U8));
-        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::ISIZE));
-        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::Int(IntTypeInfo::USIZE));
+
+        problem.ty_isize = problem.known(Origin::FullyKnown, TypeInfo::IntSize(Signed::Signed));
+        problem.ty_usize = problem.known(Origin::FullyKnown, TypeInfo::IntSize(Signed::Unsigned));
 
         problem
     }
-}
 
-impl<'ast> TypeProblem<'ast> {
     /// The current amount of `TypeVar`s defined in this problem.
     pub fn len(&self) -> usize {
         self.state.len()
@@ -225,7 +227,7 @@ impl<'ast> TypeProblem<'ast> {
 
     /// Require the following:
     /// * if `left` is an integer type `right` should be the same type
-    /// * if `left` is a pointer type `right` should be the type Int
+    /// * if `left` is a pointer type `right` should be the type `isize`.
     pub fn add_sub_constraint(&mut self, left: TypeVar, right: TypeVar) {
         self.add_sub_constraints.push_back(AddSubConstraint { left, right });
     }
@@ -241,9 +243,10 @@ impl<'ast> TypeProblem<'ast> {
         }
 
         //map types back to cst types (and check that all types were indeed inferred)
+        let mut stack = vec![];
         let state = (0..self.state.len()).map(|i| {
             let var = TypeVar(i);
-            let ty = self.get_solution(types, var);
+            let ty = self.get_solution(types, var, &mut stack);
 
             let state = &self.state[i];
             let ty_info = &types[ty];
@@ -287,28 +290,33 @@ impl<'ast> TypeProblem<'ast> {
                 return true;
             };
 
-            match (target, index) {
-                (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
-                    let target_result = target.fields.get(index as usize)
-                        .expect("Tuple index out of bounds");
-                    self.matches.push_back((*target_result, result))
+            // extract inner type
+            let (target_inner, wrap_ptr) = match target {
+                VarTypeInfo::Pointer(target_inner) => {
+                    if let Some(target_inner) = &self.state[target_inner.0].info {
+                        (target_inner, true)
+                    } else {
+                        //we don't know the target type yet, so we can't make progress
+                        // TODO in theory we know it's a pointer type
+                        return true;
+                    }
                 }
-                (TypeInfo::Array(target), IndexKind::Array) => {
-                    let target_result = target.inner;
-                    self.matches.push_back((target_result, result))
-                }
-                (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
-                    let field_idx = target.find_field_index(index)
-                        .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
-                    let field_ty = target.fields[field_idx].ty;
+                _ => (target, false),
+            };
 
-                    let known_ty = self.fully_known(types, field_ty);
-                    self.matches.push_back((result, known_ty));
-                }
-                (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
-            }
+            // get result type
+            let result_ty_inner = index_constraint_result_type(target_inner, index, wrap_ptr);
+            let result_ty_inner = result_ty_inner.map_right(|ty| self.fully_known(types, ty)).into_inner();
+            let result_ty = if wrap_ptr {
+                self.known(Origin::FullyKnown, TypeInfo::Pointer(result_ty_inner))
+            } else {
+                result_ty_inner
+            };
 
-            //we applied this constraint, it can now be removed
+            // define the new constraint
+            self.matches.push((result_ty, result));
+
+            // we fully applied this constraint, it can now be removed
             false
         });
 
@@ -317,17 +325,21 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     fn apply_add_sub_constraints(&mut self) {
+        // TODO try getting some information to flow from right to left?
+        //   should be possible if RHS is not isize
+
         let mut temp = std::mem::take(&mut self.add_sub_constraints);
 
         temp.retain(|&AddSubConstraint { left, right }| {
-            let left_info = if let Some(left) = &self.state[left.0].info {
-                left
-            } else {
-                return true;
+            let left_info = match &self.state[left.0].info {
+                Some(left) => left,
+                _ => return true,
             };
 
-            let required_right_ty = match left_info {
-                &TypeInfo::Int(info) => self.known(Origin::FullyKnown, TypeInfo::Int(info)),
+            // TODO does it make sense to define new vars here? can't we just propagate the old ones?
+            let required_right_ty = match *left_info {
+                TypeInfo::Int(info) => self.known(Origin::FullyKnown, TypeInfo::Int(info)),
+                TypeInfo::IntSize(signed) => self.known(Origin::FullyKnown, TypeInfo::IntSize(signed)),
                 TypeInfo::Pointer(_) => self.ty_isize,
                 _ => panic!(
                     "Expected either pointer type or integer type for {:?} at {:?}, got {:?}",
@@ -344,16 +356,27 @@ impl<'ast> TypeProblem<'ast> {
     }
 
     /// Get the type inferred for the given TypeVar.
-    fn get_solution(&self, types: &mut TypeStore<'ast>, var: TypeVar) -> Type {
+    fn get_solution(&self, types: &mut TypeStore<'ast>, var: TypeVar, stack: &mut Vec<TypeVar>) -> Type {
+        if let Some(start) = stack.index_of(&var) {
+            let origins = stack[start..].iter().map(|&var| self.state[var.0].origin).collect_vec();
+            panic!("Infinite recursion in type inference involving {:?} with {:?}", &stack[start..], origins);
+        }
+        stack.push(var);
+
         let state = &self.state[var.0];
-        if let Some(info) = &state.info {
-            let info = info.map_ty(&mut |&var| self.get_solution(types, var));
+        let result = if let Some(info) = &state.info {
+            let info = info.map_ty(&mut |&var| self.get_solution(types, var, stack));
             types.define_type(info)
         } else if state.default_void {
             types.type_void()
         } else {
             panic!("Failed to infer type for {:?} with origin {:?}", var, self.state[var.0].origin)
-        }
+        };
+
+        let prev_last = stack.pop();
+        assert_eq!(prev_last, Some(var));
+
+        result
     }
 
     /// Apply the requirement that both TypeVars match. Returns whether any progress was made.
@@ -421,6 +444,13 @@ impl<'ast> TypeProblem<'ast> {
                     left, left_info, right, right_info,
                 );
             }
+            (&TypeInfo::IntSize(left_signed), &TypeInfo::IntSize(right_signed)) => {
+                assert_eq!(
+                    left_signed, right_signed,
+                    "IntSize signedness mismatch between {:?}: {:?} and {:?}: {:?}",
+                    left, left_signed, right, right_signed,
+                );
+            }
 
             (&TypeInfo::Pointer(left), &TypeInfo::Pointer(right)) => {
                 self.unify_var(left, right);
@@ -465,11 +495,34 @@ impl<'ast> TypeProblem<'ast> {
     }
 }
 
+fn index_constraint_result_type(target: &VarTypeInfo, index: IndexKind, target_wrapped_ptr: bool) -> Either<TypeVar, Type> {
+    match (target, index) {
+        // TODO decouple array from tuple/struct
+        (TypeInfo::Array(target), IndexKind::Array) => {
+            assert!(!target_wrapped_ptr, "Cannot array index on pointer {:?}", target);
+            Either::Left(target.inner)
+        }
+        (TypeInfo::Tuple(target), IndexKind::Tuple(index)) => {
+            let result_ty = *target.fields.get(index as usize)
+                .expect("Tuple index out of bounds");
+            Either::Left(result_ty)
+        }
+        (TypeInfo::Struct(target), IndexKind::Struct(index)) => {
+            let field_idx = target.find_field_index(index)
+                .unwrap_or_else(|| panic!("Struct {:?} does not have field {}", target, index));
+            let field_ty = target.fields[field_idx].ty;
+            Either::Right(field_ty)
+        }
+        (_, _) => panic!("Expected {} type, got {:?}", index.name(), target),
+    }
+}
+
 impl PostCheck {
     fn is_satisfied_by<T>(self, info: &TypeInfo<T>) -> bool {
-        let (is_bool, is_int) = match info {
+        let (is_bool, is_int) = match *info {
             TypeInfo::Bool => (true, None),
             TypeInfo::Int(info) => (false, Some(info.signed)),
+            TypeInfo::IntSize(signed) => (false, Some(signed)),
             _ => (false, None)
         };
 
@@ -571,8 +624,8 @@ mod test {
             let pos = Pos { file: FileId(0), line: 0, col: 0 };
             let expr = ast::Expression { span: Span { start: pos, end: pos }, kind: ExpressionKind::Null };
             let $origin = Origin::Expression(&expr);
-            let mut $types = TypeStore::default();
-            let mut $problem = TypeProblem::default();
+            let mut $types = TypeStore::new(64);
+            let mut $problem = TypeProblem::new();
         }
     }
 

@@ -1,24 +1,40 @@
 use std::collections::{HashSet, VecDeque};
 use std::num::Wrapping;
 
+use indexmap::IndexSet;
 use indexmap::map::IndexMap;
+use log::trace;
 
-use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_instr, InstrOperand, InstructionPos, TermOperand, Usage};
+use crate::mid::analyse::usage::{BlockPos, InstrOperand, InstructionPos, TermOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{ArithmeticOp, Block, CastKind, ComparisonOp, Const, Expression, ExpressionInfo, Function, Global, Immediate, Instruction, InstructionInfo, Program, Scoped, Signed, Target, Terminator, Type, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
+use crate::mid::util::assert::assert_type_match;
 use crate::mid::util::bit_int::{BitInt, UStorage};
 use crate::mid::util::lattice::Lattice;
+use crate::util::internal_iter::InternalIterator;
 use crate::util::zip_eq;
 
 /// Try to prove values are constant and replace them
-pub fn sccp(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+#[derive(Debug)]
+pub struct SccpPass;
 
-    let lattice = compute_lattice_map(prog, &use_info);
-    let replaced_value_count = apply_lattice_simplifications(prog, &use_info, &lattice);
+impl ProgramPass for SccpPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
 
-    println!("sccp replaced {} values", replaced_value_count);
-    replaced_value_count != 0
+        let lattice = compute_lattice_map(prog, &use_info);
+        let replaced_value_count = apply_lattice_simplifications(prog, &use_info, &lattice);
+
+        println!("sccp replaced {} values", replaced_value_count);
+        let changed = replaced_value_count != 0;
+
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
 }
 
 type LatticeMap = IndexMap<Value, Lattice>;
@@ -45,7 +61,28 @@ fn apply_lattice_simplifications(prog: &mut Program, use_info: &UseInfo, lattice
 
         let ty = prog.type_of_value(value);
         if let Some(lattice_value) = lattice_value.as_value_of_type(prog, ty) {
-            count += use_info.replace_value_usages(prog, value, lattice_value)
+            // TODO properly check for dominance (and everywhere else we're replacing things)
+            // TODO remove this quick slot check
+            let delta = use_info.replace_value_usages_if(prog, value, lattice_value, |prog, usage| {
+                if let Some(slot) = lattice_value.as_slot() {
+                    if let Some(func) = usage.as_dom_pos().ok().and_then(|pos| pos.function()) {
+                        // only replace if this slot belongs to this func
+                        prog.get_func(func).slots.contains(&slot)
+                    } else {
+                        // if we don't know where this slot usage is, fail same
+                        false
+                    }
+                } else {
+                    // replace all non-slot values
+                    true
+                }
+            });
+
+            if delta > 0 {
+                trace!("replaced {}x: {:?} -> {:?}", delta, value, lattice_value);
+            }
+
+            count += delta;
         }
     }
 
@@ -58,6 +95,7 @@ struct State<'a> {
 
     func_returns: IndexMap<Function, Lattice>,
     values: LatticeMap,
+    func_return_subscribers: IndexMap<Function, IndexSet<Instruction>>,
 
     todo: VecDeque<Todo>,
     funcs_reachable: HashSet<Function>,
@@ -89,6 +127,7 @@ impl<'a> State<'a> {
             use_info,
             func_returns: Default::default(),
             values: Default::default(),
+            func_return_subscribers: Default::default(),
             todo: Default::default(),
             funcs_reachable: Default::default(),
             blocks_reachable: Default::default(),
@@ -102,6 +141,7 @@ impl<'a> State<'a> {
         while let Some(curr) = self.todo.pop_front() {
             match curr {
                 Todo::FuncReachable(func) => {
+                    trace!("todo: marking func reachable: {:?}", func);
                     if self.funcs_reachable.insert(func) {
                         // mark entry block reachable
                         let entry = prog.get_func(func).entry;
@@ -110,17 +150,20 @@ impl<'a> State<'a> {
                     }
                 }
                 Todo::BlockReachable(pos) => {
+                    trace!("todo: marking block reachable: {:?}", pos);
                     if self.blocks_reachable.insert(pos.block) {
                         self.visit_new_block(pos);
                     }
                 }
                 Todo::ValueChanged(value) => {
+                    trace!("todo: value changed: {:?}", value);
                     for usage in &self.use_info[value] {
                         self.update_value_usage(value, usage);
                     }
                 }
                 Todo::FuncReturnChanged(func) => {
                     let return_value = self.eval_func_return(func);
+                    trace!("todo: func return changed: {:?}, -> {:?}", func, return_value);
 
                     // update the value of call instructions with this func as the target
                     for usage in &self.use_info[func] {
@@ -130,13 +173,22 @@ impl<'a> State<'a> {
                             }
                         }
                     }
+
+                    // update other subscribers
+                    if let Some(subs) = self.func_return_subscribers.get(&func) {
+                        // TODO this clone is a bit sad
+                        for instr in subs.clone() {
+                            assert!(self.reachable(instr));
+                            self.visit_instr(instr);
+                        }
+                    }
                 }
             }
         }
     }
 
     /// Assuming the lattice value corresponding to `value` has changed, update the given `usage`.
-    /// We need to be careful to only do this for usages that have already been marked as reachable.
+    /// We need to be careful to only actually do something for usages that are reachable.
     fn update_value_usage(&mut self, value: Value, usage: &Usage) {
         let prog = self.prog;
 
@@ -188,6 +240,8 @@ impl<'a> State<'a> {
 
     /// Visit `block` for the first time.
     fn visit_new_block(&mut self, block_pos: BlockPos) {
+        trace!("visiting new block {:?}", block_pos);
+
         let prog = self.prog;
         let block_info = prog.get_block(block_pos.block);
 
@@ -201,7 +255,7 @@ impl<'a> State<'a> {
 
             // mark each usage in this instruction
             //  visit_instr already does this for most instructions, but not necessarily all of them
-            for_each_usage_in_instr(prog.get_instr(instr), |value, usage| {
+            prog.get_instr(instr).operands().for_each(|(value, usage)| {
                 let usage = Usage::InstrOperand { pos: instr_pos, usage };
                 self.mark_usage(value, usage);
             });
@@ -223,6 +277,8 @@ impl<'a> State<'a> {
     }
 
     fn visit_branch(&mut self, block_pos: BlockPos, cond: Value, true_target: &Target, false_target: &Target) {
+        trace!("visiting branch {:?}", block_pos);
+
         let cond = self.eval(cond);
         let (visit_true, visit_false) = evaluate_branch_condition(cond);
 
@@ -235,6 +291,7 @@ impl<'a> State<'a> {
     }
 
     fn visit_target(&mut self, from: BlockPos, target: &Target) {
+        trace!("visiting target {:?} {:?}", from, target);
         let prog = self.prog;
 
         // mark block reachable
@@ -250,11 +307,13 @@ impl<'a> State<'a> {
     }
 
     fn visit_instr(&mut self, instr: Instruction) {
+        trace!("visiting instr {:?}", instr);
+
         let prog = self.prog;
         let instr_info = prog.get_instr(instr);
 
-        let result = match instr_info {
-            &InstructionInfo::Load { addr, ty: _ } => {
+        let result = match *instr_info {
+            InstructionInfo::Load { addr, ty: _ } => {
                 // loading from undef returns undef
                 // TODO maybe replace with unreachable instead?
                 //   => return bool "unreachable" and stop visiting instructions & terminator
@@ -267,11 +326,13 @@ impl<'a> State<'a> {
                     }
                 })
             }
-            // this instruction doesn't have a return value, so we can just use anything we want
-            InstructionInfo::Store { .. } => Lattice::Undef,
-            &InstructionInfo::Call { target, ref args } => {
-                self.eval_as_call_target(target).map_known(|target| {
-                    if let Some(target) = target.as_func() {
+
+            InstructionInfo::Call { target, ref args, conv: _ } => {
+                let target_lattice = self.eval_as_call_target(target);
+                trace!("call target {:?}: {:?}", target, target_lattice);
+
+                match target_lattice {
+                    Lattice::Known(Value::Global(Global::Func(target))) => {
                         // mark reachable
                         self.todo.push_back(Todo::FuncReachable(target));
 
@@ -279,18 +340,30 @@ impl<'a> State<'a> {
                         let target_info = prog.get_func(target);
                         let params = &prog.get_block(target_info.entry).params;
                         for (&param, &arg) in zip_eq(params, args) {
-                            let arg = self.eval(arg);
-                            self.merge_value(param.into(), arg);
+                            let arg_lattice = self.eval(arg);
+                            trace!("merging call arg into param, {:?} {:?} {:?}", param, arg, arg_lattice);
+                            self.merge_value(param.into(), arg_lattice);
                         }
+
+                        // mark that we need to know about return value changes
+                        self.func_return_subscribers.entry(target).or_default().insert(instr);
 
                         // get return
                         self.eval_func_return(target)
-                    } else {
+                    }
+                    _ => {
+                        // TODO unsubscribe from indirect calls?
+                        //   the current impl is not wrong, just maybe slower than necessary
+                        // call to anything other than a known func is overdef
                         Lattice::Overdef
                     }
-                })
+                }
             }
-            &InstructionInfo::BlackBox { .. } => Lattice::Overdef,
+
+            // void return values
+            InstructionInfo::Store { .. } => Lattice::Undef,
+            InstructionInfo::BlackHole { .. } => Lattice::Undef,
+            InstructionInfo::MemBarrier { .. } => Lattice::Undef,
         };
 
         self.merge_value(instr.into(), result);
@@ -300,6 +373,8 @@ impl<'a> State<'a> {
     /// or because one of the operands has changed.
     fn visit_expr(&mut self, expr: Expression) {
         let result = self.eval_expr(expr);
+        trace!("visiting expr {:?}, eval: {:?}", expr, result);
+
         self.merge_value(expr.into(), result);
     }
 
@@ -317,7 +392,7 @@ impl<'a> State<'a> {
                 // just always assume overdef, maybe this will change when we add const pointers
                 self.eval(base).map_known(|_| Lattice::Overdef)
             }
-            ExpressionInfo::Arithmetic { kind, left, right } => {
+            ExpressionInfo::Arithmetic { kind, ty: _, left, right } => {
                 // TODO test whether this correct handles all of the edge cases in mul and div
                 self.eval_binary(left, right, |ty, left, right| {
                     let left_unsigned = Wrapping(left.unsigned());
@@ -388,6 +463,8 @@ impl<'a> State<'a> {
                     Lattice::Known(Const::new(ty, result).into())
                 })
             }
+            // we can't propagate any info
+            ExpressionInfo::Obscure { ty: _, value: _ } => Lattice::Overdef,
         }
     }
 
@@ -413,6 +490,8 @@ impl<'a> State<'a> {
     }
 
     fn mark_func_used_as_non_call_target(&mut self, func: Function) {
+        trace!("marking func used as non-call target: {:?}", func);
+
         let prog = self.prog;
 
         // mark func as reachable
@@ -426,6 +505,8 @@ impl<'a> State<'a> {
     }
 
     fn mark_usage(&mut self, value: Value, usage: Usage) {
+        trace!("marking value usage: {:?} as {:?}", value, usage);
+
         if let Some(func) = value.as_func() {
             if !matches!(usage, Usage::InstrOperand { pos: _, usage: InstrOperand::CallTarget }) {
                 self.mark_func_used_as_non_call_target(func);
@@ -467,7 +548,13 @@ impl<'a> State<'a> {
 
             Value::Expr(expr) => {
                 if self.expr_visited.insert(expr) {
-                    self.visit_expr(expr)
+                    self.visit_expr(expr);
+
+                    // evaluate all expression operands so they have a chance to be optimized
+                    //   visit_expr already evaluates most of them, but is not guaranteed to
+                    self.prog.get_expr(expr).operands().for_each(|(operand, _)| {
+                        self.eval(operand);
+                    });
                 }
                 *self.values.get(&value).unwrap()
             }
@@ -480,6 +567,9 @@ impl<'a> State<'a> {
 
     fn merge_value(&mut self, value: Value, new: Lattice) {
         let prog = self.prog;
+        if let Lattice::Known(new) = new {
+            assert_type_match(prog, value, new);
+        }
 
         // don't bother with void values
         if prog.ty_void() == prog.type_of_value(value) {
@@ -492,24 +582,32 @@ impl<'a> State<'a> {
         self.values.insert(value, next);
 
         if prev != next {
+            trace!("value changed: {:?}, {:?} -> {:?}", value, prev, next);
             self.todo.push_back(Todo::ValueChanged(value));
         }
     }
 
+    // TODO combine with merge_value or at least ensure they work the same
     fn merge_func_return(&mut self, func: Function, new: Lattice) {
-        // TODO combine with merge_value or at least ensure they work the same
+        let prog = self.prog;
+        if let Lattice::Known(new) = new {
+            assert_type_match(prog, prog.get_func(func).func_ty.ret, new);
+        }
 
         let prev = self.eval_func_return(func);
         let next = Lattice::merge(prev, new);
         self.func_returns.insert(func, next);
 
         if prev != next {
+            trace!("func return changed: {:?}, {:?} -> {:?}", func, prev, next);
             self.todo.push_back(Todo::FuncReturnChanged(func));
         }
     }
 
     fn reachable(&self, instr: Instruction) -> bool {
-        self.values.contains_key(&Value::from(instr))
+        let reachable = self.values.contains_key(&Value::from(instr));
+        trace!("checking if instr reachable: {:?} -> {}", instr, reachable);
+        reachable
     }
 }
 

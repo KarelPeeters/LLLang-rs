@@ -1,30 +1,52 @@
-use itertools::Itertools;
-use crate::mid::analyse::usage::BlockUsage;
+use std::collections::HashSet;
 
+use itertools::Itertools;
+
+use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Program, Scoped, Target, Terminator, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::util::VecExt;
+
+#[derive(Debug)]
+pub struct PhiPushingPass;
+
+impl ProgramPass for PhiPushingPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = phi_pushing(prog, &use_info);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        false
+    }
+}
 
 /// Skip over blocks whose only purpose is to shuffle some params/args around,
 /// by instead jumping directly to the successor block.
 // TODO combine this with flow_simplify?
-pub fn phi_pushing(prog: &mut Program) -> bool {
+fn phi_pushing(prog: &mut Program, use_info: &UseInfo) -> bool {
     let mut changed_terminators = 0;
 
-    let use_info = UseInfo::new(prog);
+    // blocks that are blacklisted, either because it's the entry block or because we've changed this block already
+    // TODO can we do more stuff in a single pass?
+    let mut blacklist = HashSet::new();
 
     for func in use_info.funcs() {
         let func_entry = prog.get_func(func).entry;
+        blacklist.clear();
+        blacklist.insert(func_entry);
 
         for &block in use_info.func_blocks(func) {
             let block_info = prog.get_block(block);
 
-            // ensure we can skip this block: no instructions, jump terminator, no entry block on either side
-            if block == func_entry || !block_info.instructions.is_empty() {
+            // ensure we can skip this block: no instructions, jump terminator, no blacklist block on either side
+            if blacklist.contains(&block) || !block_info.instructions.is_empty() {
                 continue;
             }
             let target = if let Terminator::Jump { target } = &block_info.terminator {
-                if target.block == block || target.block == func_entry {
+                if target.block == block || blacklist.contains(&target.block) {
                     continue;
                 }
                 target.clone()
@@ -54,6 +76,7 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
 
                 let (pred_pos, kind) = unwrap_match!(usage, BlockUsage::Target { pos, kind } => (pos, kind));
                 let target = kind.get_target_mut(&mut prog.get_block_mut(pred_pos.block).terminator);
+                blacklist.insert(pred_pos.block);
 
                 let Target { block: pred_target_block, args: old_pred_args } = target;
 
@@ -74,7 +97,9 @@ pub fn phi_pushing(prog: &mut Program) -> bool {
             }
 
             // add phis to new block
+            // TODO replace usages of these phis with the values we pass for them!
             prog.get_block_mut(target_block).params.append(&mut old_params);
+            blacklist.insert(target_block);
         }
     }
 

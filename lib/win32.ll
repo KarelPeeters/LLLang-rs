@@ -2,13 +2,21 @@
 //   hopefully the compiler is fast enough to deal with the thousands of items that will yield :)
 
 // minwindef.h
-// NOTE: windows int and long are both 32-bit
 type BYTE = u8;
+type SHORT = i16;
+type USHORT = u16;
+// bool, int, long, dword are all 32-bit
 type BOOL = i32;
 type DWORD = u32;
 type INT = i32;
 type UINT = u32;
-type SIZE_T = u32;
+type LONG = i32;
+type ULONG = u32;
+// only "long long" is 64-bit
+type LONGLONG = i64;
+type ULONGLONG = u64;
+
+type SIZE_T = usize;
 type HANDLE = &void;
 
 type LPVOID = &void;
@@ -17,15 +25,15 @@ type LPCSTR = &i8; // pointer to zero-terminated string
 type LPDWORD = &u32;
 
 // heapapi.h
-extern fn _GetProcessHeap@0() -> HANDLE;
+extern fn GetProcessHeap() -> HANDLE;
 
-extern fn _HeapAlloc@12(
+extern fn HeapAlloc(
     hHeap: HANDLE,
     dwFlags: DWORD,
     dwBytes: SIZE_T
 ) -> LPVOID;
 
-extern fn _HeapFree@12(
+extern fn HeapFree(
     hHeap: HANDLE,
     dwFlags: DWORD,
     lpMem: LPVOID
@@ -48,11 +56,11 @@ const TRUNCATE_EXISTING: DWORD = 5;
 
 const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
 
-extern fn _GetStdHandle@4(
+extern fn GetStdHandle(
     nStdHandle: DWORD
 ) -> HANDLE;
 
-extern fn _CreateFileA@28(
+extern fn CreateFileA(
     lpFileName: LPCSTR,
     dwDesiredAccess: DWORD,
     dwShareMode: DWORD,
@@ -62,7 +70,7 @@ extern fn _CreateFileA@28(
     hTemplateFile: HANDLE,
 ) -> HANDLE;
 
-extern fn _WriteFile@20(
+extern fn WriteFile(
     hFile: HANDLE,
     lpBuffer: LPCVOID,
     nNumberOfBytesToWrite: DWORD,
@@ -70,12 +78,20 @@ extern fn _WriteFile@20(
     lpOverlapped: &void, // TODO define the proper struct for this
 ) -> BOOL;
 
+extern fn ReadFile(
+    hFile: HANDLE,
+    lpBuffer: LPVOID,
+    nNumberOfBytesToRead: DWORD,
+    lpNumberOfBytesRead: LPDWORD,
+    lpOverlapped: &void, // TODO define the proper struct for this
+) -> BOOL;
+
 // processthreadsapi.h
 const CREATE_SUSPENDED: DWORD = 0x00000004;
 
-extern fn _ExitProcess@4(exitCode: UINT);
+extern fn ExitProcess(exitCode: UINT);
 
-extern fn _CreateThread@24(
+extern fn CreateThread(
   lpThreadAttributes: &void, // TODO define the proper struct for this
   dwStackSize: SIZE_T,
   lpStartAddress: (LPVOID) -> DWORD,
@@ -85,12 +101,12 @@ extern fn _CreateThread@24(
 ) -> HANDLE;
 
 // synchapi.h
-extern fn _WaitForSingleObject@8(
+extern fn WaitForSingleObject(
   hHandle: HANDLE,
   dwMilliseconds: DWORD,
 ) -> DWORD;
 
-extern fn _WaitForMultipleObjects@16(
+extern fn WaitForMultipleObjects(
   nCount: DWORD,
   lpHandles: &HANDLE,
   bWaitAll: BOOL,
@@ -98,7 +114,6 @@ extern fn _WaitForMultipleObjects@16(
 ) -> DWORD;
 
 // sysinfoapi.h
-extern fn _GetPhysicallyInstalledSystemMemory@4(
-    // TODO use proper 64-bit int for this
-    TotalMemoryInKilobytes: &[u32; 2]
+extern fn GetPhysicallyInstalledSystemMemory(
+    TotalMemoryInKilobytes: &ULONGLONG,
 ) -> BOOL;

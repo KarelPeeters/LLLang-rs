@@ -1,22 +1,41 @@
 use itertools::{Itertools, zip};
 
-use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::BlockUsage;
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::analyse::value_dom::value_strictly_dominates_usage_slow;
 use crate::mid::ir::{Immediate, Program, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::lattice::Lattice;
+
+/// Replace param values that can only have a single value with that value.
+#[derive(Debug)]
+pub struct ParamCombinePass;
+
+impl ProgramPass for ParamCombinePass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let changed = param_combine(prog, ctx);
+        PassResult {
+            changed,
+            preserved_dom_info: true,
+            preserved_use_info: !changed,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        // TODO can we make this idempotent?
+        false
+    }
+}
 
 // TODO merge this with SCCP somehow (and make it more general, for all values not just params)
 // TODO combine duplicate param/arg pairs somewhere?
-/// Replace param values that can only have a single value with that value.
-pub fn param_combine(prog: &mut Program) -> bool {
+fn param_combine(prog: &mut Program, ctx: &mut PassContext) -> bool {
     let mut replaced_params = 0;
     let mut replaced_usages = 0;
 
     let funcs = prog.nodes.funcs.keys().collect_vec();
     for func in funcs {
-        let dom_info = DomInfo::new(prog, func);
+        let dom_info = ctx.dom_info(prog, func);
 
         'blocks: for &block in dom_info.blocks() {
             // TODO somehow move this outside, but we might invalidate it by accident

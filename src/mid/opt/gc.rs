@@ -1,6 +1,26 @@
-use crate::mid::analyse::usage::{for_each_usage_in_expr, for_each_usage_in_instr, for_each_usage_in_term, TermUsage};
+use crate::mid::analyse::usage::TermUsage;
 use crate::mid::ir::{Block, BlockInfo, FunctionInfo, Global, Program, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::visit::{VisitedResult, Visitor, VisitState};
+use crate::util::internal_iter::InternalIterator;
+
+#[derive(Debug)]
+pub struct GcPass;
+
+impl ProgramPass for GcPass {
+    fn run(&self, prog: &mut Program, _: &mut PassContext) -> PassResult {
+        PassResult {
+            changed: gc(prog),
+            // gc always preserves there, they only care about reachable items
+            preserved_dom_info: true,
+            preserved_use_info: true,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
 
 struct GcVisitor;
 
@@ -17,7 +37,7 @@ impl Visitor for GcVisitor {
                 state.add_values(slots.iter().copied());
             }
             Value::Expr(expr) => {
-                for_each_usage_in_expr(state.prog.get_expr(expr), |inner, _| {
+                state.prog.get_expr(expr).operands().for_each(|(inner, _)| {
                     state.add_value(inner);
                 })
             }
@@ -28,24 +48,23 @@ impl Visitor for GcVisitor {
     }
 
     fn visit_block(&mut self, state: &mut VisitState, block: Block) {
-        let BlockInfo { params, instructions, terminator } = state.prog.get_block(block);
+        let BlockInfo { params, instructions, terminator, debug_name: _ } = state.prog.get_block(block);
 
         state.add_values(params.iter().copied());
         state.add_values(instructions.iter().copied());
 
         for &instr in instructions {
-            for_each_usage_in_instr(state.prog.get_instr(instr), |value, _| {
+            state.prog.get_instr(instr).operands().for_each(|(value, _)| {
                 state.add_value(value);
             });
         }
 
-        for_each_usage_in_term(
-            terminator,
-            |usage| match usage {
+        terminator.operands().for_each(|usage| {
+            match usage {
                 TermUsage::Value(value, _) => state.add_value(value),
                 TermUsage::Block(block, _) => state.add_block(block),
-            },
-        );
+            }
+        });
     }
 }
 
@@ -68,6 +87,7 @@ pub fn gc(prog: &mut Program) -> bool {
     prog.nodes.exprs.retain(|n, _| visited.visited_values.contains(&n.into()));
     prog.nodes.exts.retain(|n, _| visited.visited_values.contains(&n.into()));
     prog.nodes.datas.retain(|n, _| visited.visited_values.contains(&n.into()));
+    prog.nodes.global_slots.retain(|n, _| visited.visited_values.contains(&n.into()));
 
     let after_count = prog.nodes.total_node_count();
 

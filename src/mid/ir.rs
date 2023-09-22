@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
@@ -6,8 +6,8 @@ use derive_more::{Constructor, From};
 use itertools::Itertools;
 
 use crate::mid::util::bit_int::BitInt;
-use crate::util::{Never, NeverExt};
 use crate::util::arena::{Arena, ArenaSet};
+use crate::util::internal_iter::InternalIterator;
 
 macro_rules! gen_node_and_program_accessors {
     ($([$node:ident, $info:ident, $def:ident, $get:ident, $get_mut:ident, $single:ident, $mul:ident],)*) => {
@@ -59,6 +59,7 @@ gen_node_and_program_accessors![
     [Expression, ExpressionInfo, define_expr, get_expr, get_expr_mut, expr, exprs],
     [Extern, ExternInfo, define_ext, get_ext, get_ext_mut, ext, exts],
     [Data, DataInfo, define_data, get_data, get_data_mut, data, datas],
+    [GlobalSlot, GlobalSlotInfo, define_global_slot, get_global_slot, get_global_slot_mut, global_slot, global_slots],
 ];
 
 new_index_type!(pub Type);
@@ -66,6 +67,8 @@ pub type ProgramTypes = ArenaSet<Type, TypeInfo>;
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    ptr_size_bits: u32,
+
     //TODO we've lost distinct indices! is there an easy way to get that back?
     //all values that may be used multiple times are stored as nodes
     pub nodes: Arenas,
@@ -74,35 +77,40 @@ pub struct Program {
     pub types: ProgramTypes,
 
     //predefined types
-    #[allow(dead_code)]
     ty_void: Type,
-    #[allow(dead_code)]
     ty_ptr: Type,
-    #[allow(dead_code)]
     ty_bool: Type,
-    #[allow(dead_code)]
     ty_isize: Type,
 
     pub root_functions: HashMap<String, Function>,
 }
 
-impl Default for Program {
-    /// Return the program representing `fn main() -> void { unreachable(); }`
-    fn default() -> Self {
+impl Program {
+    /// Return an empty program.
+    pub fn new(ptr_size_bits: u32) -> Self {
         let mut types = ArenaSet::default();
 
         let ty_void = types.push(TypeInfo::Void);
         let ty_ptr = types.push(TypeInfo::Pointer);
         let ty_bool = types.push(TypeInfo::Integer { bits: 1 });
-        // TODO change this when we switch to 64-bit
-        //   or just make this configurable?
-        let ty_isize = types.push(TypeInfo::Integer { bits: 32 });
+        let ty_isize = types.push(TypeInfo::Integer { bits: ptr_size_bits });
 
-        Program { nodes: Arenas::default(), types, ty_void, ty_ptr, ty_bool, ty_isize, root_functions: Default::default() }
+        Program {
+            ptr_size_bits,
+            nodes: Arenas::default(),
+            types,
+            ty_void,
+            ty_ptr,
+            ty_bool,
+            ty_isize,
+            root_functions: Default::default(),
+        }
     }
-}
 
-impl Program {
+    pub fn ptr_size_bits(&self) -> u32 {
+        self.ptr_size_bits
+    }
+
     // TODO maybe make self.types use internal mutability?
     pub fn define_type(&mut self, info: TypeInfo) -> Type {
         self.types.push(info)
@@ -145,7 +153,7 @@ impl Program {
     }
 
     pub fn const_null_ptr(&self) -> Const {
-        Const::new(self.ty_ptr, BitInt::zero(PTR_SIZE_BITS))
+        Const::new(self.ty_ptr, BitInt::zero(self.ptr_size_bits))
     }
 
     pub fn const_bool(&self, value: bool) -> Const {
@@ -166,13 +174,13 @@ impl Program {
                     Global::Func(func) => self.get_func(func).ty,
                     Global::Extern(ext) => self.get_ext(ext).ty,
                     Global::Data(data) => self.get_data(data).ty,
+                    Global::GlobalSlot(_) => self.ty_ptr,
                 }
             }
             Value::Scoped(value) => {
                 match value {
                     Scoped::Param(param) => self.get_param(param).ty,
                     Scoped::Slot(_) => self.ty_ptr,
-
                     Scoped::Instr(instr) => self.get_instr(instr).ty(self),
                 }
             }
@@ -204,11 +212,22 @@ pub enum TypeInfo {
     Array(ArrayType),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum CallingConvention {
+    /// Windows 64-bit calling convention.
+    /// This is the same as `__stdcall` when compiling for x64.
+    Win64,
+    /// The backend can freely choose the calling convention.
+    /// The only requirement is that it's the same for functions with the same signature.
+    Custom,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionType {
     pub params: Vec<Type>,
     // TODO allow multiple returns
     pub ret: Type,
+    pub conv: CallingConvention,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -232,10 +251,6 @@ impl TypeInfo {
         }
     }
 
-    pub fn is_ptr(&self) -> bool {
-        matches!(self, TypeInfo::Pointer)
-    }
-
     pub fn unwrap_func(&self) -> Option<&FunctionType> {
         match self {
             TypeInfo::Func(func_ty) => Some(func_ty),
@@ -255,6 +270,14 @@ impl TypeInfo {
             TypeInfo::Array(ty) => Some(ty),
             _ => None,
         }
+    }
+
+    pub fn is_int(&self) -> bool {
+        matches!(self, TypeInfo::Integer { .. })
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, TypeInfo::Pointer)
     }
 }
 
@@ -283,6 +306,7 @@ impl FunctionInfo {
             params,
             instructions: vec![],
             terminator: Terminator::Unreachable,
+            debug_name: None,
         });
 
         Self::new_given_parts(func_ty, ty, entry)
@@ -311,10 +335,20 @@ pub struct StackSlotInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct GlobalSlotInfo {
+    pub inner_ty: Type,
+    pub debug_name: Option<String>,
+    // TODO verify that initial value dominates everything else
+    pub initial: Value,
+}
+
+#[derive(Debug, Clone)]
 pub struct BlockInfo {
     pub params: Vec<Parameter>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
+    // TODO check whether this (and other) debug names are propagated and rendered whenever possible
+    pub debug_name: Option<String>,
 }
 
 impl BlockInfo {
@@ -324,6 +358,7 @@ impl BlockInfo {
             params: Vec::new(),
             instructions: Vec::new(),
             terminator: Terminator::Unreachable,
+            debug_name: None,
         }
     }
 }
@@ -337,29 +372,47 @@ pub enum InstructionInfo {
 
     /// Store `value` into `addr`.
     ///
-    /// `Store { addr: &, ty=T, value: T } -> void`
+    /// signature: `Store { addr: &, ty=T, value: T } -> void`
     // TODO remove the ty field here?
     Store { addr: Value, ty: Type, value: Value },
 
     /// Call `target` with arguments `args`.
     ///
-    /// `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
+    /// signature: `Call { target: (A, B, C) -> R, args: [A, B, C] } -> R`
     // TODO add an expression variant of call that can't have have any side effects 
-    Call { target: Value, args: Vec<Value> },
+    Call { target: Value, args: Vec<Value>, conv: CallingConvention },
 
-    /// Return `value` as-is.
-    /// Optimizations should assume that:
-    /// * the operand value is actually used some some side-effect purpose
-    /// * the returned value is not known at compile time.
-    BlackBox { value: Value },
+    /// A no-op instruction returning void.
+    ///
+    /// Optimizations should assume that passed value may be used in some arbitrary way, including:
+    /// * being observed
+    /// * escaping
+    /// * if it's a pointer, being read/written to/from
+    ///
+    /// This instruction does not imply writes or reads from any other memory, use [InstructionInfo::MemBarrier] for that.
+    ///
+    /// signature: `BlackHole { value: T } -> void`
+    BlackHole { value: Value },
+
+    // TODO *any* memory location or only leaked ones?
+    // TODO are blackhole(void) and membarrier not just the same thing?
+    /// A no-op instruction.
+    ///
+    /// Optimizations should assume that any arbitrary memory location could be read
+    /// or written to by this instruction.
+    ///
+    /// signature: `Barrier { } -> void`
+    MemBarrier,
+
+    // TODO add assert instruction that can provide information to the optimizer?
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ExpressionInfo {
     ///Perform binary arithmetic operation `kind(left, right)`;
     ///
     /// `Arithmetic { kind, left: iN, right: iN } -> iN`
-    Arithmetic { kind: ArithmeticOp, left: Value, right: Value },
+    Arithmetic { kind: ArithmeticOp, ty: Type, left: Value, right: Value },
 
     /// Perform binary comparison operation `kind(left, right)`;
     ///
@@ -381,12 +434,21 @@ pub enum ExpressionInfo {
     ///
     /// `PointerOffSet { ty=T, base: &, index: i32 } -> &`
     // TODO clarify whether index is signed or unsigned
+    // TODO rename to ArrayOffset?
     PointerOffSet { ty: Type, base: Value, index: Value },
 
     /// Convert `value` to `ty`. `kind` specifies additional semantics this cast will have.
     ///
     /// `Cast { after_ty: B, before_value: A } -> B`
     Cast { ty: Type, kind: CastKind, value: Value },
+
+    /// Return `value` as-is.
+    ///
+    /// Optimizations should assume that the returned value is not known at compile time.
+    /// This expression does not imply that value is used in any way, see [InstructionInfo::BlackHole] for that.
+    ///
+    /// `Obscure { value: T } -> T`
+    Obscure { ty: Type, value: Value },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -395,7 +457,7 @@ pub enum Signed {
     Unsigned,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -408,7 +470,7 @@ pub enum ArithmeticOp {
     Xor,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ComparisonOp {
     Eq,
     Neq,
@@ -418,11 +480,39 @@ pub enum ComparisonOp {
     Lte(Signed),
 }
 
+#[derive(Debug, Constructor)]
+pub struct ArithmeticProperties {
+    pub commuted: Option<ArithmeticOp>,
+    pub associative: bool,
+}
+
+#[derive(Debug, Constructor)]
+pub struct ComparisonProperties {
+    pub commuted: ComparisonOp,
+    pub negated: ComparisonOp,
+    pub result_self: bool,
+}
+
 impl ArithmeticOp {
     pub fn signed(self) -> Option<Signed> {
         match self {
             ArithmeticOp::Add | ArithmeticOp::Sub | ArithmeticOp::Mul | ArithmeticOp::And | ArithmeticOp::Or | ArithmeticOp::Xor => None,
             ArithmeticOp::Div(s) | ArithmeticOp::Mod(s) => Some(s),
+        }
+    }
+
+    pub fn properties(self) -> ArithmeticProperties {
+        use ArithmeticOp as Op;
+        use ArithmeticProperties as Props;
+        match self {
+            Op::Add => Props::new(Some(Op::Add), true),
+            Op::Sub => Props::new(None, false),
+            Op::Mul => Props::new(Some(Op::Mul), true),
+            Op::Div(_) => Props::new(None, false),
+            Op::Mod(_) => Props::new(None, false),
+            Op::And => Props::new(Some(Op::And), true),
+            Op::Or => Props::new(Some(Op::Or), true),
+            Op::Xor => Props::new(Some(Op::Xor), true),
         }
     }
 }
@@ -434,9 +524,22 @@ impl ComparisonOp {
             ComparisonOp::Gt(s) | ComparisonOp::Gte(s) | ComparisonOp::Lt(s) | ComparisonOp::Lte(s) => Some(s),
         }
     }
+
+    pub fn properties(self) -> ComparisonProperties {
+        use ComparisonProperties as Props;
+        use ComparisonOp as Op;
+        match self {
+            Op::Eq => Props::new(Op::Eq, Op::Neq, true),
+            Op::Neq => Props::new(Op::Neq, Op::Eq, false),
+            Op::Gt(signed) => Props::new(Op::Lt(signed), Op::Lte(signed), false),
+            Op::Gte(signed) => Props::new(Op::Lte(signed), Op::Lt(signed), true),
+            Op::Lt(signed) => Props::new(Op::Gt(signed), Op::Gte(signed), false),
+            Op::Lte(signed) => Props::new(Op::Gte(signed), Op::Gt(signed), true),
+        }
+    }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum CastKind {
     /// Cast from an int to a possibly shorter int.
     IntTruncate,
@@ -448,20 +551,20 @@ pub enum CastKind {
 }
 
 impl ExpressionInfo {
-    //TODO this implementation is prone to infinite recursion!
     pub fn ty(&self, prog: &Program) -> Type {
         match *self {
-            ExpressionInfo::Arithmetic { left, .. } => prog.type_of_value(left),
+            ExpressionInfo::Arithmetic { ty, .. } => ty,
             ExpressionInfo::Comparison { .. } => prog.ty_bool,
             ExpressionInfo::TupleFieldPtr { .. } => prog.ty_ptr,
             ExpressionInfo::PointerOffSet { .. } => prog.ty_ptr,
-            ExpressionInfo::Cast { ty: after_ty, .. } => after_ty,
+            ExpressionInfo::Cast { ty, .. } => ty,
+            ExpressionInfo::Obscure { ty, .. } => ty,
         }
     }
 
     pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
         match self {
-            ExpressionInfo::Arithmetic { kind: _, left, right } => {
+            ExpressionInfo::Arithmetic { kind: _, ty: _, left, right } => {
                 *left = f(*left);
                 *right = f(*right);
             }
@@ -479,6 +582,9 @@ impl ExpressionInfo {
             ExpressionInfo::Cast { ty: _, kind: _, value } => {
                 *value = f(*value);
             }
+            ExpressionInfo::Obscure { ty: _, value } => {
+                *value = f(*value);
+            }
         }
     }
 }
@@ -488,13 +594,15 @@ impl InstructionInfo {
         //TODO this implementation is prone to infinite recursion!
         match *self {
             InstructionInfo::Load { ty, .. } => ty,
-            InstructionInfo::Store { .. } => prog.ty_ptr(),
+            InstructionInfo::Store { .. } => prog.ty_void(),
             InstructionInfo::Call { target, .. } => {
+                // TODO cache return type in call instruction?
                 prog.get_type(prog.type_of_value(target)).unwrap_func()
                     .expect("call target should have a function type")
                     .ret
             }
-            InstructionInfo::BlackBox { value } => prog.type_of_value(value),
+            InstructionInfo::BlackHole { .. } => prog.ty_void,
+            InstructionInfo::MemBarrier => prog.ty_void,
         }
     }
 
@@ -506,15 +614,16 @@ impl InstructionInfo {
                 *addr = f(*addr);
                 *value = f(*value);
             }
-            InstructionInfo::Call { target, args } => {
+            InstructionInfo::Call { target, args, conv: _ } => {
                 *target = f(*target);
                 for arg in args {
                     *arg = f(*arg);
                 }
             }
-            InstructionInfo::BlackBox { value } => {
+            InstructionInfo::BlackHole { value } => {
                 *value = f(*value);
             }
+            InstructionInfo::MemBarrier => {}
         }
     }
 }
@@ -528,7 +637,7 @@ pub enum Terminator {
     LoopForever,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Target {
     pub block: Block,
     pub args: Vec<Value>,
@@ -546,89 +655,6 @@ impl Target {
     }
 }
 
-// TODO all of these "(try)?_for_each_(.*)" function are getting annoying, is there a better way to do this?
-impl Terminator {
-    pub fn replace_blocks(&mut self, mut f: impl FnMut(Block) -> Block) {
-        self.for_each_target_mut(|target| target.replace_blocks(&mut f));
-    }
-
-    pub fn try_for_each_non_target_value<E>(&self, mut f: impl FnMut(Value) -> Result<(), E>) -> Result<(), E> {
-        match self {
-            Terminator::Jump { target: _ } => {}
-            &Terminator::Branch { cond, true_target: _, false_target: _ } => f(cond)?,
-            &Terminator::Return { value } => f(value)?,
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-
-        Ok(())
-    }
-
-    pub fn replace_values(&mut self, mut f: impl FnMut(Value) -> Value) {
-        match self {
-            Terminator::Jump { target } => target.replace_values(f),
-            Terminator::Branch { cond, true_target, false_target } => {
-                *cond = f(*cond);
-                true_target.replace_values(&mut f);
-                false_target.replace_values(&mut f);
-            }
-            Terminator::Return { value } => *value = f(*value),
-            Terminator::Unreachable => (),
-            Terminator::LoopForever => (),
-        }
-    }
-
-    pub fn target_count(&self) -> usize {
-        let mut count = 0;
-        self.for_each_target(|_| count += 1);
-        count
-    }
-
-    pub fn for_each_target_mut<F: FnMut(&mut Target)>(&mut self, mut f: F) {
-        match self {
-            Terminator::Jump { target } => f(target),
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target);
-                f(false_target);
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-    }
-
-    pub fn for_each_target<F: FnMut(&Target)>(&self, mut f: F) {
-        match self {
-            Terminator::Jump { target } => f(target),
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target);
-                f(false_target);
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-    }
-
-    pub fn try_for_each_target<E, F: FnMut(&Target) -> Result<(), E>>(&self, mut f: F) -> Result<(), E> {
-        match self {
-            Terminator::Jump { target } => f(target)?,
-            Terminator::Branch { true_target, false_target, .. } => {
-                f(true_target)?;
-                f(false_target)?;
-            }
-            Terminator::Return { value: _ } => {}
-            Terminator::Unreachable => {}
-            Terminator::LoopForever => {}
-        }
-        Ok(())
-    }
-
-    pub fn for_each_successor<F: FnMut(Block)>(&self, mut f: F) {
-        self.for_each_target(|target| f(target.block))
-    }
-}
-
 macro_rules! impl_nested_from {
     ($outer:ident::$variant:ident($inner:ty)) => {
         impl From<$inner> for $outer {
@@ -642,6 +668,7 @@ macro_rules! impl_nested_from {
 // TODO considering using .value() instead of the current .into() which is more vague
 #[derive(Copy, Clone, Eq, PartialEq, Hash, From)]
 pub enum Value {
+    // TODO move immediate into expression? they're both identity-less, do we ever handle them differently?
     Immediate(Immediate),
     Global(Global),
     Scoped(Scoped),
@@ -661,6 +688,7 @@ pub enum Global {
     Func(Function),
     Extern(Extern),
     Data(Data),
+    GlobalSlot(GlobalSlot),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, From)]
@@ -674,6 +702,7 @@ impl_nested_from!(Value::Immediate(Const));
 impl_nested_from!(Value::Global(Function));
 impl_nested_from!(Value::Global(Extern));
 impl_nested_from!(Value::Global(Data));
+impl_nested_from!(Value::Global(GlobalSlot));
 impl_nested_from!(Value::Scoped(Parameter));
 impl_nested_from!(Value::Scoped(StackSlot));
 impl_nested_from!(Value::Scoped(Instruction));
@@ -719,31 +748,46 @@ impl Value {
         option_match!(self, Value::Expr(expr) => expr)
     }
 
+    pub fn as_slot(self) -> Option<StackSlot> {
+        option_match!(self, Value::Scoped(Scoped::Slot(slot)) => slot)
+    }
+
     pub fn is_undef(self) -> bool {
         matches!(self, Value::Immediate(Immediate::Undef(_)))
+    }
+
+    pub fn is_const(self) -> bool {
+        self.as_const().is_some()
     }
 
     pub fn is_const_zero(self) -> bool {
         self.as_const().map_or(false, |cst| cst.is_zero())
     }
+
+    pub fn is_expr(self) -> bool {
+        self.as_expr().is_some()
+    }
+
+    pub fn is_slot(self) -> bool {
+        self.as_slot().is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct DataInfo {
+    // TODO should data always have type &u8? Currently it has &T, but we could just cast it when used.
     pub ty: Type,
     pub inner_ty: Type,
     pub bytes: Vec<u8>,
 }
 
+// TODO assert there are no conflicting extern names
+// TODO rename name to symbol?
 #[derive(Debug, Clone)]
 pub struct ExternInfo {
     pub name: String,
     pub ty: Type,
 }
-
-pub type PtrStorageType = u32;
-
-pub const PTR_SIZE_BITS: u32 = PtrStorageType::BITS;
 
 // TODO think about how ptr-typed consts are supposed to work
 //   if we decide to keep those separate, remove this struct and rename Value:::Const to ::IntConst
@@ -769,56 +813,6 @@ impl Const {
     }
 }
 
-// Visits
-impl Program {
-    pub fn collect_blocks(&self, start: Block) -> Vec<Block> {
-        let mut blocks = vec![];
-        self.try_visit_blocks(start, |block| {
-            blocks.push(block);
-            Never::UNIT
-        }).no_err();
-        blocks
-    }
-
-    // TODO switch to using Try trait, or something custom that accepts (), Result and ControlFlow
-    /// Visit the blocks reachable from `start` while staying within the same function.
-    pub fn try_visit_blocks<E, F: FnMut(Block) -> Result<(), E>>(&self, start: Block, mut f: F) -> Result<(), E> {
-        let mut blocks_left = VecDeque::new();
-        let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(start);
-
-        while let Some(block) = blocks_left.pop_front() {
-            if !blocks_seen.insert(block) { continue; }
-
-            f(block)?;
-
-            let block_info = self.get_block(block);
-            block_info.terminator.for_each_successor(
-                |succ| blocks_left.push_back(succ));
-        }
-
-        Ok(())
-    }
-
-    pub fn try_visit_blocks_mut<E, F: FnMut(&mut Program, Block) -> Result<(), E>>(&mut self, start: Block, mut f: F) -> Result<(), E> {
-        let mut blocks_left = VecDeque::new();
-        let mut blocks_seen = HashSet::new();
-        blocks_left.push_front(start);
-
-        while let Some(block) = blocks_left.pop_front() {
-            if !blocks_seen.insert(block) { continue; }
-
-            f(self, block)?;
-
-            let block_info = self.get_block(block);
-            block_info.terminator.for_each_successor(
-                |succ| blocks_left.push_back(succ));
-        }
-
-        Ok(())
-    }
-}
-
 //Formatting related stuff
 impl Program {
     /// Wrap a `Type` as a `Display` value that recursively prints a human-readable version of the type.
@@ -839,7 +833,8 @@ impl Program {
                         write!(f, "&"),
                     TypeInfo::Tuple(TupleType { fields }) =>
                         self.prog.write_tuple(f, fields),
-                    TypeInfo::Func(FunctionType { params, ret }) => {
+                    TypeInfo::Func(FunctionType { params, ret, conv }) => {
+                        write!(f, "{:?} ", conv)?;
                         self.prog.write_tuple(f, params)?;
                         write!(f, " -> {}", self.prog.format_type(*ret))
                     }
@@ -891,6 +886,8 @@ impl Program {
                             write!(f, "Extern({:?} -> {}: {})", ext.0, self.prog.get_ext(ext).name, ty),
                         Global::Data(data) =>
                             write!(f, "Data({:?}: {})", data.0, ty),
+                        Global::GlobalSlot(slot) =>
+                            write!(f, "GlobalSlot({:?}: {})", slot.0, ty),
                     }
                     Value::Scoped(value) => match value {
                         Scoped::Param(param) =>
@@ -948,7 +945,7 @@ impl Display for Program {
             }
             writeln!(f, "    entry: {:?}", func_info.entry)?;
 
-            self.try_visit_blocks(self.get_func(func).entry, |block| {
+            self.reachable_blocks(self.get_func(func).entry).try_for_each(|block| {
                 let block_info = self.get_block(block);
                 writeln!(f, "    {:?} {{", block)?;
 

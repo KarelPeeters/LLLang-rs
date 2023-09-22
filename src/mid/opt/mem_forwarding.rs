@@ -1,38 +1,88 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use crate::mid::analyse::alias;
+use crate::mid::analyse::alias::{LocAlias, Location, Origin};
 
-use crate::mid::analyse::usage::BlockUsage;
+use crate::mid::analyse::usage::{BlockUsage, TargetKind};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, ExpressionInfo, Function, Global, Immediate, InstructionInfo, Program, Scoped, StackSlot, Terminator, Type, Value};
+use crate::mid::ir::{Block, Function, Instruction, InstructionInfo, Parameter, ParameterInfo, Program, Terminator, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::lattice::Lattice;
+use crate::util::zip_eq;
+
+// TODO allow potentially aliasing store to still propagate the value if the value stores is the same as the existing one
+//  eg. https://trust-in-soft.com/blog/2020/04/06/gcc-always-assumes-aligned-pointer-accesses/
+//  but tricky, since now we also need to keep track of values, not just pointers
 
 /// Optimize load/store instructions:
 /// * replace loads with previously stored values
 /// * remove dead stores
+#[derive(Debug)]
+pub struct MemForwardingPass;
+
+impl ProgramPass for MemForwardingPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = mem_forwarding(prog, &use_info);
+
+        PassResult {
+            changed,
+            preserved_dom_info: true,
+            preserved_use_info: !changed,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        true
+    }
+}
+
 // TODO consider loads and stores with void type as dead?
-pub fn mem_forwarding(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+fn mem_forwarding(prog: &mut Program, use_info: &UseInfo) -> bool {
     let mut loads_replaced = 0;
     let mut stores_removed = 0;
 
-    // replace loads
-    let mut lattice_cache = LatticeCache::default();
+    // collect loads to replace
+    let mut replacements = vec![];
     for func in use_info.funcs() {
+        // reset cache per function
+        let mut state = State {
+            cache: Default::default(),
+            undo: vec![],
+            prog,
+            use_info,
+            func,
+        };
+
         for &block in use_info.func_blocks(func) {
-            let instrs = prog.get_block(block).instructions.clone();
+            let instrs = state.prog.get_block(block).instructions.clone();
 
             for (index, &instr) in instrs.iter().enumerate() {
-                let instr_info = prog.get_instr(instr);
+                // no point trying to replace unused loads
+                if use_info[instr].is_empty() {
+                    continue;
+                }
+
+                let instr_info = state.prog.get_instr(instr);
                 if let &InstructionInfo::Load { addr, ty: load_ty } = instr_info {
                     let loc = Location { ptr: addr, ty: load_ty };
-                    let lattice = find_value_for_location_at_instr(prog, &use_info, func, loc, block, Some(index), &mut lattice_cache);
 
-                    if let Some(value) = lattice.as_value_of_type(prog, load_ty) {
-                        loads_replaced += 1;
-                        use_info.replace_value_usages(prog, instr.into(), value);
+                    let lattice = state.find_value_for_loc_at(loc, block, Some(index));
+
+                    if let Some(value) = lattice.as_value_of_type(state.prog, load_ty) {
+                        replacements.push((instr, value));
                     }
                 }
             }
+        }
+    }
+
+    // actually do replacements
+    // (after collecting them to ensure we don't cause bugs by modifying the program in-place)
+    for (instr, value) in replacements {
+        let users_replaced = use_info.replace_value_usages(prog, instr.into(), value);
+        if users_replaced > 0 {
+            loads_replaced += 1;
         }
     }
 
@@ -54,7 +104,7 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
                 let instr = block_info.instructions[instr_index];
                 let remove = if let &InstructionInfo::Store { addr, ty, value: _ } = prog.get_instr(instr) {
                     let loc = Location { ptr: addr, ty };
-                    let liveness = compute_liveness(prog, func, block, instr_index + 1, loc, &mut liveness_cache);
+                    let liveness = compute_liveness(prog, use_info, func, block, instr_index + 1, loc, &mut liveness_cache);
                     match liveness {
                         Liveness::Dead => true,
                         Liveness::MaybeLive => false,
@@ -78,42 +128,6 @@ pub fn mem_forwarding(prog: &mut Program) -> bool {
     loads_replaced > 0 || stores_removed > 0
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Location {
-    ptr: Value,
-    ty: Type,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum Alias {
-    /// At least one of the pointers if undefined
-    Undef,
-    /// Both storages point to the same place
-    Exactly,
-    /// We don't have enough information to say anything
-    UnknownOrPartial,
-    /// Both storages definitely don't overlap at all
-    No,
-}
-
-#[derive(Debug)]
-enum Origin {
-    /// The pointer is undefined.
-    Undef,
-
-    /// The given slot, from the current function.
-    FuncStackSlot(StackSlot),
-    /// Any slot from the current function.
-    // TODO consider tracking which specific func slots it can be
-    FuncAnyStackSlot,
-
-    /// Some other value external to this function.
-    FuncExternal,
-
-    /// We don't have enough information.
-    Unknown,
-}
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Liveness {
     Dead,
@@ -134,7 +148,7 @@ impl Liveness {
 /// This can also include a temporary "dead" assumption to break loops.
 type LivenessCache = HashMap<(Block, Location), Liveness>;
 
-fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+fn compute_liveness(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
     // the values in the cache apply to the start of the block
     if start == 0 {
         match cache.entry((block, loc)) {
@@ -146,7 +160,7 @@ fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, 
     }
 
     // check the rest of the block and its successors
-    let liveness = compute_liveness_inner(prog, func, block, start, loc, cache);
+    let liveness = compute_liveness_inner(prog, use_info, func, block, start, loc, cache);
 
     // put the true liveness into the cache
     if start == 0 {
@@ -158,31 +172,31 @@ fn compute_liveness(prog: &Program, func: Function, block: Block, start: usize, 
 }
 
 /// The same as [compute_liveness] except we don't manage the cache here.
-fn compute_liveness_inner(prog: &Program, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
+fn compute_liveness_inner(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location, cache: &mut LivenessCache) -> Liveness {
     // check the following instructions
-    if let Some(liveness) = compute_liveness_by_instructions(prog, func, block, start, loc) {
+    if let Some(liveness) = compute_liveness_by_instructions(prog, use_info, func, block, start, loc) {
         return liveness;
     }
 
     // fallthrough to the successors
     match &prog.get_block(block).terminator {
         Terminator::Jump { target } => {
-            compute_liveness(prog, func, target.block, 0, loc, cache)
+            compute_liveness(prog, use_info, func, target.block, 0, loc, cache)
         }
         Terminator::Branch { cond: _, true_target, false_target } => {
             Liveness::merge(
-                compute_liveness(prog, func, true_target.block, 0, loc, cache),
-                compute_liveness(prog, func, false_target.block, 0, loc, cache),
+                compute_liveness(prog, use_info, func, true_target.block, 0, loc, cache),
+                compute_liveness(prog, use_info, func, false_target.block, 0, loc, cache),
             )
         }
         Terminator::Return { value: _ } => {
-            let origin = pointer_origin(prog, func, loc.ptr);
+            let origin = alias::pointer_origin(prog, func, loc.ptr);
             match origin {
                 // function-internal, so cannot be observed after return
-                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Liveness::Dead,
+                Origin::FuncSlot(_) => Liveness::Dead,
                 // maybe external, so can potentially be observed
                 // TODO maybe we can do something better with undef here?
-                Origin::Undef | Origin::Unknown | Origin::FuncExternal => Liveness::MaybeLive,
+                Origin::Undef | Origin::GlobalSlot(_) | Origin::FuncExternal | Origin::Unknown => Liveness::MaybeLive,
             }
         }
         // no successor, so dead
@@ -192,321 +206,352 @@ fn compute_liveness_inner(prog: &Program, func: Function, block: Block, start: u
 }
 
 // TODO ideally this would use some common "instruction side effect" infrastructure
-fn compute_liveness_by_instructions(prog: &Program, func: Function, block: Block, start: usize, loc: Location) -> Option<Liveness> {
+fn compute_liveness_by_instructions(prog: &Program, use_info: &UseInfo, func: Function, block: Block, start: usize, loc: Location) -> Option<Liveness> {
     let block_info = prog.get_block(block);
     for &instr in &block_info.instructions[start..] {
         match *prog.get_instr(instr) {
             // (maybe) aliasing load => alive
             InstructionInfo::Load { addr, ty } => {
                 let load_loc = Location { ptr: addr, ty };
-                match locations_alias(prog, func, loc, load_loc) {
+                match alias::locations_alias(prog, use_info, func, loc, load_loc) {
                     // could alias, we have to assume live
-                    Alias::Exactly | Alias::UnknownOrPartial => return Some(Liveness::MaybeLive),
+                    LocAlias::Exactly | LocAlias::UnknownOrPartial => return Some(Liveness::MaybeLive),
                     // can't alias, keep going
-                    Alias::Undef | Alias::No => {}
+                    LocAlias::Undef | LocAlias::No => {}
                 }
             }
             // (exactly) aliasing store => dead
             InstructionInfo::Store { addr, ty, value: _ } => {
                 let store_loc = Location { ptr: addr, ty };
-                match locations_alias(prog, func, loc, store_loc) {
+                match alias::locations_alias(prog, use_info, func, loc, store_loc) {
                     // value is overwritten, we know the previous one is dead
                     // TODO a "covering" alias is enough already, it doesn't have to be exact
-                    Alias::Exactly => return Some(Liveness::Dead),
+                    LocAlias::Exactly => return Some(Liveness::Dead),
                     // may not be overwritten, keep going
                     // TODO maybe we can do something better with undef here?
-                    Alias::Undef | Alias::UnknownOrPartial | Alias::No => {}
+                    LocAlias::Undef | LocAlias::UnknownOrPartial | LocAlias::No => {}
                 }
             }
 
             // these could have side effects, we have to assume live
             // TODO we can do better for calls
             InstructionInfo::Call { .. } => return Some(Liveness::MaybeLive),
-            InstructionInfo::BlackBox { .. } => return Some(Liveness::MaybeLive),
+            InstructionInfo::BlackHole { .. } => return Some(Liveness::MaybeLive),
+            InstructionInfo::MemBarrier { .. } => return Some(Liveness::MaybeLive),
         }
     }
 
     None
 }
 
-/// The lattice cache stores the lattice value for each location at the end of the given block.
-/// This can also include a temporary "undef" assumption to break loops.
-type LatticeCache = HashMap<(Block, Location), Lattice>;
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+enum Side {
+    Start,
+    End,
+}
 
-fn find_value_for_location_at_instr(
-    prog: &Program,
-    use_info: &UseInfo,
+impl Side {
+    fn from_index(index: Option<usize>) -> Option<Side> {
+        match index {
+            None => Some(Side::End),
+            Some(0) => Some(Side::Start),
+            _ => None,
+        }
+    }
+}
+
+type Key = (Location, Block, Side);
+
+struct State<'p, 'u> {
+    cache: HashMap<Key, Lattice>,
+    undo: Vec<Undo>,
+
+    // util to avoid passing a bunch of params repeatedly
+    prog: &'p mut Program,
+    use_info: &'u UseInfo,
     func: Function,
-    loc: Location,
-    block: Block,
-    index: Option<usize>,
-    cache: &mut LatticeCache,
-) -> Lattice {
-    if index.is_none() {
-        match cache.entry((block, loc)) {
-            Entry::Occupied(entry) => return *entry.get(),
-            Entry::Vacant(entry) => entry.insert(Lattice::Undef),
+}
+
+// TODO general undo infrastructure? can we wrap the entire program in it or is that too slow/tricky?
+#[derive(Debug)]
+enum Undo {
+    CacheInsert(Key),
+    DefineParam(Parameter),
+    PushBlockParam(Block, usize, Parameter),
+    PushTargetArg(Block, TargetKind, usize, Value),
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct Marker(usize);
+
+#[derive(Debug)]
+enum WalkResult {
+    Lattice(Lattice),
+    ReachedStart {
+        matching_load: Option<Instruction>,
+    },
+}
+
+impl<'p, 'u> State<'p, 'u> {
+    fn mark(&self) -> Marker {
+        Marker(self.undo.len())
+    }
+
+    fn rollback(&mut self, marker: Marker) {
+        let marker = marker.0;
+        for undo in self.undo.drain(marker..).rev() {
+            match undo {
+                Undo::CacheInsert(key) => {
+                    let prev = self.cache.remove(&key);
+                    assert!(prev.is_some());
+                }
+                Undo::DefineParam(param) => {
+                    self.prog.nodes.params.pop(param);
+                }
+                Undo::PushBlockParam(block, index, param) => {
+                    let block = self.prog.get_block_mut(block);
+                    assert_eq!(block.params.len(), index + 1);
+                    assert_eq!(block.params.pop(), Some(param));
+                }
+                Undo::PushTargetArg(block, kind, index, arg) => {
+                    let block = self.prog.get_block_mut(block);
+                    let target = kind.get_target_mut(&mut block.terminator);
+                    assert_eq!(target.args.len(), index + 1);
+                    assert_eq!(target.args.pop(), Some(arg));
+                }
+            }
+        }
+        assert_eq!(self.undo.len(), marker);
+    }
+
+    fn cache_get(&self, key: Key) -> Option<Lattice> {
+        self.cache.get(&key).copied()
+    }
+
+    fn cache_insert(&mut self, key: Key, value: Lattice) {
+        let prev = self.cache.insert(key, value);
+
+        match prev {
+            None => self.undo.push(Undo::CacheInsert(key)),
+            Some(prev) => {
+                assert!(prev == value, "prev should be None or Some({:?}), got {:?}", value, prev);
+                // no need to undo, this insertion didn't change anything
+            }
+        }
+    }
+
+    fn define_param(&mut self, info: ParameterInfo) -> Parameter {
+        let param = self.prog.define_param(info);
+        self.undo.push(Undo::DefineParam(param));
+        param
+    }
+
+    fn push_block_param(&mut self, block: Block, param: Parameter) {
+        let params = &mut self.prog.get_block_mut(block).params;
+
+        let index = params.len();
+        params.push(param);
+        self.undo.push(Undo::PushBlockParam(block, index, param));
+    }
+
+    fn push_target_arg(&mut self, block: Block, kind: TargetKind, arg: Value) {
+        let term = &mut self.prog.get_block_mut(block).terminator;
+        let target = kind.get_target_mut(term);
+        let args = &mut target.args;
+
+        let index = args.len();
+        args.push(arg);
+        self.undo.push(Undo::PushTargetArg(block, kind, index, arg));
+    }
+
+    fn find_value_for_loc_at(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
+        // check cache
+        if let Some(side) = Side::from_index(index) {
+            if let Some(result) = self.cache_get((loc, block, side)) {
+                return result;
+            }
+        }
+
+        // evaluate the value
+        let result = self.find_value_for_loc_at_inner(loc, block, index);
+
+        // put into cache
+        if let Some(side) = Side::from_index(index) {
+            self.cache_insert((loc, block, side), result);
+        }
+
+        result
+    }
+
+    fn find_value_for_loc_at_inner(&mut self, loc: Location, block: Block, index: Option<usize>) -> Lattice {
+        // look at the preceding instructions in this block
+        let walk = self.walk_block_instructions_from(loc, block, index);
+        let matching_load = match walk {
+            WalkResult::Lattice(value) => return value,
+            WalkResult::ReachedStart { matching_load } => matching_load,
         };
-    }
 
-    let lattice = find_value_for_location_at_instr_inner(prog, use_info, func, loc, block, index, cache);
-
-    if index.is_none() {
-        let prev = cache.insert((block, loc), lattice);
-        assert_eq!(prev, Some(Lattice::Undef));
-    }
-
-    lattice
-}
-
-/// The same as [find_value_for_location_at_instr] except we don't manage the cache here.
-fn find_value_for_location_at_instr_inner(
-    prog: &Program,
-    use_info: &UseInfo,
-    func: Function,
-    loc: Location,
-    block: Block,
-    index: Option<usize>,
-    cache: &mut LatticeCache,
-) -> Lattice {
-    let block_info = prog.get_block(block);
-    let index = index.unwrap_or(block_info.instructions.len());
-
-    // first see if any instruction before the load aliases
-    for &instr in block_info.instructions[0..index].iter().rev() {
-        match prog.get_instr(instr) {
-            &InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
-                let store_loc = Location { ptr: store_ptr, ty: store_ty };
-                match locations_alias(prog, func, loc, store_loc) {
-                    // propagate undef
-                    Alias::Undef => return Lattice::Undef,
-                    // we know the exact value last stored to the pointer!
-                    Alias::Exactly => return Lattice::Known(value),
-                    // we have to give up
-                    Alias::UnknownOrPartial => return Lattice::Overdef,
-                    // continue walking backwards
-                    Alias::No => {}
+        // we've reached the start of the block, check the cache for it
+        if let Some(start_value) = self.cache_get((loc, block, Side::Start)) {
+            // if we got a useless start value use the matching load instead
+            if let Lattice::Overdef = start_value {
+                if let Some(matching_load) = matching_load {
+                    return Lattice::Known(matching_load.into());
                 }
             }
 
-            // could have side effects, we have to give up
-            // TODO we can do better for calls:
-            //   * side effect free functions
-            //   * if we don't leak a slot to external or to this call the function can't store to it
-            InstructionInfo::Call { .. } => return Lattice::Overdef,
-            InstructionInfo::BlackBox { .. } => return Lattice::Overdef,
-
-            // no memory writes
-            InstructionInfo::Load { .. } => {}
+            return start_value;
         }
-    }
 
-    // otherwise the value is the merge of the value at the end of each predecessor
-    Lattice::fold(use_info[block].iter().map(|usage| {
-        match usage {
-            // we've reached the start of the function, depending on the origin the value is undef or overdef
-            BlockUsage::FuncEntry(_) => match pointer_origin(prog, func, loc.ptr) {
-                Origin::Undef => Lattice::Undef,
-                Origin::Unknown | Origin::FuncExternal => Lattice::Overdef,
-                Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot => Lattice::Undef,
-            },
-            // continue searching along the preceding block
-            BlockUsage::Target { pos, kind: _ } => {
-                find_value_for_location_at_instr(prog, use_info, func, loc, pos.block, None, cache)
+        // if we've reached the func entry the value depends on the origin
+        if self.use_info.block_only_used_as_func_entry(block) {
+            match alias::pointer_origin(self.prog, self.func, loc.ptr) {
+                Origin::Undef => return Lattice::Undef,
+                Origin::FuncSlot(_) => return Lattice::Undef,
+                Origin::Unknown | Origin::GlobalSlot(_) | Origin::FuncExternal => {
+                    // fallthrough, we might still have a matching load
+                }
+            };
+        }
+
+        // if there are pred blocks, try inserting a block param
+        if self.use_info.block_only_used_in_targets(block) {
+            if let Some(value) = self.try_build_block_param(loc, block) {
+                return value;
             }
         }
-    }))
-}
 
-fn locations_alias(prog: &Program, func: Function, left: Location, right: Location) -> Alias {
-    let same_ty = left.ty == right.ty;
+        // TODO we could try merging func entry and other pred values here
+        //   alternatively just require there to be an empty entry block we can add the arg to?
 
-    match pointers_alias(prog, func, left.ptr, right.ptr) {
-        Alias::Undef => Alias::Undef,
-        Alias::Exactly => {
-            if same_ty {
-                Alias::Exactly
-            } else {
-                Alias::UnknownOrPartial
-            }
+        // if there was a matching load use it
+        if let Some(load) = matching_load {
+            return Lattice::Known(load.into());
         }
-        Alias::UnknownOrPartial => Alias::UnknownOrPartial,
-        Alias::No => Alias::No,
-    }
-}
 
-fn pointers_alias(prog: &Program, func: Function, ptr_left: Value, ptr_right: Value) -> Alias {
-    let ptr_left = simplify_ptr(prog, ptr_left);
-    let ptr_right = simplify_ptr(prog, ptr_right);
-
-    if ptr_left.is_undef() || ptr_right.is_undef() {
-        return Alias::Undef;
-    }
-    if ptr_left == ptr_right {
-        return Alias::Exactly;
+        // we don't know anything
+        Lattice::Overdef
     }
 
-    let alias_from_origin = origins_alias(pointer_origin(prog, func, ptr_left), pointer_origin(prog, func, ptr_right));
-    if let Alias::No = alias_from_origin {
-        return alias_from_origin;
-    }
+    fn walk_block_instructions_from(&mut self, loc: Location, block: Block, index: Option<usize>) -> WalkResult {
+        let use_info = self.use_info;
+        let block_info = self.prog.get_block(block);
+        let index = index.unwrap_or(block_info.instructions.len());
 
-    if let (Some(expr_left), Some(expr_right)) = (ptr_left.as_expr(), ptr_right.as_expr()) {
-        match (prog.get_expr(expr_left), prog.get_expr(expr_right)) {
-            (
-                &ExpressionInfo::PointerOffSet { ty: inner_ty_left, base: base_left, index: index_left },
-                &ExpressionInfo::PointerOffSet { ty: inner_ty_right, base: base_right, index: index_right },
-            ) => {
-                let base_alias = pointers_alias(prog, func, base_left, base_right);
-                if base_alias == Alias::Undef {
-                    return Alias::Undef;
-                }
-                if (inner_ty_left == inner_ty_right) && (index_left == index_right) {
-                    return base_alias;
-                }
-                // the zero-size type case is already handled by simplify_ptr
-            }
+        // keep track of the earliest load that aliases
+        // (earliest to ensure that repeated loads all converge to the first one)
+        let mut first_matching_load = None;
+        let mut clobbered = false;
 
-            (
-                &ExpressionInfo::TupleFieldPtr { base: base_left, index: index_left, tuple_ty: tuple_ty_left },
-                &ExpressionInfo::TupleFieldPtr { base: base_right, index: index_right, tuple_ty: tuple_ty_right },
-            ) => {
-                let base_alias = pointers_alias(prog, func, base_left, base_right);
-                if base_alias == Alias::Undef {
-                    return Alias::Undef;
-                }
-                if tuple_ty_left == tuple_ty_right && index_left == index_right {
-                    return base_alias;
-                }
-            }
-
-            _ => {}
-        }
-    }
-
-    Alias::UnknownOrPartial
-}
-
-fn simplify_ptr(prog: &Program, ptr: Value) -> Value {
-    assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
-
-    if let Some(expr) = ptr.as_expr() {
-        match *prog.get_expr(expr) {
-            ExpressionInfo::PointerOffSet { ty, base, index } => {
-                if prog.is_zero_sized_type(ty) {
-                    return simplify_ptr(prog, base);
-                }
-                if let Some(cst) = index.as_const() {
-                    if cst.is_zero() {
-                        return simplify_ptr(prog, base);
+        // walk the instructions backwards
+        for &instr in block_info.instructions[0..index].iter().rev() {
+            match *self.prog.get_instr(instr) {
+                // if the store aliases, return its value
+                InstructionInfo::Store { addr: store_ptr, ty: store_ty, value } => {
+                    let store_loc = Location { ptr: store_ptr, ty: store_ty };
+                    match alias::locations_alias(self.prog, use_info, self.func, loc, store_loc) {
+                        // propagate undef
+                        LocAlias::Undef => return WalkResult::Lattice(Lattice::Undef),
+                        // we know the exact value last stored to loc!
+                        LocAlias::Exactly => return WalkResult::Lattice(Lattice::Known(value)),
+                        // we have to give up
+                        LocAlias::UnknownOrPartial => {
+                            clobbered = true;
+                            break;
+                        }
+                        // continue walking backwards
+                        LocAlias::No => {}
                     }
                 }
-            }
-            ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty } => {
-                // index == 0 is not enough to decay to base pointer, since the layout of tuples is decided by the backend
-                // however, single-element tuples are still guaranteed to have the same layout as the single item inside them
-                let field_count = prog.get_type(tuple_ty).unwrap_tuple().unwrap().fields.len();
-                if field_count == 0 || field_count == 1 {
-                    return simplify_ptr(prog, base);
+
+                // if the load aliases, keep it around for potential reuse
+                InstructionInfo::Load { addr: load_addr, ty: load_ty } => {
+                    let load_loc = Location { ptr: load_addr, ty: load_ty };
+                    match alias::locations_alias(self.prog, use_info, self.func, loc, load_loc) {
+                        // unclear, we could reuse if the type matches but is that useful?
+                        LocAlias::Undef => {}
+                        // we can't reuse the load
+                        LocAlias::UnknownOrPartial | LocAlias::No => {}
+                        // we can reuse it
+                        LocAlias::Exactly => {
+                            first_matching_load = Some(instr);
+                        }
+                    }
+                }
+
+                // TODO have some general side-effect property checker for functions
+                InstructionInfo::Call { .. } => {
+                    let origin = alias::pointer_origin(self.prog, self.func, loc.ptr);
+                    let call_could_interact = match origin {
+                        Origin::FuncSlot(Some(slot)) =>
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None, |_| true),
+                        Origin::GlobalSlot(Some(slot)) =>
+                            !use_info.value_only_used_as_load_store_addr(self.prog, slot.into(), None, |_| true),
+
+                        Origin::Undef => false,
+                        Origin::GlobalSlot(None) | Origin::FuncSlot(None) => true,
+                        Origin::FuncExternal | Origin::Unknown => true,
+                    };
+
+                    if call_could_interact {
+                        clobbered = true;
+                        break;
+                    }
+                }
+                InstructionInfo::MemBarrier | InstructionInfo::BlackHole { .. } => {
+                    // TODO we pretend we also write to non-leaked pointers, maybe that's too strong?
+                    clobbered = true;
+                    break;
                 }
             }
-            _ => {}
+        }
+
+        if clobbered {
+            match first_matching_load {
+                None => WalkResult::Lattice(Lattice::Overdef),
+                Some(load) => WalkResult::Lattice(Lattice::Known(load.into())),
+            }
+        } else {
+            WalkResult::ReachedStart { matching_load: first_matching_load }
         }
     }
 
-    ptr
-}
+    fn try_build_block_param(&mut self, loc: Location, block: Block) -> Option<Lattice> {
+        let mark = self.mark();
 
-// TODO do some proper dataflow analysis here
-//  specifically this would be useful for things like:
-//    * phis
-//    * load/store forwarding, which is what we're doing here in the first place!)
-// TODO ideally incorporate this into SCCP?
-fn pointer_origin(prog: &Program, func: Function, ptr: Value) -> Origin {
-    assert_eq!(prog.type_of_value(ptr), prog.ty_ptr());
+        // define param and immediately put it in the cache to break cycles
+        let param = self.define_param(ParameterInfo { ty: loc.ty });
+        self.cache_insert((loc, block, Side::Start), Lattice::Known(param.into()));
 
-    match ptr {
-        Value::Immediate(value) => match value {
-            Immediate::Void => unreachable!("Void cannot have pointer type: {:?}", ptr),
-            Immediate::Undef(_) => Origin::Undef,
-            Immediate::Const(_) => Origin::FuncExternal,
-        },
-        Value::Global(value) => match value {
-            Global::Func(_) => unreachable!("Function cannot have pointer type: {:?}", ptr),
-            Global::Extern(_) => Origin::FuncExternal,
-            Global::Data(_) => Origin::FuncExternal,
-        },
-        Value::Scoped(value) => match value {
-            Scoped::Param(param) => {
-                // check if this is a function param
-                if prog.get_block(prog.get_func(func).entry).params.contains(&param) {
-                    Origin::FuncExternal
-                } else {
-                    Origin::Unknown
+        // map predecessors to values
+        let preds = self.use_info[block].to_vec();
+        let mut pred_args = vec![];
+
+        for &pred in &preds {
+            let pred = unwrap_match!(pred, BlockUsage::Target { pos, kind: _ } => pos.block);
+            let lattice = self.find_value_for_loc_at(loc, pred, None);
+
+            let value = match lattice.as_value_of_type(self.prog, loc.ty) {
+                Some(value) => value,
+                None => {
+                    // failed to get value for predecessor: rollback and mark this block start as doomed
+                    self.rollback(mark);
+                    self.cache_insert((loc, block, Side::Start), Lattice::Overdef);
+                    return None;
                 }
-            }
-            Scoped::Slot(slot) => Origin::FuncStackSlot(slot),
-            Scoped::Instr(instr) => match prog.get_instr(instr) {
-                InstructionInfo::Load { .. } => Origin::Unknown,
-                InstructionInfo::Store { .. } =>
-                    unreachable!("Instruction cannot return pointer type: {:?}", instr),
-                InstructionInfo::Call { .. } => Origin::Unknown,
-                InstructionInfo::BlackBox { .. } => Origin::Unknown,
-            }
-        },
-        Value::Expr(expr) => match prog.get_expr(expr) {
-            ExpressionInfo::Arithmetic { .. } | ExpressionInfo::Comparison { .. } =>
-                unreachable!("Expression cannot return pointer type: {:?}", expr),
-            &ExpressionInfo::TupleFieldPtr { base, index: _, tuple_ty: _, } => pointer_origin(prog, func, base),
-            &ExpressionInfo::PointerOffSet { ty: _, base, index: _ } => pointer_origin(prog, func, base),
-            // TODO when we add ptr/int casts maybe we can look through them?
-            ExpressionInfo::Cast { .. } => Origin::Unknown,
+            };
+
+            pred_args.push(value);
+        };
+
+        // (tentative) success!
+        // push param and pred args
+        self.push_block_param(block, param);
+        for (pred, arg) in zip_eq(preds, pred_args) {
+            let (pos, kind) = unwrap_match!(pred, BlockUsage::Target { pos, kind } => (pos, kind));
+            self.push_target_arg(pos.block, kind, arg);
         }
-    }
-}
 
-fn origins_alias(left: Origin, right: Origin) -> Alias {
-    match (left, right) {
-        (Origin::Undef, _) | (_, Origin::Undef) => Alias::Undef,
-        (Origin::Unknown, _) | (_, Origin::Unknown) => Alias::UnknownOrPartial,
-        (Origin::FuncExternal, Origin::FuncExternal) => Alias::UnknownOrPartial,
-
-        (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
-            if left == right {
-                Alias::Exactly
-            } else {
-                Alias::No
-            }
-        }
-        (Origin::FuncAnyStackSlot, Origin::FuncAnyStackSlot) => Alias::UnknownOrPartial,
-        (Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot) | (Origin::FuncAnyStackSlot, Origin::FuncStackSlot(_)) => Alias::UnknownOrPartial,
-
-        (Origin::FuncExternal, Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot) => Alias::No,
-        (Origin::FuncStackSlot(_) | Origin::FuncAnyStackSlot, Origin::FuncExternal) => Alias::No,
-    }
-}
-
-impl Origin {
-    // TODO start using this when we switch to something more dataflow-like
-    #[allow(dead_code)]
-    fn merge(left: Origin, right: Origin) -> Origin {
-        match (left, right) {
-            (Origin::Unknown, _) | (_, Origin::Unknown) => Origin::Unknown,
-            (Origin::Undef, other) | (other, Origin::Undef) => other,
-
-            (Origin::FuncStackSlot(left), Origin::FuncStackSlot(right)) => {
-                if left == right {
-                    Origin::FuncStackSlot(left)
-                } else {
-                    Origin::FuncAnyStackSlot
-                }
-            }
-            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::FuncAnyStackSlot,
-
-            (Origin::FuncExternal, Origin::FuncExternal) => Origin::FuncExternal,
-
-            (Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_), Origin::FuncExternal) => Origin::Unknown,
-            (Origin::FuncExternal, Origin::FuncAnyStackSlot | Origin::FuncStackSlot(_)) => Origin::Unknown,
-        }
+        Some(Lattice::Known(param.into()))
     }
 }

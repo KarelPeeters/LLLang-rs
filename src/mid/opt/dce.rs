@@ -3,11 +3,13 @@ use std::fmt::Debug;
 
 use fixedbitset::FixedBitSet;
 
-use crate::mid::analyse::usage::{BlockUsage, for_each_usage_in_expr, for_each_usage_in_instr, InstrOperand, Usage};
+use crate::mid::analyse::usage::{BlockUsage, InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
 use crate::mid::ir::{Block, BlockInfo, Function, FunctionInfo, Global, Immediate, Instruction, InstructionInfo, Parameter, Program, Scoped, Target, Terminator, TypeInfo, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
 use crate::mid::util::visit::{Visitor, VisitState};
-use crate::util::{Never, NeverExt, VecExt};
+use crate::util::internal_iter::InternalIterator;
+use crate::util::VecExt;
 
 /// Dead code elimination.
 ///
@@ -22,11 +24,25 @@ use crate::util::{Never, NeverExt, VecExt};
 ///
 /// For functions used as non-call targets we have to keep the params,
 /// but in  calls to functions with dead params we still replace the corresponding args with undef.
-pub fn dce(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
-    let alive = collect_alive(prog, &use_info);
+#[derive(Debug)]
+pub struct DcePass;
 
-    let removed = remove_dead_values(prog, &use_info, &alive);
+impl ProgramPass for DcePass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let use_info = ctx.use_info(prog);
+        let changed = dce(prog, &use_info);
+        PassResult::safe(changed)
+    }
+
+    fn is_idempotent(&self) -> bool {
+        // TODO following GC should not do anything, can we mark that and skip it?
+        true
+    }
+}
+
+pub fn dce(prog: &mut Program, use_info: &UseInfo) -> bool {
+    let alive = collect_alive(prog, use_info);
+    let removed = remove_dead_values(prog, use_info, &alive);
 
     println!("dce removed {:?}", removed);
     removed.total() > 0
@@ -102,15 +118,22 @@ impl Visitor for DceVisitor<'_> {
         let prog = state.prog;
 
         match value {
-            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) | Value::Scoped(Scoped::Slot(_)) => {
-                // no additional handling (beyond marking them as used, which already happens in add_value)
+            Value::Global(Global::GlobalSlot(_)) | Value::Scoped(Scoped::Slot(_)) => {
+                // mark stores to slot in alive blocks as used
+                for usage in &self.use_info[value] {
+                    if let &Usage::InstrOperand { pos, usage: InstrOperand::StoreAddr } = usage {
+                        if state.has_visited_block(pos.block) {
+                            self.add_value(state, pos.instr);
+                        }
+                    }
+                }
             }
             Value::Global(Global::Func(func)) => {
                 // slots and func params (really block params) are tracked separately
                 let &FunctionInfo {
                     entry, slots: _,
                     ty: _, func_ty: _, debug_name: _
-                } = state.prog.get_func(func);
+                } = prog.get_func(func);
 
                 state.add_block(entry);
             }
@@ -123,7 +146,7 @@ impl Visitor for DceVisitor<'_> {
                         if let Usage::InstrOperand { pos, usage: InstrOperand::CallTarget } = usage {
                             let args = unwrap_match!(
                                 prog.get_instr(pos.instr),
-                                InstructionInfo::Call { target: _, args } => args
+                                InstructionInfo::Call { target: _, args, conv: _ } => args
                             );
 
                             self.add_value(state, args[index]);
@@ -141,22 +164,22 @@ impl Visitor for DceVisitor<'_> {
             Value::Scoped(Scoped::Instr(instr)) => {
                 let instr_info = prog.get_instr(instr);
 
-                match instr_info {
-                    &InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args } => {
+                match *instr_info {
+                    InstructionInfo::Call { target: Value::Global(Global::Func(func)), ref args, conv: _ } => {
                         // value used as call target, so we don't need to mark all of the args as used
                         self.add_value_target(state, func);
 
                         // mark args that correspond to used params as used
                         for (i, &arg) in args.iter().enumerate() {
                             let param = prog.get_block(prog.get_func(func).entry).params[i];
-                            if state.has_visited_value(param) {
+                            if state.has_visited_value(param.into()) {
                                 self.add_value(state, arg);
                             }
                         }
                     }
                     _ => {
                         // fallback, mark all operands as used
-                        for_each_usage_in_instr(prog.get_instr(instr), |operand, usage| {
+                        prog.get_instr(instr).operands().for_each(|(operand, usage)| {
                             if matches!(usage, InstrOperand::CallTarget) {
                                 self.add_value_target(state, operand);
                             } else {
@@ -168,22 +191,23 @@ impl Visitor for DceVisitor<'_> {
             }
             Value::Expr(expr) => {
                 // mark all operands as used
-                for_each_usage_in_expr(prog.get_expr(expr), |operand, _| {
+                prog.get_expr(expr).operands().for_each(|(operand, _)| {
                     self.add_value(state, operand);
                 });
+            }
+            Value::Immediate(_) | Value::Global(Global::Extern(_) | Global::Data(_)) => {
+                // no additional handling (beyond marking them as used, which already happens in add_value)
             }
         }
     }
 
     fn visit_block(&mut self, state: &mut VisitState, block: Block) {
-        let prog = state.prog;
-
         // block params are tracked separately
-        let BlockInfo { params: _, instructions, terminator } = state.prog.get_block(block);
+        let BlockInfo { params: _, instructions, terminator, debug_name: _ } = state.prog.get_block(block);
 
         // mark side effect instructions as used
         for &instr in instructions {
-            if instr_has_side_effect(prog, instr) {
+            if instr_has_side_effect(self.use_info, state, instr) {
                 self.add_value(state, instr);
             }
         }
@@ -206,7 +230,7 @@ impl Visitor for DceVisitor<'_> {
             Terminator::LoopForever => {}
         }
 
-        terminator.for_each_target(|target| {
+        terminator.targets().for_each(|(target, _)| {
             state.add_block(target.block);
         });
     }
@@ -253,23 +277,47 @@ impl<'a> DceVisitor<'a> {
 // TODO this is slow and ugly
 fn find_param_pos(prog: &Program, param: &Parameter) -> (Function, Block, usize) {
     prog.nodes.funcs.iter().find_map(|(func, func_info)| {
-        prog.try_visit_blocks(func_info.entry, |block| {
-            let block_info = prog.get_block(block);
-            match block_info.params.index_of(param) {
-                Some(index) => Err((func, block, index)),
-                None => Ok(())
-            }
-        }).err()
+        prog.reachable_blocks(func_info.entry).find_map(|block| {
+            prog.get_block(block)
+                .params.index_of(param)
+                .map(|index| (func, block, index))
+        })
     }).unwrap()
 }
 
-fn instr_has_side_effect(prog: &Program, instr: Instruction) -> bool {
-    match prog.get_instr(instr) {
+fn instr_has_side_effect(use_info: &UseInfo, state: &VisitState, instr: Instruction) -> bool {
+    let prog = state.prog;
+
+    match *prog.get_instr(instr) {
         InstructionInfo::Load { addr: _, ty: _ } => false,
-        InstructionInfo::Store { addr: _, ty, value: _ } => *ty != prog.ty_void(),
-        InstructionInfo::Call { target: _, args: _ } => true,
-        InstructionInfo::BlackBox { value: _ } => true,
+        InstructionInfo::Store { addr, ty, value: _ } => {
+            if ty == prog.ty_void() {
+                // void stores are always side-effect free
+                false
+            } else {
+                match addr {
+                    // stores into slots that are never read are side-effect free
+                    Value::Global(Global::GlobalSlot(slot)) =>
+                        !value_only_used_as_store_addr(use_info, state, slot.into()),
+                    Value::Scoped(Scoped::Slot(slot)) =>
+                        !value_only_used_as_store_addr(use_info, state, slot.into()),
+
+                    // in general stores have side effects
+                    _ => true,
+                }
+            }
+        }
+        InstructionInfo::Call { target: _, args: _, conv: _ } => true,
+        InstructionInfo::BlackHole { value: _ } => true,
+        InstructionInfo::MemBarrier => true,
     }
+}
+
+fn value_only_used_as_store_addr(use_info: &UseInfo, state: &VisitState, value: Value) -> bool {
+    use_info.value_only_used_as_store_addr(value, |pos| {
+        // only consider instructions that have been marked as having side effects
+        state.has_visited_value(pos.instr.into())
+    })
 }
 
 #[derive(Debug, Default)]
@@ -318,11 +366,11 @@ fn remove_dead_values(prog: &mut Program, use_info: &UseInfo, alive: &Alive) -> 
 
         let func_used_as_non_call_target = alive.funcs_used_as_non_call_target.contains(&func);
 
-        prog.try_visit_blocks_mut(entry, |prog, block| {
+        let blocks = prog.reachable_blocks(entry).collect_vec();
+        for &block in &blocks {
             let keep_params = block == entry && func_used_as_non_call_target;
             remove_dead_values_from_block(prog, &mut removed, alive, block, keep_params);
-            Never::UNIT
-        }).no_err();
+        }
     }
 
     removed
@@ -333,7 +381,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
     let prog_blocks = &mut prog.nodes.blocks;
     let prog_funcs = &mut prog.nodes.funcs;
 
-    let BlockInfo { params, instructions, terminator } = &mut prog_blocks[block];
+    let BlockInfo { params, instructions, terminator, debug_name: _ } = &mut prog_blocks[block];
 
     // remove block params if we're allowed to
     if !keep_params {
@@ -351,7 +399,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
             let instr_info = &mut prog_instrs[instr];
 
             // is this is a call to a function
-            if let &mut InstructionInfo::Call { target: Value::Global(Global::Func(target)), ref mut args } = instr_info {
+            if let &mut InstructionInfo::Call { target: Value::Global(Global::Func(target)), ref mut args, conv: _ } = instr_info {
                 let target_info = &prog_funcs[target];
 
                 // remove or replace dead params if any
@@ -382,7 +430,7 @@ fn remove_dead_values_from_block(prog: &mut Program, removed: &mut Removed, aliv
     });
 
     // remove dead target args
-    terminator.for_each_target_mut(|target| {
+    terminator.targets_mut().for_each(|(target, _)| {
         let &mut Target { block: target_block, ref mut args } = target;
         if let Some(target_mask) = alive.block_param_mask(target_block) {
             removed.target_args += retain_mask(args, target_mask);

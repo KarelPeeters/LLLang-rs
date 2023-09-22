@@ -1,5 +1,6 @@
 use crate::front::cst::IntTypeInfo;
 use crate::front::pos::Span;
+use crate::mid::ir::Signed;
 
 #[derive(Debug)]
 pub struct Type {
@@ -14,6 +15,7 @@ pub enum TypeKind {
     Void,
     Bool,
     Int(IntTypeInfo),
+    IntSize(Signed),
 
     Path(Path),
 
@@ -61,15 +63,22 @@ pub enum Item {
     TypeAlias(TypeAlias),
     Struct(Struct),
     Function(Function),
-    Const(Const),
+    ConstOrStatic(ConstOrStatic),
 }
 
 #[derive(Debug)]
-pub struct Const {
+pub struct ConstOrStatic {
     pub span: Span,
+    pub kind: ConstOrStaticKind,
     pub id: Identifier,
     pub ty: Type,
     pub init: Expression,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ConstOrStaticKind {
+    Const,
+    Static,
 }
 
 #[derive(Debug)]
@@ -132,6 +141,7 @@ pub struct Statement {
 pub enum StatementKind {
     Declaration(Declaration),
     Assignment(Assignment),
+    BinaryAssignment(BinaryAssignment),
     Expression(Box<Expression>),
     If(IfStatement),
     Loop(LoopStatement),
@@ -152,6 +162,14 @@ pub struct Declaration {
 #[derive(Debug)]
 pub struct Assignment {
     pub span: Span,
+    pub left: Box<Expression>,
+    pub right: Box<Expression>,
+}
+
+#[derive(Debug)]
+pub struct BinaryAssignment {
+    pub span: Span,
+    pub op: BinaryOp,
     pub left: Box<Expression>,
     pub right: Box<Expression>,
 }
@@ -208,11 +226,17 @@ pub enum ExpressionKind {
         target: Box<Expression>,
         args: Vec<Expression>,
     },
+
     // TODO think about a general way to represent intrinsics
     // TODO replace this with a generic lib function that then calls the intrinsic
-    BlackBox {
+    Obscure {
         value: Box<Expression>,
     },
+    BlackHole {
+        value: Box<Expression>,
+    },
+    MemBarrier,
+    Unreachable,
 
     ArrayIndex {
         target: Box<Expression>,
@@ -256,6 +280,9 @@ pub enum ExpressionKind {
         struct_path: Path,
         fields: Vec<(Identifier, Expression)>,
     },
+    ArrayLiteral {
+        values: Vec<Expression>,
+    },
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -283,6 +310,7 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Neg,
+    Not,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

@@ -3,18 +3,40 @@ use std::collections::HashMap;
 use crate::mid::analyse::dom_info::DomInfo;
 use crate::mid::analyse::usage::{InstrOperand, Usage};
 use crate::mid::analyse::use_info::UseInfo;
-use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Type, Value};
+use crate::mid::ir::{Block, Function, InstructionInfo, Parameter, ParameterInfo, Program, Scoped, StackSlot, Value};
+use crate::mid::opt::runner::{PassContext, PassResult, ProgramPass};
+use crate::util::internal_iter::InternalIterator;
 
 ///Replace slots and the associated loads and stores with block parameters where possible.
-pub fn slot_to_param(prog: &mut Program) -> bool {
-    let use_info = UseInfo::new(prog);
+#[derive(Debug)]
+pub struct SlotToParamPass;
+
+impl ProgramPass for SlotToParamPass {
+    fn run(&self, prog: &mut Program, ctx: &mut PassContext) -> PassResult {
+        let changed = slot_to_param(prog, ctx);
+
+        PassResult {
+            changed,
+            preserved_dom_info: true,
+            preserved_use_info: !changed,
+        }
+    }
+
+    fn is_idempotent(&self) -> bool {
+        false
+    }
+}
+
+fn slot_to_param(prog: &mut Program, ctx: &mut PassContext) -> bool {
+    let use_info = ctx.use_info(prog);
     let funcs: Vec<Function> = prog.nodes.funcs.iter().map(|(func, _)| func).collect();
 
     let mut replaced_slot_count = 0;
 
     //this pass applies to each function separately
     for func in funcs {
-        replaced_slot_count += slot_to_param_func(prog, &use_info, func);
+        let dom_info = ctx.dom_info(prog, func);
+        replaced_slot_count += slot_to_param_func(prog, func, &use_info, &dom_info);
     }
 
     println!("slot_to_param removed {:?} slots", replaced_slot_count);
@@ -26,15 +48,14 @@ type ParamMap = HashMap<(Block, StackSlot), Parameter>;
 
 //TODO this is a complete bruteforce implementation
 //  there are lots of way to improve this, but this works for now
-fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) -> usize {
+fn slot_to_param_func(prog: &mut Program, func: Function, use_info: &UseInfo, dom_info: &DomInfo) -> usize {
     let func_info = prog.get_func(func);
-    let dom_info = DomInfo::new(prog, func);
     let entry_block = func_info.entry;
 
     // figure out the slots we can replace
     let replaced_slots: Vec<StackSlot> = func_info.slots.iter().copied().filter(|&slot| {
         let inner_ty = prog.get_slot(slot).inner_ty;
-        use_info[slot].iter().all(|usage| is_load_or_store_addr_with_type(prog, usage, inner_ty))
+        use_info.value_only_used_as_load_store_addr(prog, slot.into(), Some(inner_ty), |_| true)
     }).collect();
 
     // create all block params
@@ -60,7 +81,7 @@ fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) ->
             let block_instr_count = prog.get_block(block).instructions.len();
             let value = get_value_for_slot(prog, &dom_info, &param_map, entry_block, &replaced_slots, slot, block, block_instr_count);
 
-            prog.get_block_mut(block).terminator.for_each_target_mut(|target| {
+            prog.get_block_mut(block).terminator.targets_mut().for_each(|(target, _)| {
                 target.args.push(value)
             });
         }
@@ -106,16 +127,6 @@ fn slot_to_param_func(prog: &mut Program, use_info: &UseInfo, func: Function) ->
         .retain(|slot| !replaced_slots.contains(slot));
 
     replaced_slots.len()
-}
-
-fn is_load_or_store_addr_with_type(prog: &Program, usage: &Usage, expected_ty: Type) -> bool {
-    let pos = match usage {
-        Usage::InstrOperand { pos, usage: InstrOperand::LoadAddr | InstrOperand::StoreAddr } => pos,
-        _ => return false,
-    };
-    let instr = prog.get_instr(pos.instr);
-    let ty = unwrap_match!(instr, InstructionInfo::Load { ty, .. } | InstructionInfo::Store{ ty, .. } => *ty);
-    ty == expected_ty
 }
 
 /// This function is the heart of this pass: it recursively calls itself to figure out the value of

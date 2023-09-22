@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use itertools::Itertools;
+use crate::mid::analyse::usage::TermUsage;
 
 use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, FunctionInfo, Instruction, Parameter, ParameterInfo, Program, Scoped, StackSlot, StackSlotInfo, Value};
 use crate::util::arena::Arena;
+use crate::util::internal_iter::InternalIterator;
 
 #[derive(Debug)]
 pub struct Recursive;
@@ -13,26 +15,27 @@ impl Program {
         let old_info = self.get_func(func);
 
         let old_slots = old_info.slots.clone();
-        let old_blocks = self.collect_blocks(self.get_func(func).entry);
+        let old_blocks = self.reachable_blocks(self.get_func(func).entry).collect_vec();
 
         let mut new_slots = vec![];
-        let map_slot: HashMap<_, _> = old_slots.iter().map(|&old_slot| {
+        let map_slot: IndexMap<_, _> = old_slots.iter().map(|&old_slot| {
             let &StackSlotInfo { inner_ty, ref debug_name } = self.get_slot(old_slot);
             let new_slot = self.define_slot(StackSlotInfo { inner_ty, debug_name: debug_name.clone() });
             new_slots.push(new_slot);
             (old_slot, new_slot)
         }).collect();
 
-        let mut map_param = HashMap::new();
-        let mut map_instr = HashMap::new();
+        let mut map_param = IndexMap::new();
+        let mut map_instr = IndexMap::new();
 
-        let map_block: HashMap<_, _> = old_blocks.iter().map(|&old_block| {
+        let map_block: IndexMap<_, _> = old_blocks.iter().map(|&old_block| {
             let old_block_info = self.get_block(old_block);
 
             let old_params = old_block_info.params.clone();
             let old_instrs = old_block_info.instructions.clone();
             // we don't need to do anything extra for terminator, this is already a deep clone
             let new_terminator = old_block_info.terminator.clone();
+            let debug_name = old_block_info.debug_name.clone();
 
             let new_params = old_params.iter().map(|&old_param| {
                 let &ParameterInfo { ty } = self.get_param(old_param);
@@ -54,6 +57,7 @@ impl Program {
                 // we replace terminator and instruction args later
                 instructions: new_instructions,
                 terminator: new_terminator,
+                debug_name,
             };
             let new_block = self.define_block(new_block_info);
             (old_block, new_block)
@@ -80,8 +84,13 @@ impl Program {
         }
         for &new_block in map_block_map.values() {
             let new_term = &mut self.nodes.blocks[new_block].terminator;
-            new_term.replace_blocks(map_block);
-            new_term.replace_values(|value| mapper.map_value(value));
+
+            new_term.operands_mut().for_each(|operand| {
+                match operand {
+                    TermUsage::Value(value, _) => *value = mapper.map_value(*value),
+                    TermUsage::Block(block, _) => *block = map_block(*block),
+                }
+            });
         }
 
         if mapper.recursive {
@@ -108,10 +117,10 @@ struct ValueMapper<'a> {
     func: Function,
     recursive: bool,
 
-    map_slot: &'a HashMap<StackSlot, StackSlot>,
-    map_param: &'a HashMap<Parameter, Value>,
-    map_instr: &'a HashMap<Instruction, Instruction>,
-    map_expr: HashMap<Expression, Expression>,
+    map_slot: &'a IndexMap<StackSlot, StackSlot>,
+    map_param: &'a IndexMap<Parameter, Value>,
+    map_instr: &'a IndexMap<Instruction, Instruction>,
+    map_expr: IndexMap<Expression, Expression>,
 
     prog_exprs: &'a mut Arena<Expression, ExpressionInfo>,
 }

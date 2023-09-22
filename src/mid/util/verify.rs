@@ -1,11 +1,12 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
 use derive_more::From;
 
 use crate::mid::analyse::dom_info::{DomInfo, DomPosition, InBlockPos};
-use crate::mid::analyse::usage::{BlockPos, for_each_usage_in_expr, InstructionPos, TargetKind, TermOperand, try_for_each_expr_leaf_value, try_for_each_usage_in_instr, Usage};
-use crate::mid::ir::{Block, BlockInfo, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
+use crate::mid::analyse::usage::{BlockPos, InstructionPos, TargetKind, TermOperand, Usage};
+use crate::mid::ir::{Block, BlockInfo, CallingConvention, Expression, ExpressionInfo, Function, Instruction, InstructionInfo, Program, Scoped, Target, Terminator, Type, TypeInfo, Value};
+use crate::util::internal_iter::InternalIterator;
 
 // TODO verify that there are no expression loops
 #[derive(Debug)]
@@ -14,7 +15,6 @@ pub enum VerifyError {
     BlockDeclaredTwice(Block, Function, Function),
 
     NonDeclaredValueUsed(Scoped, Usage, Option<Expression>),
-
     NonDominatingValueUsed(Scoped, DomPosition, Usage, Option<Expression>),
 
     WrongDeclParamCount(Function, TypeString, usize),
@@ -26,9 +26,13 @@ pub enum VerifyError {
     ExpectedFunctionType(DomPosition, TypeString),
 
     WrongCallParamCount(DomPosition, TypeString, usize),
+    WrongCallingConvention(Value, CallingConvention, DomPosition, CallingConvention),
+
     TupleIndexOutOfBounds(Expression, TypeString, u32, u32),
 
     EntryBlockUsedAsTarget(DomPosition, Block),
+
+    CyclicExpression(Vec<Expression>),
 }
 
 #[derive(Debug, Copy, Clone, From)]
@@ -53,8 +57,8 @@ pub fn verify(prog: &Program) -> Result {
         declarer.declare_all(&func_info.slots, DomPosition::FuncEntry(func))?;
 
         // TODO this way of visiting blocks means we never verify unreachable blocks. Is that okay?
-        prog.try_visit_blocks(func_info.entry, |block| {
-            let BlockInfo { params, instructions, terminator: _ } = prog.get_block(block);
+        prog.reachable_blocks(func_info.entry).try_for_each(|block| {
+            let BlockInfo { params, instructions, terminator: _, debug_name: _ } = prog.get_block(block);
             let block_pos = BlockPos { func, block };
 
             declarer.declare_block(func, block)?;
@@ -68,10 +72,6 @@ pub fn verify(prog: &Program) -> Result {
         })?;
     }
 
-    // check types and value domination
-    //   also collect expressions for type checking
-    let mut expressions = HashSet::new();
-
     for (func, func_info) in &prog.nodes.funcs {
         let dom_info = &DomInfo::new(prog, func);
         let func_pos = DomPosition::FuncEntry(func);
@@ -80,7 +80,8 @@ pub fn verify(prog: &Program) -> Result {
             prog,
             declarer: &declarer,
             dom_info,
-            expressions: &mut expressions,
+            expressions: HashSet::new(),
+            expr_loop_path: vec![],
         };
 
         // check function type match
@@ -93,11 +94,11 @@ pub fn verify(prog: &Program) -> Result {
             return Err(VerifyError::WrongDeclParamCount(func, ts(func_info.ty), func_entry.params.len()));
         }
         for (&param_ty, &param) in zip(&func_info.func_ty.params, &func_entry.params) {
-            ensure_type_match(prog, func_pos, param_ty, prog.type_of_value(param.into()))?;
+            ensure_type_match(prog, func_pos, param_ty, Value::from(param))?;
         }
 
         for &block in dom_info.blocks() {
-            let BlockInfo { params: _, instructions, terminator } = prog.get_block(block);
+            let BlockInfo { params: _, instructions, terminator, debug_name: _ } = prog.get_block(block);
             let block_pos = BlockPos { func, block };
 
             // check instructions
@@ -109,7 +110,7 @@ pub fn verify(prog: &Program) -> Result {
                 check_instr_types(prog, instr, instr_pos.as_dom_pos())?;
 
                 // check instr arg domination
-                try_for_each_usage_in_instr(instr_info, |value, usage| {
+                instr_info.operands().try_for_each(|(value, usage)| {
                     let usage = Usage::InstrOperand { pos: instr_pos, usage };
                     ctx.check_value_usage(value, usage)
                 })?;
@@ -139,22 +140,6 @@ pub fn verify(prog: &Program) -> Result {
         }
     }
 
-    // type check expressions recursively
-    let mut todo_expressions: VecDeque<_> = expressions.drain().collect();
-    let mut expressions_visited = expressions;
-    while let Some(expr) = todo_expressions.pop_front() {
-        if !expressions_visited.insert(expr) {
-            continue;
-        }
-
-        let expr_info = prog.get_expr(expr);
-        for_each_usage_in_expr(expr_info, |value, _| if let Value::Expr(inner) = value {
-            todo_expressions.push_back(inner);
-        });
-
-        check_expr_types(prog, expr)?;
-    }
-
     Ok(())
 }
 
@@ -163,7 +148,8 @@ struct Context<'a> {
     declarer: &'a FuncDeclareChecker,
     dom_info: &'a DomInfo,
 
-    expressions: &'a mut HashSet<Expression>,
+    expressions: HashSet<Expression>,
+    expr_loop_path: Vec<Expression>,
 }
 
 impl<'a> Context<'a> {
@@ -220,14 +206,47 @@ impl<'a> Context<'a> {
             }
 
             Value::Expr(expr) => {
+                self.check_expression(expr)?;
+
                 assert!(root.is_none());
-                self.expressions.insert(expr);
-                try_for_each_expr_leaf_value(self.prog, expr, |inner, _| {
-                    assert!(!matches!(inner, Value::Expr(_)));
+                self.prog.expr_tree_leaf_iter(expr).try_for_each(|(inner, _, _)| {
+                    assert!(!inner.is_expr());
                     self.check_value_usage_impl(inner, usage.clone(), Some(expr))
                 })
             }
         }
+    }
+
+    fn check_expression(&mut self, expr: Expression) -> Result<()> {
+        if !self.expressions.insert(expr) {
+            return Ok(());
+        }
+
+        check_expr_types(self.prog, expr)?;
+
+        assert!(self.expr_loop_path.is_empty());
+        if let Err(()) = self.find_expr_cycle(expr) {
+            assert!(self.expr_loop_path.len() >= 2);
+            return Err(VerifyError::CyclicExpression(self.expr_loop_path.clone()));
+        }
+
+        Ok(())
+    }
+
+    fn find_expr_cycle(&mut self, expr: Expression) -> std::result::Result<(), ()> {
+        if self.expr_loop_path.contains(&expr) {
+            self.expr_loop_path.push(expr);
+            return Err(());
+        }
+
+        self.expr_loop_path.push(expr);
+
+        self.prog.get_expr(expr).operands().filter_map(|(value, _)| value.as_expr()).try_for_each(|operand| {
+            self.find_expr_cycle(operand)
+        })?;
+
+        assert_eq!(self.expr_loop_path.pop(), Some(expr));
+        Ok(())
     }
 }
 
@@ -237,13 +256,13 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
 
     match instr_info {
         &InstructionInfo::Load { addr, ty: _ } => {
-            ensure_type_match(prog, pos, prog.type_of_value(addr), prog.ty_ptr())?;
+            ensure_type_match(prog, pos, addr, prog.ty_ptr())?;
         }
         &InstructionInfo::Store { addr, ty, value } => {
-            ensure_type_match(prog, pos, prog.type_of_value(addr), prog.ty_ptr())?;
-            ensure_type_match(prog, pos, prog.type_of_value(value), ty)?;
+            ensure_type_match(prog, pos, addr, prog.ty_ptr())?;
+            ensure_type_match(prog, pos, value, ty)?;
         }
-        &InstructionInfo::Call { target, ref args } => {
+        &InstructionInfo::Call { target, ref args, conv } => {
             let target_ty = prog.type_of_value(target);
             let target_func_ty = prog.get_type(target_ty).unwrap_func()
                 .ok_or_else(|| VerifyError::ExpectedFunctionType(pos, ts(target_ty)))?;
@@ -253,10 +272,15 @@ fn check_instr_types(prog: &Program, instr: Instruction, pos: DomPosition) -> Re
             }
 
             for (&param, &arg) in zip(&target_func_ty.params, args) {
-                ensure_type_match(prog, pos, param, prog.type_of_value(arg))?;
+                ensure_type_match(prog, pos, param, arg)?;
+            }
+
+            if conv != target_func_ty.conv {
+                return Err(VerifyError::WrongCallingConvention(target, target_func_ty.conv, pos, conv));
             }
         }
-        InstructionInfo::BlackBox { value: _ } => {}
+        InstructionInfo::BlackHole { value: _ } => {}
+        InstructionInfo::MemBarrier => {}
     }
 
     Ok(())
@@ -268,14 +292,17 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
     let pos = Position::Expr(expr);
 
     match *expr_info {
-        ExpressionInfo::Arithmetic { kind: _, left, right } => {
-            ensure_matching_int_values(prog, pos, left, right)?;
+        ExpressionInfo::Arithmetic { kind: _, ty, left, right } => {
+            ensure_int_type(prog, pos, ty, None)?;
+
+            ensure_type_match(prog, pos, left, ty)?;
+            ensure_type_match(prog, pos, right, ty)?;
         }
         ExpressionInfo::Comparison { kind: _, left, right } => {
             ensure_matching_int_values(prog, pos, left, right)?;
         }
         ExpressionInfo::TupleFieldPtr { base, index, tuple_ty } => {
-            ensure_type_match(prog, pos, prog.type_of_value(base), prog.ty_ptr())?;
+            ensure_type_match(prog, pos, base, prog.ty_ptr())?;
 
             match prog.get_type(tuple_ty).unwrap_tuple() {
                 None => return Err(VerifyError::ExpectedTupleType(pos, ts(tuple_ty))),
@@ -287,12 +314,15 @@ fn check_expr_types(prog: &Program, expr: Expression) -> Result {
             }
         }
         ExpressionInfo::PointerOffSet { ty: _, base, index } => {
-            ensure_type_match(prog, pos, prog.type_of_value(base), prog.ty_ptr())?;
-            ensure_type_match(prog, pos, prog.type_of_value(index), prog.ty_isize())?;
+            ensure_type_match(prog, pos, base, prog.ty_ptr())?;
+            ensure_type_match(prog, pos, index, prog.ty_isize())?;
         }
         ExpressionInfo::Cast { ty, kind: _, value } => {
             ensure_int_value(prog, pos, value)?;
             ensure_int_type(prog, pos, ty, None)?;
+        }
+        ExpressionInfo::Obscure {ty, value} => {
+            ensure_type_match(prog, pos, ty, value)?;
         }
     }
 
@@ -346,7 +376,7 @@ pub enum TypeOrValue {
 }
 
 impl TypeString {
-    fn new(prog: &Program, ty: Type) -> Self {
+    pub fn new(prog: &Program, ty: Type) -> Self {
         TypeString {
             ty,
             str: prog.format_type(ty).to_string(),
@@ -355,7 +385,7 @@ impl TypeString {
 }
 
 impl TypeOrValue {
-    fn ty(self, prog: &Program) -> Type {
+    pub fn ty(self, prog: &Program) -> Type {
         match self {
             TypeOrValue::Type(ty) => ty,
             TypeOrValue::Value(value) => prog.type_of_value(value),
@@ -381,7 +411,7 @@ fn ensure_type_match(prog: &Program, pos: impl Into<Position>, left: impl Into<T
 fn ensure_matching_int_values(prog: &Program, pos: impl Into<Position>, left: Value, right: Value) -> Result<u32> {
     let pos = pos.into();
     let bits = ensure_int_value(prog, pos, left)?;
-    ensure_type_match(prog, pos, prog.type_of_value(left), prog.type_of_value(right))?;
+    ensure_type_match(prog, pos, left, right)?;
     Ok(bits)
 }
 

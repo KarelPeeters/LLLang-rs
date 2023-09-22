@@ -1,6 +1,8 @@
 #[macro_use]
 pub mod arena;
 
+pub mod internal_iter;
+
 pub trait IndexMutTwice<T> {
     fn index_mut_twice(&mut self, a: usize, b: usize) -> Option<(&mut T, &mut T)>;
 }

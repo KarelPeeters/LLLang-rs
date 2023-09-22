@@ -37,6 +37,10 @@ macro_rules! new_index_type {
 pub trait IndexType: Sized + Debug {
     fn idx(&self) -> Idx;
     fn new(idx: Idx) -> Self;
+
+    fn index(&self) -> usize {
+        self.idx().i
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]

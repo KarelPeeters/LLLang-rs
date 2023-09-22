@@ -4,13 +4,15 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 
-use crate::front::{ast, cst};
-use crate::front::cst::{ArrayTypeInfo, FunctionTypeInfo, IntTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
+use crate::front::{ast, cst, DEFAULT_CALLING_CONVENTION};
+use crate::front::ast::ConstOrStaticKind;
+use crate::front::cst::{ArrayTypeInfo, ConstOrStaticDecl, FunctionTypeInfo, IntTypeInfo, ScopedValue, StructTypeInfo, TupleTypeInfo, TypeInfo, TypeStore};
 use crate::front::error::{Error, InvalidLiteralReason, Result};
 use crate::front::lower_func::LowerFuncState;
 use crate::front::type_func::TypeFuncState;
+use crate::front::type_solver::TypeProblem;
 use crate::mid::ir;
-use crate::mid::ir::Signed;
+use crate::mid::ir::{GlobalSlotInfo, Signed};
 use crate::mid::util::bit_int::{BitInt, IStorage, UStorage};
 
 /// The main representation of values during lowering. Contains the actual `ir::Value`, the `cst::Type` and whether this
@@ -29,7 +31,7 @@ impl LRValue {
     /// dereferenced.
     pub fn ty(self, types: &TypeStore) -> cst::Type {
         match self {
-            LRValue::Left(value) => types[value.ty].unwrap_ptr()
+            LRValue::Left(value) => *types[value.ty].unwrap_ptr()
                 .unwrap_or_else(|| panic!("LRValue::Left({:?}) should have pointer type", value)),
             LRValue::Right(value) => value.ty,
         }
@@ -84,7 +86,8 @@ impl<'a> MappingTypeStore<'a> {
             .collect();
         let ret = self.map_type(prog, ty.ret);
 
-        ir::FunctionType { params, ret }
+        let conv = DEFAULT_CALLING_CONVENTION;
+        ir::FunctionType { params, ret, conv }
     }
 
     pub fn map_type(&mut self, prog: &mut ir::Program, ty: cst::Type) -> ir::Type {
@@ -92,34 +95,39 @@ impl<'a> MappingTypeStore<'a> {
             return *ir_ty;
         }
 
-        let ir_ty = match &self.inner[ty] {
-            ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
+        let ir_ty = match self.inner[ty] {
+            ref ph @ TypeInfo::Placeholder(_) => panic!("tried to map type {:?}", ph),
             TypeInfo::Wildcard => panic!("tried to map wildcard to IR"),
             TypeInfo::Void => prog.ty_void(),
             TypeInfo::Bool => prog.ty_bool(),
-            &TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
+            TypeInfo::Int(IntTypeInfo { signed: _, bits }) => {
                 // In the IR signed-ness is not a property of the type, only of the operations.
                 prog.define_type_int(bits)
             }
+            TypeInfo::IntSize(_signed) => {
+                // Again, ignore sign.
+                // We also don't make a distinction between usize and the normal int with the same size.
+                prog.define_type_int(prog.ptr_size_bits())
+            }
             TypeInfo::Pointer(_) => prog.ty_ptr(),
-            TypeInfo::Tuple(TupleTypeInfo { fields }) => {
+            TypeInfo::Tuple(TupleTypeInfo { ref fields }) => {
                 let fields = fields.clone().iter()
                     .map(|&f_ty| self.map_type(prog, f_ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
             }
-            TypeInfo::Function(info) => {
+            TypeInfo::Function(ref info) => {
                 let info = info.clone();
                 let func_ty = self.map_type_func(prog, &info);
                 prog.define_type_func(func_ty)
             }
-            TypeInfo::Struct(StructTypeInfo { decl: _, fields }) => {
+            TypeInfo::Struct(StructTypeInfo { decl: _, ref fields }) => {
                 let fields = fields.clone().iter()
                     .map(|field| self.map_type(prog, field.ty))
                     .collect();
                 prog.define_type_tuple(ir::TupleType { fields })
             }
-            &TypeInfo::Array(ArrayTypeInfo { inner, length }) => {
+            TypeInfo::Array(ArrayTypeInfo { inner, length }) => {
                 let inner = self.map_type(prog, inner);
                 prog.define_type_array(ir::ArrayType { inner, length })
             }
@@ -130,11 +138,33 @@ impl<'a> MappingTypeStore<'a> {
     }
 }
 
+fn lower_const_or_static<'a>(ir_prog: &mut ir::Program, types: &mut MappingTypeStore<'a>, decl: &ConstOrStaticDecl<'a>) -> Result<'a, LRValue> {
+    let ty = decl.ty;
+    let ty_ir = types.map_type(ir_prog, ty);
+
+    let init = lower_literal(types, ir_prog, &decl.ast.init, ty)?;
+
+    match decl.ast.kind {
+        ConstOrStaticKind::Const => {
+            Ok(LRValue::Right(init))
+        }
+        ConstOrStaticKind::Static => {
+            let slot = GlobalSlotInfo {
+                inner_ty: ty_ir,
+                debug_name: Some(decl.ast.id.string.clone()),
+                initial: init.ir,
+            };
+            let slot = ir_prog.define_global_slot(slot);
+            let value = TypedValue { ty: types.define_type_ptr(ty), ir: slot.into() };
+            Ok(LRValue::Left(value))
+        }
+    }
+}
+
 /// The main entry point of the lowering pass that generates the `ir` code for a given `ResolvedProgram`.
 pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let mut types = MappingTypeStore::wrap(prog.types);
-
-    let mut ir_prog = ir::Program::default();
+    let mut ir_prog = ir::Program::new(types.ptr_size_bits());
 
     //create ir function for each cst function
     let all_funcs: HashMap<cst::Function, (Option<ir::Function>, LRValue)> = prog.items.funcs.iter()
@@ -144,9 +174,9 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
         }).try_collect()?;
 
     //create ir data for each cst const
-    let all_consts: HashMap<cst::Const, LRValue> = prog.items.consts.iter()
+    let all_const_or_static: HashMap<cst::ConstOrStatic, LRValue> = prog.items.consts.iter()
         .map(|(cst_const, decl)| {
-            let value = lower_literal(&mut types, &mut ir_prog, &decl.ast.init, decl.ty)?;
+            let value = lower_const_or_static(&mut ir_prog, &mut types, decl)?;
             Ok((cst_const, value))
         }).try_collect()?;
 
@@ -161,7 +191,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
     let map_value = &|value: ScopedValue| -> LRValue {
         match value {
             ScopedValue::Function(func) => all_funcs.get(&func).unwrap().1,
-            ScopedValue::Const(cst) => *all_consts.get(&cst).unwrap(),
+            ScopedValue::ConstOrStatic(cst) => *all_const_or_static.get(&cst).unwrap(),
             ScopedValue::Immediate(value) => value,
             ScopedValue::TypeVar(_) => panic!("tried to map TypeVar value to placeholder"),
         }
@@ -185,7 +215,7 @@ pub fn lower(prog: cst::ResolvedProgram) -> Result<ir::Program> {
 
                     expr_type_map: Default::default(),
                     decl_type_map: Default::default(),
-                    problem: Default::default(),
+                    problem: TypeProblem::new(),
                 };
                 type_state.visit_func(func_decl)?;
 
@@ -271,19 +301,19 @@ pub fn lower_literal<'a>(
     ir_prog: &mut ir::Program,
     expr: &'a ast::Expression,
     ty: cst::Type,
-) -> Result<'a, LRValue> {
+) -> Result<'a, TypedValue> {
     let result = match &expr.kind {
         ast::ExpressionKind::Null => {
             check_ptr_type(types, expr, ty)?;
 
             let value_ir = ir_prog.const_null_ptr();
-            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
+            TypedValue { ty, ir: value_ir.into() }
         }
         &ast::ExpressionKind::BoolLit { value } => {
             check_type_match(types, expr, types.type_bool(), ty)?;
 
             let value_ir = ir_prog.const_bool(value);
-            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
+            TypedValue { ty, ir: value_ir.into() }
         }
         ast::ExpressionKind::IntLit { value, ty: _ } => {
             let build_error = |types: &mut MappingTypeStore, reason: InvalidLiteralReason| {
@@ -295,7 +325,7 @@ pub fn lower_literal<'a>(
                 }
             };
 
-            let info = check_integer_type(types, expr, ty)?;
+            let info = check_integer_type(types, expr, ty, true)?;
 
             let value_raw = if let Some(digits) = value.strip_prefix("0x") {
                 IStorage::from_str_radix(digits, 16)
@@ -313,7 +343,7 @@ pub fn lower_literal<'a>(
 
             let ty_ir = types.map_type(ir_prog, ty);
             let value_ir = ir::Const { ty: ty_ir, value };
-            LRValue::Right(TypedValue { ty, ir: value_ir.into() })
+            TypedValue { ty, ir: value_ir.into() }
         }
         ast::ExpressionKind::StringLit { value } => {
             let ty_byte = types.define_type(TypeInfo::Int(IntTypeInfo::U8));
@@ -327,7 +357,7 @@ pub fn lower_literal<'a>(
             let data_ir = ir::DataInfo { ty: ty_byte_ptr_ir, inner_ty: ty_byte_ir, bytes: data };
             let data_ir = ir_prog.define_data(data_ir);
 
-            LRValue::Right(TypedValue { ty, ir: data_ir.into() })
+            TypedValue { ty, ir: data_ir.into() }
         }
         _ => return Err(Error::ExpectedLiteral(expr)),
     };
@@ -346,9 +376,10 @@ fn check_type_match<'ast>(store: &TypeStore, expr: &'ast ast::Expression, expect
     Ok(())
 }
 
-fn check_integer_type<'ast>(store: &TypeStore, expr: &'ast ast::Expression, actual: cst::Type) -> Result<'ast, IntTypeInfo> {
-    match &store[actual] {
-        &TypeInfo::Int(info) => Ok(info),
+fn check_integer_type<'ast>(store: &TypeStore, expr: &'ast ast::Expression, actual: cst::Type, allow_int_size: bool) -> Result<'ast, IntTypeInfo> {
+    match store[actual] {
+        TypeInfo::Int(info) => Ok(info),
+        TypeInfo::IntSize(signed) if allow_int_size => Ok(IntTypeInfo::new(signed, store.ptr_size_bits())),
         _ => Err(Error::ExpectIntegerType {
             expression: expr,
             actual: store.format_type(actual).to_string(),

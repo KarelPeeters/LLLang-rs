@@ -141,7 +141,7 @@ mod test {
     use crate::mid::util::cast_chain::{CastOp, extract_minimal_cast_chain};
 
     fn build_chain(start_bits: u32, steps: &[CastOp]) -> (Program, Value, Value) {
-        let mut prog = Program::default();
+        let mut prog = Program::new(64);
 
         let start_ty = prog.define_type_int(start_bits);
         let start = prog.define_param(ParameterInfo { ty: start_ty }).into();
