@@ -54,9 +54,24 @@ fn sum(n: u32) -> u32 {
 The Intermediate Representation (IR) takes a lot of inspiration from [LLVM IR](https://llvm.org/docs/LangRef.html), with some deviations:
 
 * Instead of Phi instructions block parameters and target arguments are used. This concept is also used in the [Cranelift](https://cranelift.dev/) compiler. Similarly function parameters are not a separate value class, they're just the parameters of the entry block of the function.
+* Block terminators are not just an instruction, they're a separate type and are stored separately in the basic block.
 * No stack allocation with `alloca`, instead slots are used. This simplifies backend code generation, since all necessary stack allocation is statically predefined for each function.
 * Expressions that don't have any side effects are free-floating, not part of the basic block instruction lists. This is similar to the [Sea of Nodes](https://darksi.de/d.sea-of-nodes/) concept, except that basic blocks are still used for control flow and side effects. This reduces the number of equivalent representations a program can have, which  means optimization passes need to match fewer patterns, less canonicalization passes are necessary.
-* Untyped pointers are used, inspired by the recent [LLVM switch](https://llvm.org/docs/OpaquePointers.html) to them. Since pointer casts don't have any semantics, we again reduce redundancies by making them completely obsolete.  
+* Untyped pointers are used, inspired by the recent [LLVM switch](https://llvm.org/docs/OpaquePointers.html) to them. Since pointer casts don't have any semantics, we again reduce redundancies by making them completely obsolete.
+
+The full list of supported elements is:
+
+* Values: `Void`, `Undef`, `Const` (integer constants), `Function`, `Extern` (external linker symbols), `Data` (multi-byte constants), `GlobalSlot` (static variables), `StackSlot` (function stack space), `Parameter` (function or block parameters), `Instruction` (side-effect having instructions), `Expression` (sea-of-nodes expressions).
+* Instructions: `Load`, `Store`, `Call`, `MemBarrier`, `BlackHole` (debug utility)
+* Expressions: `Arithmetic` (add, sub, mul, div, mod, and, or, xor), `Comparison` (eq, neq, gt, gte, lt, lte), `TupleFieldPtr` (tuple and struct field pointer offset), `PointerOffset` (array pointer offset), `Cast`, `Obscure` (debug utility).
+
+The types representable in the IR are:
+* `Void`
+* `Integer` off a fixed bit size. Signedness is not part of the type, instead operations encode signedness.
+* `Pointer`, untyped. Operations that interact with a pointer encode as which type they see the pointer.
+* `Func` for function signatures.
+* `Tuple` for tuples. Structs are also represented by the corresponding tuple.
+* `Array` for arrays.
 
 The (unoptimized) IR corresponding to the "sum" program above is shown below.
 
