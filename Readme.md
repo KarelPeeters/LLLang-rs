@@ -2,6 +2,21 @@
 
 A compiler for a C-like language, going all the way from source code to x86-64 assembly. The compiler itself is written in Rust.
 
+<!-- TOC -->
+* [lllang-rs](#lllang-rs)
+  * [Overview](#overview)
+  * [Details](#details)
+    * [LLLang language](#lllang-language)
+    * [IR representation](#ir-representation)
+    * [Frontend: Source code to IR](#frontend-source-code-to-ir)
+    * [Middle: IR analysis and optimization](#middle-ir-analysis-and-optimization)
+      * [Debugging Infrastructure](#debugging-infrastructure)
+      * [Analysis steps](#analysis-steps)
+      * [Optimization passes](#optimization-passes)
+    * [Backend: IR to assembly](#backend-ir-to-assembly)
+    * [General compiler development resources](#general-compiler-development-resources)
+<!-- TOC -->
+
 ## Overview
 
 The compiler follows the typical separation seen in many modern compilers.
